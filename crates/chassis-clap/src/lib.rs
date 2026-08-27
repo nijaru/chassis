@@ -303,7 +303,7 @@ where
             .shared
             .encode_state(C::CLAP_ID, C::CLAP_STATE_SCHEMA, StateLimits::default())
             .map_err(|error| state_error(&error))?;
-        output.write_all(&encoded).map_err(PluginError::from)
+        write_bounded_state(output, &encoded)
     }
 
     fn load(&self, input: &mut InputStream) -> Result<(), PluginError> {
@@ -485,6 +485,11 @@ fn read_bounded_state(input: &mut InputStream, maximum: usize) -> Result<Vec<u8>
         if count == 0 {
             break;
         }
+        if count > chunk.len() {
+            return Err(PluginError::Message(
+                "CLAP state stream returned an invalid read count",
+            ));
+        }
         let Some(new_length) = encoded.len().checked_add(count) else {
             return Err(PluginError::Message("CLAP state stream size overflow"));
         };
@@ -496,6 +501,25 @@ fn read_bounded_state(input: &mut InputStream, maximum: usize) -> Result<Vec<u8>
         encoded.extend_from_slice(&chunk[..count]);
     }
     Ok(encoded)
+}
+
+fn write_bounded_state(output: &mut OutputStream, encoded: &[u8]) -> Result<(), PluginError> {
+    let mut offset = 0;
+    while offset < encoded.len() {
+        let count = output
+            .write(&encoded[offset..])
+            .map_err(PluginError::from)?;
+        if count == 0 {
+            return Err(PluginError::Message("CLAP state stream made no progress"));
+        }
+        if count > encoded.len() - offset {
+            return Err(PluginError::Message(
+                "CLAP state stream returned an invalid write count",
+            ));
+        }
+        offset += count;
+    }
+    Ok(())
 }
 
 fn map_transport(transport: Option<&TransportEvent>) -> Result<TransportSnapshot, PluginError> {
