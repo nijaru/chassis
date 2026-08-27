@@ -11,16 +11,31 @@ Permissive dependencies normally satisfy both. They retain their own licenses/no
 
 `chassis-core` remains std-only with no third-party Rust dependencies.
 
-The first CLAP adapter slice adds exact crates.io requirements for:
+The first CLAP adapter pins Clack to one exact git revision:
 
-- `clack-plugin = 0.1.1`;
-- `clack-extensions = 0.1.1`, with only `audio-ports` + plugin-side support enabled directly.
+```text
+repository: https://github.com/prokopyl/clack
+revision:   c5975f9f89f0953b00768680357985d46178078a
+```
 
-The crates.io index shows 0.1.1 as the latest published Clack release as of this audit. Clack's repository bumped its development workspace to 0.2.0 on 2026-08-05, but 0.2.0 is not currently published. Chassis therefore uses 0.1.1 rather than adding a git dependency solely for unreleased API changes.
+The revision identifies Clack's development 0.2.0 workspace after the plugin-side reentrancy fix and the immediately following safety/lifetime work. `clack-plugin` and `clack-extensions` are consumed from that same pinned source; only `audio-ports` + plugin-side extension support are enabled directly.
 
-Clack 0.1.1 is Edition 2024, declares Rust 1.85 as its MSRV, and is `MIT OR Apache-2.0`. Its runtime tree for this slice is intentionally small: `clack-common 0.1.1`, `clap-sys ^0.5.0`, and `bitflags ^2.11.0` in addition to the two declared Clack crates. These terms are compatible with both AGPL distribution and the intended separate proprietary Chassis license.
+### Why this git exception exists
 
-The repository lockfile must be regenerated and reviewed by Cargo on the next local validation pass after dependency changes. Do not hand-edit registry checksums into `Cargo.lock`.
+The latest crates.io release available during this audit is Clack 0.1.1, published 2026-07-29. Clack issue #89 documents undefined behavior in that release line when hosts call plugin APIs re-entrantly because plugin handlers were handed exclusive `&mut` access that real hosts can re-enter. The issue specifically cites Bitwig and `clap-wrapper`, which makes this material to Chassis's intended CLAP and later VST3/AU path.
+
+The reentrancy fix merged on 2026-07-30, after the 0.1.1 release, and changes affected plugin-side handlers to shared access where reentrancy requires it. Chassis therefore does not use 0.1.1 merely because it is the latest registry release.
+
+This is a narrow safety exception to the normal crates.io preference, not a general acceptance of floating git dependencies:
+
+- the git repository is explicitly allowlisted in `deny.toml`;
+- the manifest pins a full commit SHA;
+- upgrades require deliberate source/audit/conformance review;
+- when a suitable safety-fixed Clack release is published, prefer returning to crates.io after validating that release.
+
+Clack's workspace is Edition 2024, declares Rust 1.85 as its MSRV for the relevant crates, and is `MIT OR Apache-2.0`. Its underlying CLAP bindings and other current transitive dependencies use permissive terms compatible with both AGPL distribution and the intended separate proprietary Chassis license. The exact resolved dependency tree must still be reviewed after Cargo updates `Cargo.lock` locally.
+
+The repository lockfile must be regenerated and reviewed by Cargo on the next local validation pass after dependency changes. Do not hand-edit git source entries or registry checksums into `Cargo.lock`.
 
 ## Normally acceptable license classes
 
@@ -68,9 +83,9 @@ Dependencies are acceptable at non-realtime edges much more readily than on the 
 | Component | Role | License | Position |
 | --- | --- | --- | --- |
 | Chassis workspace | framework | AGPL-3.0-or-later + intended separate commercial license | current |
-| Clack / `clack-plugin` 0.1.1 | low-level safe CLAP plugin boundary | MIT OR Apache-2.0 | adopted for initial adapter proof; qualification still required |
-| `clack-extensions` 0.1.1 | stable CLAP extension wrappers | MIT OR Apache-2.0 | adopted narrowly for audio ports |
-| `clap-sys` 0.5.x | raw CLAP ABI used by Clack | MIT OR Apache-2.0 | transitive; lock exact version during local validation |
+| Clack pinned revision `c5975f9` | low-level safe CLAP plugin boundary | MIT OR Apache-2.0 | adopted safety-fixed source for initial adapter proof; qualification still required |
+| `clack-extensions` from same revision | CLAP extension wrappers | MIT OR Apache-2.0 | adopted narrowly for audio ports |
+| `clap-sys` | raw CLAP ABI used by Clack | MIT OR Apache-2.0 | transitive; inspect exact lockfile resolution |
 | CLAP SDK | CLAP ABI specification | MIT | compatible |
 | `clap-wrapper` | project CLAP into VST3/AU/AAX/standalone | MIT | preferred initial projection candidate; validate semantics per target |
 | Steinberg VST3 SDK | VST3 SDK | MIT | compatible |
@@ -90,13 +105,13 @@ Keep AAX-specific dependencies/code/tooling isolated from format-independent cra
 
 ## Source policy
 
-Prefer crates.io releases for normal Rust dependencies. Git dependencies require an explicit reason and pinned revision because they weaken reproducibility/supply-chain review.
+Prefer crates.io releases for normal Rust dependencies. Git dependencies require an explicit reason and full pinned revision because they weaken ordinary registry reproducibility/supply-chain review.
+
+The current Clack pin is the only approved git-source exception. `deny.toml` allowlists that repository specifically because the latest published release has a known memory-safety/reentrancy problem relevant to our deployment path.
 
 `Cargo.lock` is committed. Chassis artifacts are plugin dylibs and, later, standalone executables where reproducible builds matter, and `cargo deny` audits the dependency graph from the lockfile. Keep it current with dependency changes.
 
 Do not add wildcard dependency versions. Avoid duplicate major/version trees when practical, but do not contort correctness or platform support merely to eliminate harmless duplication.
-
-The first Clack requirements are exact `=0.1.1` requirements rather than a floating 0.1 range. Upgrade them deliberately after reviewing upstream changes and rerunning adapter conformance. In particular, moving to 0.2 should happen only after a 0.2 release is actually available (or there is a concrete reason to adopt a pinned git revision) and the reentrancy/API changes have been reviewed.
 
 ## Checks
 
