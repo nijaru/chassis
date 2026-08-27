@@ -1,7 +1,8 @@
 //! Explicit component/processor lifecycle contracts.
 //!
 //! This module is intentionally small. It proves the semantic ownership split
-//! before Chassis adds parameter/state machinery, proc macros, or format adapters.
+//! while keeping parameter/state persistence separate from future automation,
+//! proc-macro, and format-adapter contracts.
 
 use core::fmt;
 
@@ -10,6 +11,7 @@ use crate::{
         AudioIoConfiguration, AudioIoConfigurationError, AudioPortDescriptor, DEFAULT_EFFECT_PORTS,
     },
     buffer::ChannelBuffer,
+    parameters::{ParameterDescriptor, ParameterStore, ParameterStoreError},
     process::{ActivationConfig, ProcessBlock, ProcessBlockError, ProcessConfig, ProcessMode},
 };
 
@@ -33,6 +35,16 @@ pub trait Component {
     #[must_use]
     fn audio_ports(&self) -> &[AudioPortDescriptor] {
         &DEFAULT_EFFECT_PORTS
+    }
+
+    /// Return the immutable parameter schema for this component instance.
+    ///
+    /// The runtime clones this schema into the active instance before product
+    /// activation. The clone is immutable; only the instance's base values are
+    /// mutable. Components without parameters use the empty default schema.
+    #[must_use]
+    fn parameter_descriptors(&self) -> &[ParameterDescriptor] {
+        &[]
     }
 
     /// Create the exclusively-owned realtime processor for one activation.
@@ -79,6 +91,8 @@ pub trait Process<S>: Processor {
 pub enum ActivateError<E> {
     /// The proposed whole-component I/O configuration failed structural validation.
     InvalidAudioIo(AudioIoConfigurationError),
+    /// The component's immutable parameter schema failed validation.
+    InvalidParameters(ParameterStoreError),
     /// Product activation failed after the framework configuration was validated.
     Product(E),
 }
@@ -90,6 +104,7 @@ where
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidAudioIo(error) => write!(formatter, "invalid audio I/O: {error}"),
+            Self::InvalidParameters(error) => write!(formatter, "invalid parameters: {error}"),
             Self::Product(error) => write!(formatter, "product activation failed: {error}"),
         }
     }
@@ -102,19 +117,21 @@ where
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::InvalidAudioIo(error) => Some(error),
+            Self::InvalidParameters(error) => Some(error),
             Self::Product(error) => Some(error),
         }
     }
 }
 
-/// Active processor plus the immutable configuration that bounds its realtime work.
+/// Active processor, canonical base parameter state, and immutable activation configuration.
 ///
-/// This is the first executable lifecycle shell, not the eventual complete
-/// `InstanceRuntime`: canonical parameter/state authority will be added only
-/// when that storage/publication contract is implemented.
+/// The parameter store is a control/non-realtime authority. Process-time
+/// automation trajectories and processor publication boundaries remain explicit
+/// follow-up contracts.
 pub struct Activated<'a, P> {
     config: ActivationConfig<'a>,
     processor: P,
+    parameters: ParameterStore,
 }
 
 impl<'a, P> Activated<'a, P>
@@ -125,6 +142,17 @@ where
     #[must_use]
     pub const fn config(&self) -> ActivationConfig<'a> {
         self.config
+    }
+
+    /// Return the current base/control parameter values.
+    #[must_use]
+    pub const fn parameters(&self) -> &ParameterStore {
+        &self.parameters
+    }
+
+    /// Mutably access base/control values from the owning control context.
+    pub fn parameters_mut(&mut self) -> &mut ParameterStore {
+        &mut self.parameters
     }
 
     /// Reset transient realtime processor history.
@@ -175,7 +203,8 @@ where
 /// # Errors
 ///
 /// Returns [`ActivateError::InvalidAudioIo`] before calling product activation
-/// for malformed configurations, or [`ActivateError::Product`] when the product
+/// for malformed configurations, [`ActivateError::InvalidParameters`] for an
+/// invalid component schema, or [`ActivateError::Product`] when the product
 /// rejects activation.
 pub fn activate<'a, C>(
     component: &C,
@@ -189,10 +218,16 @@ where
         .validate(component.audio_ports())
         .map_err(ActivateError::InvalidAudioIo)?;
 
+    let parameters = ParameterStore::new(component.parameter_descriptors())
+        .map_err(ActivateError::InvalidParameters)?;
     let config = ActivationConfig::new(process, audio_io);
     let processor = component
         .activate(&config)
         .map_err(ActivateError::Product)?;
 
-    Ok(Activated { config, processor })
+    Ok(Activated {
+        config,
+        processor,
+        parameters,
+    })
 }

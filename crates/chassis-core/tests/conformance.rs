@@ -18,6 +18,7 @@ use chassis_core::{
         DEFAULT_EFFECT_CONFIGURATION, MAIN_INPUT, MAIN_OUTPUT,
     },
     buffer::{ChannelBuffer, InputEndpoint, OutputEndpoint},
+    parameters::{ParameterDescriptor, ParameterValue},
     process::{ActivationConfig, ProcessBlock, ProcessBlockError, ProcessConfig, ProcessMode},
     runtime::{ActivateError, Component, Process, Processor, activate},
 };
@@ -33,11 +34,38 @@ struct Metrics {
 struct ConformanceEffect {
     metrics: Arc<Metrics>,
     gain: f32,
+    parameters: Vec<ParameterDescriptor>,
+}
+
+impl ConformanceEffect {
+    fn new(metrics: Arc<Metrics>, gain: f32) -> Self {
+        Self {
+            metrics,
+            gain,
+            parameters: Vec::new(),
+        }
+    }
+
+    fn with_parameters(
+        metrics: Arc<Metrics>,
+        gain: f32,
+        parameters: Vec<ParameterDescriptor>,
+    ) -> Self {
+        Self {
+            metrics,
+            gain,
+            parameters,
+        }
+    }
 }
 
 impl Component for ConformanceEffect {
     type Processor = ConformanceProcessor;
     type ActivationError = Infallible;
+
+    fn parameter_descriptors(&self) -> &[ParameterDescriptor] {
+        &self.parameters
+    }
 
     fn activate(
         &self,
@@ -119,12 +147,66 @@ fn conformance_processor_can_cross_a_plugin_thread_boundary() {
 }
 
 #[test]
+fn runtime_activation_owns_validated_parameter_base_state() {
+    let metrics = Arc::new(Metrics::default());
+    let descriptors = vec![
+        ParameterDescriptor::float("input.gain", "Input gain", -1.0, 1.0, 0.0)
+            .expect("parameter definition is valid"),
+    ];
+    let component = ConformanceEffect::with_parameters(metrics, 1.0, descriptors);
+    let mut active = activate(
+        &component,
+        process_config(Some(1), 8),
+        DEFAULT_EFFECT_CONFIGURATION,
+    )
+    .expect("parameterized conformance activation is valid");
+
+    assert_eq!(
+        active.parameters().get("input.gain"),
+        Some(&ParameterValue::Float(0.0))
+    );
+    active
+        .parameters_mut()
+        .set("input.gain", ParameterValue::Float(0.75))
+        .expect("value is in range");
+    assert_eq!(
+        active.parameters().get("input.gain"),
+        Some(&ParameterValue::Float(0.75))
+    );
+}
+
+#[test]
+fn invalid_parameter_schema_never_reaches_product_activation() {
+    let metrics = Arc::new(Metrics::default());
+    let descriptor = ParameterDescriptor::boolean("bypass", "Bypass", false)
+        .expect("parameter definition is valid");
+    let component = ConformanceEffect::with_parameters(
+        Arc::clone(&metrics),
+        1.0,
+        vec![descriptor.clone(), descriptor],
+    );
+
+    let result = activate(
+        &component,
+        process_config(Some(1), 8),
+        DEFAULT_EFFECT_CONFIGURATION,
+    );
+
+    assert!(matches!(
+        result,
+        Err(ActivateError::InvalidParameters(
+            chassis_core::parameters::ParameterStoreError::InvalidDefinition(
+                chassis_core::parameters::ParameterDefinitionError::DuplicateParameter(_)
+            )
+        ))
+    ));
+    assert_eq!(metric(&metrics.activations), 0);
+}
+
+#[test]
 fn explicit_runtime_processes_separate_buffers_and_owns_lifecycle() {
     let metrics = Arc::new(Metrics::default());
-    let component = ConformanceEffect {
-        metrics: Arc::clone(&metrics),
-        gain: 2.0,
-    };
+    let component = ConformanceEffect::new(Arc::clone(&metrics), 2.0);
     let mut active = activate(
         &component,
         process_config(Some(1), 8),
@@ -178,7 +260,7 @@ fn explicit_runtime_processes_separate_buffers_and_owns_lifecycle() {
 #[test]
 fn exact_in_place_buffers_do_not_require_a_second_alias() {
     let metrics = Arc::new(Metrics::default());
-    let component = ConformanceEffect { metrics, gain: 0.5 };
+    let component = ConformanceEffect::new(metrics, 0.5);
     let mut active = activate(
         &component,
         process_config(Some(1), 8),
@@ -219,10 +301,7 @@ fn exact_in_place_buffers_do_not_require_a_second_alias() {
 #[test]
 fn malformed_audio_configuration_never_reaches_product_activation() {
     let metrics = Arc::new(Metrics::default());
-    let component = ConformanceEffect {
-        metrics: Arc::clone(&metrics),
-        gain: 1.0,
-    };
+    let component = ConformanceEffect::new(Arc::clone(&metrics), 1.0);
     let only_input = [ConfiguredAudioPort {
         key: MAIN_INPUT,
         layout: ChannelLayout::Stereo,
@@ -246,10 +325,7 @@ fn malformed_audio_configuration_never_reaches_product_activation() {
 #[test]
 fn callback_dimension_failures_are_contained_before_product_dsp() {
     let metrics = Arc::new(Metrics::default());
-    let component = ConformanceEffect {
-        metrics: Arc::clone(&metrics),
-        gain: 1.0,
-    };
+    let component = ConformanceEffect::new(Arc::clone(&metrics), 1.0);
     let mut active = activate(
         &component,
         process_config(Some(1), 8),
@@ -311,10 +387,7 @@ fn callback_dimension_failures_are_contained_before_product_dsp() {
 #[test]
 fn zero_frame_callback_is_supported_when_no_positive_minimum_is_promised() {
     let metrics = Arc::new(Metrics::default());
-    let component = ConformanceEffect {
-        metrics: Arc::clone(&metrics),
-        gain: 1.0,
-    };
+    let component = ConformanceEffect::new(Arc::clone(&metrics), 1.0);
     let mut active = activate(
         &component,
         process_config(None, 8),

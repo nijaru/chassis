@@ -8,5 +8,7 @@
 
 pub mod audio;
 pub mod buffer;
+pub mod parameters;
 pub mod process;
 pub mod runtime;
+pub mod state;
