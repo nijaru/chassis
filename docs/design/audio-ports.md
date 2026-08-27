@@ -14,7 +14,7 @@ The target APIs do not share one channel-layout representation:
 
 - CLAP describes ports separately from optional surround and ambisonic semantics. Its configurable-audio-ports extension lets the host push a set of port configuration requests which are accepted or rejected atomically while the plugin is inactive.
 - VST3 represents speaker arrangements and lets the host propose input/output bus arrangements to the processor as a configuration.
-- Core Audio can identify predefined layouts by tag or describe channels explicitly. Apple defines channel-based Atmos layouts such as 5.1.2, 7.1.4, and 9.1.6.
+- Core Audio can identify predefined layouts by tag or describe channels explicitly. Apple defines channel-based Atmos layouts such as 5.1.2, 7.1.4, and 9.1.6. `AUAudioUnit` also exposes channel-capability patterns for cases such as equal arbitrary input/output channel counts.
 
 Therefore Chassis should model the semantic configuration and let each adapter translate or reject it rather than copying one backend's representation.
 
@@ -62,6 +62,59 @@ A proposed configuration is validated as a whole and committed atomically while 
 - an immersive configuration may require a coherent group of ports.
 
 The active processor receives an immutable/activation-time view of the accepted configuration. Layout changes require deactivation/reconfiguration rather than racing mutable metadata against the realtime callback.
+
+## Configuration policy
+
+Port descriptors answer **what ports exist**. A separate I/O policy answers **which whole-component configurations are valid**.
+
+The framework should support two common policy forms without making either a backend detail.
+
+### Enumerated configurations
+
+Many products have a small finite set:
+
+```text
+stereo effect
+mono effect
+mono -> stereo
+stereo + stereo sidechain
+5.1 effect
+```
+
+For these, the product can declare a default plus an ordered set of supported configurations. Adapters can advertise/enumerate them directly where the host API benefits from that.
+
+### Rule-based configurations
+
+Other products naturally accept a family rather than a finite list, for example:
+
+```text
+main input and output may use any supported speaker layout,
+but they must match
+```
+
+or:
+
+```text
+up to N discrete input channels -> fixed stereo output
+```
+
+For these, Chassis should permit an explicit validation policy that receives the proposed semantic configuration and accepts or rejects it as a whole.
+
+A policy should be queryable while the component is inactive and must not depend on realtime processor state.
+
+### Common built-in policies
+
+Likely reusable policies include:
+
+- fixed configuration;
+- one-of enumerated configurations;
+- matching main input/output layout;
+- matching channel count with layout-family restrictions;
+- generator/instrument with no audio input and one or more output configurations.
+
+These are conveniences, not the only allowed policies.
+
+The default effect policy initially accepts its default stereo main input/output configuration plus the same configuration with the optional stereo sidechain enabled. It should not silently accept arbitrary multichannel layouts merely because the underlying data structures could represent them.
 
 ## Layout families
 
@@ -119,8 +172,10 @@ Format adapters must either:
 
 Do not silently collapse labeled surround to discrete channels, reinterpret ambisonics as speaker audio, or remap speaker identities merely to satisfy a host request.
 
+If a backend asks about one bus at a time (for example an Audio Unit format change callback), the adapter must still evaluate the resulting proposed **whole Chassis configuration** before committing the change. Backend call shape does not weaken product-level cross-bus invariants.
+
 ## Initial implementation boundary
 
-The first production proof only needs mono/stereo/discrete layout mechanics plus the stereo-effect convention. Surround and ambisonic data structures should be designed before the public API freezes, but full host validation can remain on the roadmap.
+The first production proof only needs mono/stereo/discrete layout mechanics plus the stereo-effect convention and a whole-configuration validation policy. Surround and ambisonic data structures should be designed before the public API freezes, but full host validation can remain on the roadmap.
 
 The current `chassis-core` channel enum is a spike, not the final layout API. It should be replaced before publishing the crate.
