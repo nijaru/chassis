@@ -1,38 +1,22 @@
 # Chassis State Format
 
-Status: preferred prototype direction; **not a stable wire-format promise yet**. Freeze only after implementation, migration fixtures, fuzzing, and cross-format round-trip tests.
+Status: preferred prototype direction; **not a stable wire-format promise**. Freeze only after implementation, corruption/property/fuzz tests, migration fixtures, and cross-format round trips.
 
 ## Goal
 
-Use one deterministic, bounded, format-independent state representation for CLAP, VST3, Audio Unit wrappers, standalone products, embedded components, and factory/user presets.
+Use one deterministic, bounded, format-independent semantic state representation for plugin formats, standalone/embedded deployment, and presets.
 
-The state format should be optimized for long-term plugin compatibility rather than arbitrary Rust object serialization.
+Optimize for long-lived compatibility and safe migration, not arbitrary Rust object serialization.
 
-## Why not serialize product structs directly
+## Semantic document before byte codec
 
-A generic serializer can have a stable wire format while the serialized Rust data model remains an unstable product contract.
+The durable contract is a Chassis semantic document keyed by stable product identities, regardless of the eventual byte encoder.
 
-Directly serializing a product struct tends to couple saved state to:
-
-- field/declaration order;
-- enum discriminant order;
-- nesting/container representation;
-- serializer configuration/version;
-- Rust-oriented schema choices that are awkward to migrate by stable plugin parameter IDs.
-
-Postcard, for example, has a documented stable wire format but is intentionally non-self-describing: encoder and decoder share an external schema. That is useful infrastructure, but using `#[derive(Serialize, Deserialize)]` on product structs would not by itself give Chassis the migration semantics we want.
-
-Bincode similarly has a specified binary format and configurable decode limits, but directly encoding product structs still makes that struct/schema the wire contract.
-
-Chassis can use a third-party byte codec later if it adds enough value, but the **semantic state document** must remain a Chassis contract keyed by stable product identities.
-
-## State document
-
-Conceptually decode host bytes into a flat semantic document:
+Conceptually:
 
 ```text
 StateDocument
-├── envelope version
+├── canonical product identity
 ├── product schema version
 └── entries sorted by stable key
     ├── parameter/input.gain -> F64(-3.0)
@@ -41,38 +25,46 @@ StateDocument
     └── state/custom-data    -> Bytes(...)
 ```
 
-Exact key namespaces are not frozen. The important property is that stable string identity, not Rust layout/order, determines meaning.
+Including product identity prevents a syntactically valid state/preset from another product being accepted merely because some keys overlap. The identity must match the component unless an explicit import/migration path says otherwise.
 
-Flat namespaced keys are preferred over an arbitrary recursive object model. Nested product concepts can already compose stable hierarchical keys such as `band.low.frequency`. This keeps decoding/migration small and predictable.
+Flat namespaced keys are preferred initially over an arbitrary recursive object model. Product structure can still compose keys such as `band.low.frequency` while the parser/migration model remains small.
+
+## Why not serialize Rust structs directly
+
+A stable serializer does not make a changing Rust struct a good product compatibility schema. Direct struct serialization couples durable state to declaration/nesting/enum/layout decisions that are awkward to migrate by stable plugin identities.
+
+Postcard/bincode/Serde may still be useful implementation tools later, but `#[derive(Serialize, Deserialize)]` on product runtime structs is not Chassis's persistence contract.
 
 ## Value types
 
-The initial semantic value set should be deliberately small:
+Keep the semantic value set deliberately small:
 
 - boolean;
 - signed integer;
-- unsigned integer if real product requirements justify both integer domains;
+- unsigned integer when needed;
 - finite IEEE-754 `f64`;
 - UTF-8 string;
-- stable enum/choice identifier (semantically distinct from arbitrary text even if encoded similarly);
-- bounded byte string for explicit product-owned codecs/data.
+- stable enum/choice identifier;
+- bounded bytes for an explicitly product-owned stable codec.
 
-`f32` parameters serialize canonically through the numeric state representation rather than persisting host-normalized values.
+Parameter values persist in meaningful plain units, not host-normalized 0..1 values.
 
-NaN and infinities are invalid persistent parameter values by default. Products that genuinely need arbitrary float bit patterns should use an explicit bytes/custom codec rather than weakening all state validation.
+NaN/infinity are invalid ordinary persistent numeric values. A product requiring exact arbitrary float bit patterns uses an explicit byte/custom codec.
 
-Runtime-only DSP structures are never serialized merely because their Rust types are serializable.
+Runtime DSP history is never serialized simply because its Rust type happens to be serializable.
 
-## Proposed binary envelope
+## Prototype envelope
 
-A simple first prototype is a length-delimited little-endian format:
+A small length-delimited little-endian prototype is reasonable:
 
 ```text
 header
-  magic                 fixed Chassis bytes
+  magic
   envelope_version      u16
+  product_id_length     u16
   product_schema        u32
   entry_count           u32
+  product_id_bytes      UTF-8 canonical product ID
 
 entry repeated entry_count times
   key_length            u16
@@ -83,150 +75,128 @@ entry repeated entry_count times
   payload               type-specific bytes
 ```
 
-The exact magic/version/tag assignments must be specified in a checked-in wire-format fixture before release.
+Exact magic, tag assignments, integer widths, and version behavior remain provisional until checked-in golden fixtures define state format v1.
 
-Length-delimited entries allow a decoder to reject malformed sizes before interpreting data and leave room for explicitly designed future envelope evolution.
-
-Do not add fields merely for hypothetical flexibility. The first encoder/decoder should stay small enough to audit manually.
+If implementation experience shows a standard codec can preserve the same semantic/invariant model with less risk, adopting it before v1 is still open.
 
 ## Canonical encoding
 
-For a given semantic state, bytes should be deterministic.
+For one semantic document, encoded bytes are deterministic:
 
-Rules should include:
-
-- entries encoded in lexicographic byte order by canonical UTF-8 key;
+- exact product identity encoding is specified;
+- entries sorted lexicographically by canonical UTF-8 key bytes;
 - duplicate keys rejected;
-- integers use one specified width/endianness per semantic type;
-- floats use one specified IEEE representation and reject non-finite values unless a field explicitly supports them;
-- if `-0.0` has no semantic distinction for Chassis numeric state, canonicalize it to `+0.0`;
-- booleans have one valid false encoding and one valid true encoding;
-- UTF-8 is validated on decode;
-- reserved bits/bytes must be zero until assigned meaning.
+- integer widths/endianness fixed by the wire spec;
+- finite IEEE float encoding fixed; canonicalize `-0.0` if Chassis does not assign it distinct meaning;
+- boolean has exactly one encoding per value;
+- UTF-8 validated;
+- reserved bits/bytes must have specified values until assigned meaning.
 
-Golden fixture tests make any accidental encoder change visible.
+Golden fixtures make accidental encoder changes observable.
 
 ## Bounds and hostile input
 
-Host state is untrusted input even when it normally originates from the same plugin.
+Host/project/preset bytes are untrusted input.
 
-The decoder must enforce configurable hard bounds before allocation:
+Decode limits cover at least:
 
-- total state bytes;
+- total bytes;
+- product-ID length;
 - entry count;
 - key length;
 - individual payload length;
-- cumulative decoded allocation.
+- cumulative decoded allocation/work.
 
-Chassis should provide a conservative normal-plugin default and allow a product to raise it explicitly for legitimate larger state. Large sample libraries/resources should generally use resource/file facilities rather than silently embedding unbounded data in a DAW project state blob.
+Do not choose unexplained universal limits merely to claim the parser is bounded. Chassis can provide a conservative conventional profile based on measured ordinary plugin state, while each component can explicitly declare larger limits when its documented state requirements justify them.
 
-Integer arithmetic used for lengths/offsets must be overflow-checked.
+Limits are validated before allocation/copy. Length arithmetic uses checked operations. Parsing work is bounded by validated bytes/entries.
 
-Decode into temporary non-live state. Failure never partially mutates the active product.
+Large media/sample resources normally belong in an explicit resource mechanism rather than silently inflating host project state.
 
-## Schema version and migrations
+## Transactional decode/publication
 
-The envelope version describes the Chassis wire format. The product schema version describes the product's semantic state.
+Decoding creates temporary non-live state. Failure never partially mutates the instance.
 
-These evolve independently.
-
-Normal load path:
+Normal path:
 
 ```text
 bytes
-  -> validate Chassis envelope
-  -> decode bounded typed StateDocument
-  -> inspect product schema version
-  -> sequential product migrations
-  -> validate current parameter/custom schema
-  -> publish canonical state
-  -> transfer changes across the runtime boundary
+  -> validate envelope + product identity + limits
+  -> decode typed StateDocument
+  -> migrate product schema
+  -> validate current parameter/custom domains
+  -> build accepted state generation
+  -> publish through the runtime's state-replacement boundary
 ```
 
-A product schema version should be a monotonically increasing integer suitable for migration ordering. Product marketing/semantic versioning is separate metadata.
+This parser never runs on the audio thread.
 
-Chassis should make adjacent sequential migrations the conventional path:
+## Envelope versus product schema
+
+`envelope_version` describes Chassis bytes. `product_schema` describes product semantics. They evolve independently.
+
+Product migrations conventionally run adjacent versions:
 
 ```text
 v1 -> v2 -> v3 -> current
 ```
 
-Tests retain at least one golden state fixture from every publicly released product schema.
+Keep at least one golden fixture from every public product schema. A newer unknown product schema fails safely by default unless the product explicitly proves a forward-compatibility rule.
 
-Loading a **newer** unknown product schema should fail safely by default rather than guessing that unknown fields can be discarded. A product can explicitly provide a compatibility policy if it has evidence that a newer schema is safely consumable.
+The envelope decoder similarly needs an explicit compatible-version policy; never guess how to interpret a future wire version.
 
-## Parameters
+## Parameter state
 
-Framework-managed parameter state is encoded automatically using canonical parameter IDs and meaningful plain typed values.
+Framework-managed parameters encode automatically by canonical parameter key and typed plain value:
 
-Examples:
-
-- float parameter -> finite `f64` plain value;
+- float -> finite `f64` plain value;
 - integer -> integer;
 - bool -> bool;
-- enum -> stable variant ID string.
+- enum -> stable variant key.
 
-The normal decoder validates the migrated value against the current parameter domain. A migration is the place to intentionally remap values whose historical range/meaning changed.
+After migration, current parameter definitions validate the value. Intentional semantic range/meaning changes belong in migrations.
 
-Host-normalized 0..1 values are not the persistent Chassis representation.
+## Custom state
 
-## Custom persistent fields
+Do not make unrestricted arbitrary-Rust serialization the only extension path.
 
-Products should not get an unrestricted "serialize any Rust type" attribute as the only persistence path.
+Common custom fields use supported stable semantic value types. Richer data uses a bounded bytes field with a product-owned stable codec and its own version/tests/migrations.
 
-Common custom fields can implement/use explicit Chassis state-value traits for the supported semantic types.
+Changing a Rust implementation type is safe when stable key + semantic codec/migration remain compatible.
 
-For genuinely richer data, provide a bounded bytes field with a product-owned stable codec. That codec has its own tests/migration responsibility. Chassis can offer helper codecs later when repeated use proves they are common.
+## Presets and diagnostics
 
-A custom field's Rust type may change without breaking saved state if its stable key and codec/migration semantics remain compatible.
+Factory/user presets can use the same canonical state payload plus separate preset metadata.
 
-## Presets and debugging
+Tooling may render a `StateDocument` into readable JSON/text for support, migration review, and fixture diffs. That diagnostic form is not the host wire format unless explicitly chosen later.
 
-Factory/user presets can use the same binary semantic state payload plus separate preset metadata where needed.
+## Adapter behavior
 
-Chassis tooling should eventually be able to render a state document into a human-readable diagnostic form (for example JSON/text) without making that diagnostic representation the host wire format. This is useful for:
+CLAP/VST3 stream boundaries can carry canonical Chassis bytes directly through bounded readers/writers.
 
-- inspecting presets;
-- migration reviews;
-- golden test diffs;
-- support/debugging.
+An AU wrapper can place the canonical payload inside its required state container while retaining AU-specific metadata separately. Adapters must not create a second competing serialization authority for the same product parameters.
 
-## Format adapters
+Short/partial stream reads/writes and backend errors are real boundary cases: adapter tests must simulate them where the format permits streaming rather than assuming one complete read/write call.
 
-CLAP and VST3 provide stream-style state boundaries, so the Chassis bytes can be written/read directly through bounded streaming adapters.
+## v1 promotion gates
 
-Audio Unit exposes dictionary-style `fullState`/`fullStateForDocument`. An AU adapter/wrapper can store the canonical Chassis payload inside an owned namespaced binary value while also satisfying any wrapper/platform metadata requirements. The Chassis semantic state remains identical.
-
-Adapter state glue must not independently serialize parameter values into a second competing product state model.
-
-## Security and correctness tests before freeze
-
-Before this becomes `state format v1`:
+Before declaring state format v1:
 
 - round-trip every semantic value type;
-- deterministic/golden byte fixtures;
-- decode malformed/truncated headers and entries;
-- overflowed/oversized lengths;
-- duplicate keys;
-- invalid UTF-8;
-- invalid bool/type/reserved values;
-- non-finite floats;
-- random byte fuzzing;
-- migration fixtures;
-- state save/load through CLAP, VST3, and AU wrappers;
-- repeated load failure must leave current canonical/live state unchanged.
+- golden deterministic fixtures;
+- wrong-product identity rejection;
+- malformed/truncated header/entry tests;
+- checked overflow/oversized lengths and resource-exhaustion tests;
+- duplicate key / invalid UTF-8 / invalid type/bool/reserved data tests;
+- non-finite numeric rejection;
+- random/fuzz corpus;
+- sequential migration fixtures;
+- active state-save/load race tests according to the runtime consistency contract;
+- CLAP/VST3/AU cross-format round trips;
+- repeated decode/load failures leave live state unchanged.
 
-The parser should be small enough that fuzzing supplements, rather than substitutes for, manual review.
+Keep the parser small enough for manual review; fuzzing supplements rather than replaces reasoning.
 
 ## Dependency position
 
-The first prototype can be implemented in `chassis-core`/a dedicated state crate using only the standard library so the wire contract is explicit.
-
-If a third-party codec is later adopted internally, it must:
-
-- be under a dependency license compatible with Chassis's commercial path;
-- have a stable documented wire specification;
-- support strict decode bounds;
-- not force product state identity to follow Rust type layout.
-
-Postcard (MIT OR Apache-2.0) and bincode (MIT) are technically compatible candidate building blocks, but neither is needed simply to avoid writing this intentionally tiny state envelope.
+The first prototype can use only the standard library so the wire contract is explicit. Any later codec dependency must be permissively licensed for the commercial path, have a stable documented format, support strict bounds, and not make Rust memory/type layout the durable identity model.
