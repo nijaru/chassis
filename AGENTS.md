@@ -4,7 +4,7 @@
 
 Chassis is a convention-first Rust framework for professional audio components. Effects are the first production clients; instruments, standalone deployment, immersive layouts, and optional host/application layers are planned without making the core depend on any one of them.
 
-Read `docs/architecture.md`, `docs/roadmap.md`, and `docs/licensing.md` before making architectural changes.
+Read `docs/architecture.md`, `docs/roadmap.md`, `docs/licensing.md`, and `docs/dependencies.md` before making architectural or dependency changes. Relevant detailed contracts live under `docs/design/`; update those documents when a design decision changes rather than allowing implementation and documentation to diverge.
 
 ## Design rules
 
@@ -17,6 +17,8 @@ Read `docs/architecture.md`, `docs/roadmap.md`, and `docs/licensing.md` before m
 - Keep DAW/application product semantics outside Chassis core: timelines, arrangements, projects, media libraries, mastering revisions/QC, mixer UX, etc.
 - Keep CLAP/VST3/AU/Clack/clap-wrapper/toolkit/platform types out of the product-facing core API.
 - Extract optional common utilities only when their semantics are broadly reusable or proven by repeated clients.
+- Keep stable product/parameter/port identities independent from Rust type names, field names, UI labels, and backend-specific IDs.
+- Treat adapter translation as semantic mapping: reject unsupported configurations rather than silently changing their meaning.
 
 ## Realtime rules
 
@@ -27,20 +29,24 @@ Read `docs/architecture.md`, `docs/roadmap.md`, and `docs/licensing.md` before m
 - Bounded queues and explicit overflow/drop policy are required for realtime communication.
 - Any adapter `unsafe`/FFI code must be isolated, documented with invariants, and independently tested.
 - Format-independent workspace crates deny unsafe code by default.
+- Convenience APIs must not hide per-block allocation or an unbounded copy on the realtime path.
 
 ## Compatibility and validation
 
 - Treat host behavior and format specifications as contracts, not suggestions.
 - Preserve sample-accurate event offsets where the source format provides them.
-- State and parameter IDs are persistent compatibility contracts once released.
+- State, product, parameter, and port IDs are persistent compatibility contracts once released.
 - Test unusual block sizes, zero/short blocks where formats permit them, offline rendering, repeated activate/deactivate, editor open/close, state load/save, and automation.
 - Run format-native validators in addition to unit tests once adapters exist.
+- Maintain a conformance component and differential cross-format tests; do not rely on real product DSP alone to validate framework semantics.
 
 ## Licensing and dependencies
 
 - Chassis is AGPL-3.0-or-later with an intended commercial dual-license path.
 - Prefer dependencies that can legally ship in proprietary commercial-license builds (MIT/Apache/BSD/ISC/public-domain or similarly permissive terms).
+- `deny.toml` is the machine-enforced dependency license/source policy. Do not widen it simply to make CI pass; review and document new license families first.
 - Do not import third-party strong-copyleft code into the framework without an explicit licensing decision.
+- Keep SDK-specific constraints (especially AAX/Avid/PACE) isolated from format-independent crates.
 - Do not accept substantive external code contributions until contributor/relicensing terms are established.
 
 ## Current implementation priority
