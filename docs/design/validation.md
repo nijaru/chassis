@@ -45,6 +45,7 @@ The first adapter gate is locally green on Apple Silicon macOS with Rust 1.98.0:
 - workspace tests, fmt, Clippy, cargo-deny, and cargo-machete pass;
 - the release `cdylib` is packaged as a macOS `.clap` bundle and has a valid `Info.plist`;
 - `clap-validator` 0.4.1 (source commit `b2f1d9b79b1d264a5747f46707d72b1aa40a02ef`) reports 19 passed, 0 failed, and 25 skipped tests;
+- its five-second, two-worker fuzz run completed without errors after the conformance effect flushed subnormal gain results;
 - REAPER 7.78/macOS-arm64 loaded the bundle, activated it, and rendered a one-second stereo f32 fixture; the processed render matched the no-FX render at 0.5 gain within 6e-8 absolute error.
 
 The skipped validator tests cover capabilities this slice deliberately does not implement, including parameters, state, events, GUI, and other optional extensions. The result proves the tested CLAP lifecycle/buffer path, not production host support or the complete CLAP contract. Bitwig is not installed in the current validation environment.
@@ -155,8 +156,8 @@ The first narrow adapter qualification has been exercised locally:
 1. the conformance `cdylib` was built in release mode;
 2. it was packaged as a macOS `.clap` bundle with a platform-correct `Contents/MacOS` executable and `Info.plist`;
 3. `clap-validator` 0.4.1 was built from source commit `b2f1d9b79b1d264a5747f46707d72b1aa40a02ef` and run with `validate --json`; it reported 19 passed, 0 failed, and 25 skipped tests;
-4. validator lifecycle, buffer, block-size, sample-rate, reset/reactivate, transport-null, and transport-fuzz cases completed without failures;
-5. the same bundle was loaded by REAPER 7.78/macOS-arm64 and rendered through a real project; a no-FX differential render confirmed the fixed 0.5 gain;
+4. validator lifecycle, buffer, block-size, sample-rate, reset/reactivate, transport-null, and transport-fuzz cases completed without failures; a five-second, two-worker fuzz run also completed without errors;
+5. the same bundle was loaded by REAPER 7.78/macOS-arm64 and rendered through a real project; a no-FX differential render confirmed the fixed 0.5 gain within 6e-8 absolute error;
 6. the environment was Apple Silicon macOS with Rust 1.98.0 and the stable toolchain named by `rust-toolchain.toml`.
 
 Bitwig validation remains pending because it is not installed in this environment. A validator pass and one REAPER smoke test are additional evidence, not proof of production support.

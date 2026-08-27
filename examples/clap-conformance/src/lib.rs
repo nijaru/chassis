@@ -39,10 +39,34 @@ impl Process<f32> for ConformanceProcessor {
                 .make_in_place()
                 .expect("the CLAP proof exposes paired main input/output channels")
             {
-                *sample *= 0.5;
+                apply_gain(sample);
             }
         }
     }
 }
 
 clack_export_entry!(SingleComponentEntry<ConformanceEffect>);
+
+fn apply_gain(sample: &mut f32) {
+    let gained = *sample * 0.5;
+    *sample = if gained.is_subnormal() { 0.0 } else { gained };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::apply_gain;
+
+    #[test]
+    fn gain_flushes_subnormal_output() {
+        let mut sample = f32::from_bits(1);
+        apply_gain(&mut sample);
+        assert_eq!(sample.to_bits(), 0.0_f32.to_bits());
+    }
+
+    #[test]
+    fn gain_preserves_normal_output() {
+        let mut sample = 0.8;
+        apply_gain(&mut sample);
+        assert_eq!(sample.to_bits(), 0.4_f32.to_bits());
+    }
+}

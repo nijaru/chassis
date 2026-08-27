@@ -103,7 +103,7 @@ Freeze only after:
 
 Changing the format before v1 is expected.
 
-## CLAP adapter — implemented proof, not qualified
+## CLAP adapter — narrow slice locally qualified, not production-qualified
 
 ### Clack dependency/version surface
 
@@ -118,14 +118,18 @@ The latest published release available during the audit, 0.1.1, has an acknowled
 
 The selected revision is after the reentrancy fix and subsequent immediate safety/lifetime work. It is MIT/Apache-2.0 licensed and is allowlisted as the project's only current git-source exception. See `docs/research/clack-pinned-adapter-audit.md`.
 
+Completed for this narrow slice:
+
+- regenerated/reviewed the exact git + transitive dependency graph in `Cargo.lock`;
+- confirmed Cargo resolves every Clack package to the pinned revision;
+- inspected the exact source used by the lockfile;
+- passed advisory/source/license checks after Cargo resolved the graph.
+
 Still required before production qualification:
 
-- regenerate/review the exact git + transitive dependency graph in `Cargo.lock`;
-- confirm Cargo resolves exactly the pinned revision;
-- inspect the exact source used by the lockfile;
 - deeper audit of Clack unsafe/lifetime and panic containment around the process/extension path;
 - allocation/locking/reclamation audit of the exact process path;
-- advisory/source/license checks after Cargo resolves the graph;
+- broader host/OS/architecture coverage, including Bitwig where available;
 - move back to a suitable crates.io Clack release when a safety-fixed release is published and qualified.
 
 Keep Clack types confined to `chassis-clap` and export/test glue.
@@ -144,12 +148,17 @@ CLAP deactivate                  -> Activated::deactivate
 
 Clack supplies the CLAP create/init/start/stop/destroy machinery around these types. The Chassis audio processor currently uses Clack's default no-op start/stop behavior because core has no separate semantic start/stop state yet.
 
-Need actual evidence for:
+The validator and REAPER smoke test now provide evidence for:
 
 - create/init/activate/start/process/stop/deactivate/destroy legal sequences;
+- repeated activation/deactivation and reset/reactivate;
+- basic validator-side buffer and process failure containment;
+- real-host activation and processing through REAPER.
+
+Still required:
+
 - activation failure cleanup;
-- repeated activation/deactivation;
-- invalid/partial host sequences and panic containment;
+- invalid/partial host sequences and panic containment beyond validator coverage;
 - processor movement between CLAP audio threads (`Send`) without simultaneous mutation;
 - reentrant host callbacks against the pinned Clack model;
 - module unload once future callbacks/tasks exist.
@@ -179,16 +188,22 @@ Still required:
 
 ### Export/package/host qualification
 
-`examples/clap-conformance` is now an rlib/cdylib export probe. It is not yet a packaged/validated `.clap` product artifact.
+`examples/clap-conformance` is a packaged and locally validated `.clap` proof artifact, not production-qualified native CLAP support.
 
-Before calling native CLAP support usable:
+Completed for the tested macOS arm64 slice:
 
-- local fmt/test/clippy/deny/machete all green with updated lockfile;
-- build the export on a supported platform;
-- package it according to CLAP platform conventions;
-- run current `clap-validator` and lifecycle/buffer stress;
-- smoke-test at least one real CLAP host, preferably including Bitwig while qualifying reentrancy-sensitive behavior;
-- record exact validator/host/toolchain versions.
+- local fmt/test/clippy/deny/machete green with the reviewed lockfile;
+- release export build;
+- platform-correct `.clap` bundle packaging;
+- `clap-validator` 0.4.1 validation and five-second fuzz run;
+- REAPER 7.78/macOS-arm64 smoke render with differential gain verification;
+- exact validator/host/toolchain evidence recorded in `docs/design/validation.md`.
+
+Still required before calling native CLAP support usable in production:
+
+- Bitwig and broader real-host/OS/architecture coverage;
+- allocation/locking/reclamation and deeper Clack unsafe/lifetime audit;
+- failure/reentrancy/module-unload evidence beyond the current validator and host scenarios.
 
 ### Event/parameter translation
 

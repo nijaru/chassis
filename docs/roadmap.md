@@ -74,7 +74,7 @@ Completed qualification work:
 1. regenerated/reviewed `Cargo.lock` and passed fmt/test/clippy/deny/machete;
 2. built the conformance cdylib in release mode;
 3. packaged a platform-correct macOS `.clap` artifact;
-4. ran `clap-validator` 0.4.1 (source commit `b2f1d9b79b1d264a5747f46707d72b1aa40a02ef`) lifecycle/buffer stress with 19 passes, 0 failures, and 25 intentional skips;
+4. ran `clap-validator` 0.4.1 (source commit `b2f1d9b79b1d264a5747f46707d72b1aa40a02ef`) lifecycle/buffer stress with 19 passes, 0 failures, and 25 intentional skips, plus a five-second two-worker fuzz run;
 5. loaded and rendered the same artifact in REAPER 7.78/macOS-arm64, verifying the fixed 0.5 gain against a no-FX render.
 
 Bitwig is not installed in the current environment, so broader host qualification remains. Use these results to decide the general multibus/sidechain borrowing model before extending Phase 2 with:
