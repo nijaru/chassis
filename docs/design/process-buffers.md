@@ -4,25 +4,21 @@ Status: design direction; public API not frozen.
 
 ## Goal
 
-Give ordinary effects a simple processing path without forcing hidden copies or losing the buffer semantics exposed by plugin hosts.
+Give ordinary effects a simple processing path while preserving host buffer semantics and Rust aliasing guarantees. Avoid gratuitous copies, but do not make zero-copy a goal in itself.
 
 The core buffer model must support effects, generators/instruments, auxiliary inputs/outputs, multiple buses, variable block sizes, offline rendering, and eventual high-channel-count processing.
 
-## Host evidence
+## Host relationships
 
-The target formats permit multiple buffer relationships:
+Target formats can provide exact in-place input/output buffers or distinct buffers. Chassis therefore cannot assume every process call is in-place or every input/output pair is separate.
 
-- CLAP exposes read-only input buffers and writable output buffers and separately declares which ports may be processed in place.
-- VST3 explicitly permits an input and output channel pointer to be the same or different.
-- Audio Units can process in place and also render into separate output buffers.
+The adapter owns all raw-pointer validation. Product DSP never receives host pointers directly.
 
-Therefore Chassis should not assume that every process call is in-place or that every input/output pair is separate.
+## Rust aliasing contract
 
-## Safe channel relationship
+The safe Chassis view may only contain references whose exclusivity has actually been proved.
 
-The format adapter is responsible for turning host pointers into a safe Chassis representation. Product DSP should not manipulate raw pointers.
-
-A useful conceptual representation is:
+Conceptually the useful relationships are:
 
 ```text
 ChannelBuffer<S>
@@ -32,88 +28,88 @@ ChannelBuffer<S>
 └── OutputOnly(&mut [S])
 ```
 
-The exact enum/API may change, but preserving this distinction avoids unnecessary framework copies and makes host aliasing explicit.
+This is semantic pseudocode, not a promise that the final type is this enum.
 
-Unsafe pointer/alias validation required to construct these references belongs in a format adapter, not `chassis-core` product code.
+An adapter may construct `InPlace` only for a valid exact alias where a single mutable slice is the sole live Rust reference to that memory. It may construct `Separate` only after proving the ranges are disjoint for the duration of the borrow.
+
+Unexpected partial overlap, overlapping output channels, inconsistent frame lengths, invalid/null pointers, or other host data that cannot satisfy Rust's reference rules must be handled at the adapter boundary. Never manufacture overlapping `&`/`&mut` references and rely on the host specification to make undefined behavior impossible.
+
+If a backend makes some legal relationship awkward to express with ordinary references, keep raw pointers/private unsafe machinery inside the adapter and expose a smaller safe accessor whose borrowing rules can be enforced. Do not weaken the product-facing API to raw pointers merely for adapter convenience.
 
 ## Conventional in-place helper
 
 Many effects naturally implement an in-place transform. Chassis should make that path easy without making it the underlying representation.
 
-Conceptually a helper can provide:
+Conceptually an explicit helper can behave as follows:
 
-```text
-channel.make_in_place()
-```
+- exact in-place input/output: return the existing mutable output view with no copy;
+- separate input/output: copy the bounded input block into output once, then process output in place;
+- output-only: allow mutable output after explicit initialization semantics;
+- input-only: reject an in-place output request.
 
-Behavior:
+The copy is controlled product/framework behavior, not an accidental adapter normalization step. It is acceptable when it makes ownership clearer and measurement does not justify a more complex DSP path.
 
-- `InPlace`: return the existing mutable slice with no copy;
-- `Separate`: copy input to output once, then return the output slice;
-- `OutputOnly`: return the output slice after the product chooses initialization semantics;
-- `InputOnly`: not valid for an in-place output transform.
-
-The copy is therefore explicit in API semantics and only happens when required by the host relationship and the product chooses the convenience path.
-
-DSP that benefits from separate input/output buffers can use the raw safe representation and avoid that copy.
+DSP that benefits from separate input/output buffers can consume those views directly and avoid the copy.
 
 ## Ports and process block
 
-Audio buffers are indexed/mapped against the active `AudioIoConfiguration`, not against hard-coded stereo positions.
+Audio buffers are associated with the accepted `AudioIoConfiguration`, not hard-coded stereo positions or backend bus indices.
 
-A process call eventually needs a block-level context containing at least:
+A process call eventually needs a realtime-only context conceptually containing:
 
 ```text
 ProcessBlock
-├── frame count
-├── audio input/output port buffers
-├── timestamped parameter/automation/modulation events
-├── note/MIDI/event input and output
+├── actual frame count
+├── safe audio port/buffer views
+├── parameter automation/modulation trajectories
+├── ordered note/MIDI/event input and bounded output sink
 ├── transport/process context
-└── bounded realtime host callbacks
+└── narrow realtime-safe host/runtime capabilities
 ```
 
-The exact decomposition into structs/arguments remains open. The important rule is that the processor receives only realtime-safe capabilities.
+The exact decomposition remains open. Product code should be able to obtain conventional main stereo/sidechain views cheaply while unusual products can address multiple buses explicitly.
 
 ## Sample precision
 
-Chassis should not hard-code `f32` into the long-term processing model. CLAP requires 32-bit audio support and makes 64-bit optional; VST3 can process either 32- or 64-bit samples.
+Do not hard-code `f32` into the long-term semantic model. Initial code may prove the path with `f32`, but CLAP/VST3 allow useful double-precision paths.
 
-Initial implementation may prove the API with `f32`, but the design must leave an ergonomic path for products that also support `f64`.
+Before freezing `Processor`, compare:
 
-Likely directions to compare before freezing the trait:
+- an `f32` base processor plus optional double-precision capability;
+- generic DSP over a sealed Chassis sample trait with adapter dispatch;
+- generated paired entry points backed by shared generic product DSP.
 
-- required `f32` processor plus an optional double-precision capability/trait;
-- a generic process method over a sealed Chassis sample trait;
-- paired framework-generated dispatch methods backed by shared generic product DSP.
+Do not require authors to duplicate the whole DSP implementation simply to support `f64`. Also do not genericize every unrelated control type over sample precision.
 
-Do not force every plugin author to duplicate an entire DSP implementation merely to advertise optional 64-bit host buffers.
+## Layout and data movement
 
-## Buffer layout
+Planar/non-interleaved channel access is the initial product convention because it matches plugin processing well.
 
-The product-facing convention should prefer planar/non-interleaved channel slices because that matches the normal plugin processing model and makes per-channel DSP straightforward.
+If a backend supplies interleaved or otherwise incompatible storage, any conversion scratch is allocated during activation and bounded by the accepted channel/frame configuration. The adapter should document and benchmark conversion cost before Chassis claims it is negligible.
 
-Adapters must review any backend that supplies interleaved audio. Do not silently introduce an unbounded or per-block allocation to normalize it. If copying/deinterleaving is required for a particular backend, preallocate scratch storage during activation and make the cost explicit in adapter documentation/validation.
+Avoid cache-line padding, SoA/AoS transformations, SIMD-specific alignment, or bespoke buffer packing until the real access pattern shows a benefit. Data layout on the realtime path is a measured design decision.
 
 ## Variable and edge block sizes
 
-Processing code must not assume a fixed block size. Activation supplies an allowed/minimum/maximum range; each process call supplies the actual frame count.
+Processing cannot assume a fixed frame count. Activation establishes supported bounds/resources; each callback supplies the actual count.
 
-The conformance suite should test:
+Conformance tests should cover:
 
-- blocks smaller than typical SIMD/vector widths;
+- blocks smaller than common vector widths;
 - changing block sizes across calls;
-- maximum configured block size;
-- zero-frame calls if a target format/host permits them;
+- the configured maximum;
+- zero-frame calls where a target permits them;
 - offline rendering with unusual block sizes;
-- inactive/null buffers where target formats permit them.
+- inactive/null/absent buffers only where a target permits them.
 
-## Silence and status
+Every per-block loop and scratch view must be bounded by validated activation/callback dimensions. Reject host values that exceed the activated capacity rather than reallocating on the audio thread.
 
-Host formats can expose silence flags or process-return status that permit sleeping/tail optimization. Chassis should eventually provide a semantic process status rather than leaking backend constants.
+## Silence and activity hints
 
-This belongs after the base buffer/event API works correctly; it should not complicate the first processing spike.
+Backend silence flags/scheduling hints are adapter capabilities, not prerequisites for the first buffer API. Add a portable semantic only after cross-format behavior is proven useful. A processor can always remain conservatively active.
 
 ## Realtime rule
 
-No Chassis convenience method may allocate during processing unless the method is explicitly documented as non-realtime and structurally unavailable from the realtime context. Any scratch needed for conversion, smoothing, analysis transport, or format adaptation must be bounded/preallocated during activation.
+No Chassis convenience method available from `Processor::process` may allocate, block, perform I/O, or perform work whose upper bound is unrelated to the validated block/configuration.
+
+Scratch required for conversion or convenience copies is provisioned before processing. Controlled bounded copies are allowed; hidden dynamic memory growth is not.
