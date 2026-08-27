@@ -2,12 +2,21 @@
 
 use core::fmt;
 
-/// Whether a processing run is constrained by realtime delivery.
+/// Scheduling/quality context for processing.
+///
+/// This is semantic rather than format-specific. A backend only emits modes it
+/// can represent; for example CLAP may map only realtime/offline while VST3
+/// prefetch maps to [`Self::BufferedRealtime`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ProcessMode {
-    /// The caller has a realtime deadline.
+    /// The caller has a realtime delivery deadline.
     Realtime,
-    /// The caller permits non-realtime/offline rendering behavior.
+    /// Processing may be scheduled ahead/irregularly but should retain
+    /// realtime-quality, nonblocking behavior rather than using offline-only
+    /// algorithms or waiting for wall-clock realtime.
+    BufferedRealtime,
+    /// Non-realtime rendering where the product may deliberately select an
+    /// offline-quality path if it supports one.
     Offline,
 }
 
@@ -56,7 +65,10 @@ impl ProcessConfig {
         self.sample_rate
     }
 
-    /// Return the minimum frame count the runtime advertises for this activation.
+    /// Return the minimum frame count advertised for this activation.
+    ///
+    /// Zero is valid when a backend cannot promise a positive minimum or may
+    /// issue a legal zero-frame callback.
     #[must_use]
     pub const fn min_frames(self) -> u32 {
         self.min_frames
@@ -68,7 +80,7 @@ impl ProcessConfig {
         self.max_frames
     }
 
-    /// Return the realtime/offline mode.
+    /// Return the scheduling/quality mode.
     #[must_use]
     pub const fn mode(self) -> ProcessMode {
         self.mode
@@ -114,13 +126,13 @@ mod tests {
     }
 
     #[test]
-    fn accepts_variable_block_sizes() {
-        let config = ProcessConfig::new(48_000.0, 1, 2048, ProcessMode::Offline)
+    fn accepts_zero_minimum_and_variable_blocks() {
+        let config = ProcessConfig::new(48_000.0, 0, 2048, ProcessMode::BufferedRealtime)
             .expect("test configuration is valid");
 
         assert_eq!(config.sample_rate(), 48_000.0);
-        assert_eq!(config.min_frames(), 1);
+        assert_eq!(config.min_frames(), 0);
         assert_eq!(config.max_frames(), 2048);
-        assert_eq!(config.mode(), ProcessMode::Offline);
+        assert_eq!(config.mode(), ProcessMode::BufferedRealtime);
     }
 }
