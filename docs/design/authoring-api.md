@@ -35,10 +35,13 @@ Process<S>
 
 Activated<P>
   immutable activation config + exclusive Processor
+  canonical base ParameterStore
   reset / process / consuming deactivate
 ```
 
-This is intentionally smaller than the eventual ergonomic API. It proves ownership and buffer semantics before parameters/state, proc macros, GUI bindings, or adapters make the surface harder to change.
+This is intentionally smaller than the eventual ergonomic API. It proves ownership,
+buffer, typed-parameter, and bounded-state semantics before automation, proc
+macros, GUI bindings, or adapters make the surface harder to change.
 
 Do not add proc macros until the conformance component and first CLAP adapter show which declarations are genuinely repetitive.
 
@@ -139,9 +142,12 @@ No process convenience allocates.
 
 Higher-level port/bus lookup helpers should be added only after representative DSP call sites show which views are actually useful. Avoid per-callback maps or other convenience structures that create hidden work.
 
-## Parameters are the next semantic layer, not fake fields on Processor
+## Parameters are not fake fields on Processor
 
-The current runtime slice intentionally has no parameter API yet.
+The current explicit runtime slice accepts an immutable schema through
+`Component::parameter_descriptors()`. Activation validates and owns a
+`ParameterStore` containing the current base/control values. The store supports
+validated edits, defaults, and parameter entries in the bounded state document.
 
 When added, compatibility-relevant declarations remain explicit:
 
@@ -153,9 +159,12 @@ When added, compatibility-relevant declarations remain explicit:
 - automation/modulation capabilities;
 - optional product smoothing policy.
 
-Rust field names and display labels are not persistent identity.
-
-The processor's parameter view will be derived from framework-owned base state plus current process events; it will not become a second persistent store.
+Rust field names and display labels are not persistent identity. The current
+store is deliberately a control/non-realtime authority; process-time event
+trajectories, host gestures, and atomic publication to `Processor` remain
+follow-up contracts. The processor's eventual parameter view will be derived
+from framework-owned base state plus current process events, not a second
+persistent store.
 
 Nested/repeated groups should compose stable key prefixes. Repeated instances should use stable named identities when reordering may occur; raw array index is acceptable only when reordering is explicitly a compatibility break.
 

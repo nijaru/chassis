@@ -171,11 +171,14 @@ Format-independent unit/integration tests cover semantic authority and negative 
 - process activation bounds;
 - safe buffer construction/length rejection;
 - exact-alias versus disjoint copy semantics;
-- lifecycle/process callback containment.
+- lifecycle/process callback containment;
+- typed parameter schema/default/range/choice validation;
+- owned base-value edits and transactional parameter state application;
+- bounded deterministic state encoding/decoding and malformed-input rejection.
 
 As the corresponding features land, extend coverage to:
 
-- parameter domain/mapping properties;
+- parameter mapping properties;
 - process trajectory/event ordering;
 - state encoding/migrations;
 - state load failure leaving live authority unchanged;

@@ -12,7 +12,7 @@ The first manual API now exists:
 - framework activation structurally validates I/O before calling product activation;
 - `Processor` exclusively owns active DSP/runtime history and reset;
 - sample processing is a separate `Process<S>` capability;
-- `Activated<P>` owns the processor + immutable activation config and consumes itself on deactivation.
+- `Activated<P>` owns the processor, immutable activation config, and validated base `ParameterStore`; it consumes itself on deactivation.
 
 The first CLAP adapter now exercises this ownership split directly. Clack requires its audio processor to be `Send`, so `chassis-clap` places `Send` on the concrete processor at the deployment boundary rather than adding it to `chassis-core::Processor` globally.
 
@@ -22,7 +22,7 @@ Before promotion, still prove:
 
 - cleanup of failed/partial activation through real adapter/host sequences;
 - semantic whole-I/O policy beyond structural port presence;
-- how the eventual framework `InstanceRuntime` adds canonical parameter/state authority without turning into a giant shared object;
+- how the eventual framework `InstanceRuntime` adds automation/event publication around the canonical parameter/state authority without turning into a giant shared object;
 - whether any additional lifecycle capability is genuinely required by CLAP/VST3/AU;
 - f32/f64 capability advertisement/dispatch using one processor architecture.
 
@@ -74,7 +74,11 @@ Do not encode CLAP process status or VST3 classes directly into this type.
 
 ### Canonical parameter-store mechanics
 
-The semantic authority is decided; the implementation is not.
+The initial typed schema and owned base-value store are implemented in
+`chassis-core`. They validate immutable domains/defaults, reject duplicate
+stable keys, expose control edits, and apply parameter state transactionally.
+The store is intentionally not presented as an audio-thread event/trajectory
+transport.
 
 Need to prove:
 
@@ -89,17 +93,19 @@ Do not default to “one atomic per parameter” until the state-save/load contr
 
 ### State wire format v1
 
-The current Chassis-owned envelope is a prototype.
+The current Chassis-owned envelope is implemented as a prototype in
+`chassis-core::state`; parameter state uses the `parameter/` namespace and
+checks product identity/schema at the store boundary.
 
 Freeze only after:
 
-- bounded parser/encoder implementation;
-- wrong-product rejection;
+- wrong-product rejection through every adapter boundary;
 - deterministic golden fixtures;
 - fuzz/property/corruption/exhaustion tests;
 - migration fixture;
 - partial stream I/O tests;
-- cross-format state round trips.
+- cross-format state round trips;
+- an active save/load consistency contract.
 
 Changing the format before v1 is expected.
 

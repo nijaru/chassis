@@ -1,6 +1,6 @@
 # Chassis State Format
 
-Status: preferred prototype direction; **not a stable wire-format promise**. Freeze only after implementation, corruption/property/fuzz tests, migration fixtures, and cross-format round trips.
+Status: preferred prototype implemented in `chassis-core`; **not a stable wire-format promise**. Freeze only after corruption/property/fuzz tests, migration fixtures, and cross-format round trips.
 
 ## Goal
 
@@ -10,7 +10,7 @@ Optimize for long-lived compatibility and safe migration, not arbitrary Rust obj
 
 ## Semantic document before byte codec
 
-The durable contract is a Chassis semantic document keyed by stable product identities, regardless of the eventual byte encoder.
+The durable contract is a Chassis semantic document keyed by stable product identities, regardless of the eventual byte encoder. The current core implementation provides `StateDocument`, a bounded v1 prototype encoder/decoder, and `ParameterStore` integration for the `parameter/` namespace.
 
 Conceptually:
 

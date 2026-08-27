@@ -2,8 +2,9 @@
 //!
 //! This pre-alpha slice intentionally proves only the default stereo effect path:
 //! one stereo main input, one stereo main output, `f32`, realtime processing, and
-//! no parameters/state/events yet. The limitation is explicit so CLAP semantics
-//! do not leak into `chassis-core` merely to make the first export compile.
+//! no CLAP parameter/state/event projection yet. The limitation is explicit so
+//! CLAP semantics do not leak into `chassis-core` merely to make the first
+//! export compile.
 
 use core::{marker::PhantomData, num::NonZeroU32};
 
