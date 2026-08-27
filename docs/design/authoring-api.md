@@ -1,34 +1,29 @@
 # Authoring API and Convention Model
 
-Status: design target; syntax, trait names, and macros are illustrative until the semantic core and first adapter prove them.
+Status: design target; syntax, trait names, and macros are illustrative until the explicit semantic core and first adapter prove them.
 
 ## Goal
 
-A normal Chassis plugin should mostly contain product code:
+A normal Chassis product should mostly contain:
 
 - parameter declarations;
-- DSP state and processing;
-- optional custom state;
+- DSP state/processing;
+- optional custom persistent state;
 - optional editor code.
 
-It should not repeatedly implement format metadata, host parameter plumbing, state serialization glue, bus enumeration, automation queues, editor-host attachment, packaging scripts, or validator invocation.
+It should not repeatedly implement format metadata, host parameter plumbing, state stream glue, bus enumeration, automation queues, native editor attachment, or per-format packaging scripts.
 
-Chassis should feel convention-first without hiding realtime timing, allocation, or compatibility semantics.
+Convention removes mechanical work without hiding realtime timing, copies, allocation, state authority, or compatibility identity.
 
-## Two-layer API
+## Explicit layer first
 
-Provide both:
+Chassis should have one small explicit Rust API that owns the semantics. Optional derives/builders generate ordinary calls/impls against that API; they do not create a second runtime model.
 
-1. a small explicit Rust trait/type API that defines the real semantics; and
-2. optional derive/attribute macros and constructors that generate repetitive conventional implementations.
+Do not add proc macros until the conformance component and first CLAP adapter show which declarations are genuinely repetitive.
 
-The explicit layer remains usable when a product cannot fit the macros. Macros must lower to ordinary documented Chassis APIs rather than creating a second hidden runtime model.
+## Desired ordinary effect
 
-Do not introduce proc macros until the manual semantic API has been exercised by the conformance component and first CLAP adapter.
-
-## Ordinary effect target
-
-The eventual conventional authoring experience should be approximately this amount of code:
+Illustrative end-state:
 
 ```rust,ignore
 #[derive(chassis::Parameters)]
@@ -36,7 +31,7 @@ struct Params {
     #[param(id = "input.gain", range = -24.0..=24.0, default = 0.0, unit = "dB")]
     input_gain: f32,
 
-    #[param(id = "mix", range = 0.0..=1.0, default = 1.0, unit = "%")]
+    #[param(id = "mix", range = 0.0..=1.0, default = 1.0)]
     mix: f32,
 }
 
@@ -46,107 +41,66 @@ impl chassis::Component for MyEffect {
     type Parameters = Params;
     type Processor = MyProcessor;
 
-    // No explicit ports means the standard effect convention:
-    // stereo main in/out + optional stereo sidechain.
-
     fn activate(
         &self,
         config: &chassis::ActivationConfig<'_>,
-        params: &chassis::ParameterState<Params>,
     ) -> Result<MyProcessor, chassis::ActivateError> {
-        MyProcessor::new(config, params)
+        MyProcessor::new(config)
     }
 }
 
 struct MyProcessor {
-    // Product DSP state only.
+    // Product DSP/runtime history only.
 }
 
 impl chassis::Processor<Params> for MyProcessor {
-    fn process(
-        &mut self,
-        block: &mut chassis::ProcessBlock<'_, Params>,
-    ) -> chassis::ProcessStatus {
-        // Product DSP.
-        chassis::ProcessStatus::Continue
+    fn process(&mut self, block: &mut chassis::ProcessBlock<'_, Params>) {
+        // Product DSP using block-local parameter trajectories and safe buffers.
     }
 }
 ```
 
-The exact signatures will change. The important ergonomic target is that a simple effect does not need custom `Shared`, `MainThread`, port descriptors, state codecs, host-format traits, or export boilerplate unless it actually needs non-default behavior.
-
-## Metadata convention
-
-Common identity/vendor/build metadata should normally come from workspace/package metadata consumed by `cargo-chassis`, not from associated constants repeated in product code.
-
-The Rust `Component` implementation therefore focuses on runtime/product semantics. A programmatic metadata API remains available for generated or unusual products.
+Exact signatures are intentionally not frozen. The ergonomic invariant is that an ordinary effect does not need custom host-format traits, state codecs, port tables, `Shared`, or `MainThread` merely to process audio correctly.
 
 ## Default effect convention
 
-If an audio effect does not declare I/O, Chassis supplies:
+With no explicit audio-I/O declaration, an audio effect gets stable conventional ports:
 
 ```text
-main input      stereo required
-main output     stereo required
-sidechain       stereo optional/inactive by default
+audio.main.in   stereo required
+audio.main.out  stereo required
+audio.sidechain stereo optional/inactive
 ```
 
-A product that does not use sidechain pays no process-time cost merely because the conventional descriptor exists.
+Inactive optional ports add no process-time buffer work.
 
-Common variations should be declarative:
+Common deviations use semantic policies/builders such as mono, mono-to-stereo, matching arbitrary layouts, or explicit bus sets. Authors never translate those policies separately into CLAP/VST3/AU metadata.
 
-```rust,ignore
-fn audio_io() -> impl AudioIoPolicy {
-    chassis::io::mono_to_stereo()
-}
-```
+## Parameter declarations
 
-or generated metadata equivalent. Authors should not manually translate port arrays for each target format.
+Compatibility-relevant choices remain explicit:
 
-## Parameters
-
-Parameter declarations should make compatibility-relevant choices explicit and infer routine host plumbing.
-
-A declaration needs, directly or by reusable type/default:
-
-- stable canonical ID;
-- type;
-- plain-unit range/domain;
-- default;
-- optional distribution/mapping;
-- formatting/parsing/unit behavior;
-- optional smoothing convention;
-- capability metadata such as automation/modulation/read-only where relevant.
+- stable canonical string key;
+- value type/domain;
+- plain-unit range/default;
+- mapping/distribution where needed;
+- display/parse/unit behavior;
+- automation/modulation capabilities;
+- optional product smoothing policy.
 
 Rust field names and display labels are not persistent identity.
 
-Nested/repeated parameter groups should compose without manually concatenating IDs:
-
-```rust,ignore
-#[derive(chassis::Parameters)]
-struct EqParams {
-    #[params(prefix = "band.low")]
-    low: BandParams,
-
-    #[params(prefix = "band.high")]
-    high: BandParams,
-}
-```
-
-Arrays/repeated groups need deterministic stable instance identifiers. Array index is acceptable only when reordering is explicitly a compatibility break; named keys are preferred where product structure may evolve.
+Nested/repeated groups compose stable key prefixes. Repeated instances should use stable named identities when reordering may occur; raw array index is acceptable only when reordering is explicitly a compatibility break.
 
 ## DSP parameter access
 
-The convenient DSP API must preserve the distinction between control/base state and sample-accurate process values.
+The normal processing API must make sample-accurate correctness easy without forcing per-sample dynamic lookup when nothing changes.
 
-Avoid an API where every processor merely reads a cross-thread atomic `params.threshold.value()` once per block and accidentally ignores automation points inside the block.
-
-A process block should make common patterns easy, for example conceptually:
+Conceptually:
 
 ```rust,ignore
 let threshold = block.params().threshold();
 
-// Constant if no events affect it in this block.
 if let Some(value) = threshold.constant() {
     process_block(value);
 } else {
@@ -156,40 +110,39 @@ if let Some(value) = threshold.constant() {
 }
 ```
 
-or an equivalent generated parameter cursor/trajectory API.
+The actual API may differ, but it should expose block-constant fast paths, timed sets/ramps, and raw ordered events where needed.
 
-The framework should optimize the no-automation/common case so sample-accurate correctness does not require per-sample dynamic lookup when the value is constant.
+The processor's parameter view is derived from the framework-owned base-state authority plus current process events; it is not a second persistent store.
 
-Products can request a conventional smoother/trajectory. Products with custom detector/control behavior can consume raw timed parameter events.
+## Buffer ergonomics
 
-## Processing ergonomics
+Chassis exposes safe relationships proved by the adapter:
 
-Chassis should offer multiple zero/low-overhead views rather than prescribe one DSP loop:
+- exact in-place channel view;
+- disjoint input/output channel views;
+- input-only/output-only buses;
+- port/channel iteration for unusual routing.
 
-- port/channel block access for vectorized/block DSP;
-- channel-pair relationship preserving in-place versus separate host buffers;
-- an opt-in `make_in_place` convenience that copies only when required;
-- event/parameter span iteration for sample-accurate changes;
-- raw ordered event iteration for products that need exact mixed event ordering.
+An explicit convenience can turn a separate input/output pair into a mutable output by performing one bounded copy. That is acceptable and visible behavior, not a hidden cost. Products that benefit from out-of-place DSP can avoid it.
 
-No convenience adapter may allocate on the realtime path.
+No process convenience allocates.
 
-## Main-thread and shared state defaults
+## Main-thread / shared defaults
 
-Most effects should need neither custom type:
+Most effects should need no product-specific non-RT runtime object:
 
 ```text
-Shared = ()
 MainThread = ()
+Shared = ()
 ```
 
-A component opts into them only when needed.
+Framework-owned canonical parameter/state/lifecycle machinery still exists internally; `()` only means the **product** has no additional state in those domains.
 
-The author-facing API may express this through associated-type defaults if Rust supports the desired ergonomics by implementation time, framework wrapper types, or separate extension traits. Do not make users write meaningless boilerplate just because the internal runtime has explicit domains.
+When custom shared state exists, it is a synchronized projection/snapshot with one named owner—not general shared mutability.
 
 ## Custom persistent state
 
-Most persistent state should be parameters. Additional product state should be declarative and versioned without making arbitrary processor fields persistent.
+Most user-visible state should be parameters. Extra persistent fields use stable keys and a deliberately supported Chassis value/codec contract.
 
 Illustrative direction:
 
@@ -201,74 +154,51 @@ struct ProductState {
 }
 ```
 
-or fields nested into the parameter/state schema.
-
-Custom state values need a deliberately supported stable encoding. `Serialize` alone is not sufficient evidence that an arbitrary Rust type is safe as a long-term plugin state contract.
+`Serialize` on an arbitrary Rust struct is not by itself a long-term plugin-state contract.
 
 ## GUI convention
 
-The component can have no editor, use a generic debugging parameter editor, or register a product editor factory.
+A component can have no editor, a generic debug editor, or a product editor factory.
 
-A GUI adapter such as `chassis-iced` should bind parameters through typed handles generated from the same parameter schema:
+A GUI adapter should bind generated typed parameter handles that automatically provide current display/base value observation, begin/change/end gestures, host notification, formatting/parsing, and accessibility metadata where supported.
 
-```rust,ignore
-knob(params.input_gain())
+Chassis owns editor lifecycle/host attachment; the product/toolkit owns appearance and interaction design.
+
+## Standalone / instrument convention
+
+The same component lifecycle/state/processor model applies outside a plugin host.
+
+An instrument changes capabilities/I/O, not the framework architecture:
+
+```text
+note/event input
+no audio input
+stereo or multi-bus audio output
 ```
 
-The binding should automatically provide:
-
-- current base/display value observation;
-- begin/change/end gesture calls;
-- host notification;
-- value formatting/parsing;
-- accessibility metadata where the GUI toolkit supports it.
-
-The widget appearance remains product/toolkit code. Chassis should not require a visual component system merely to get correct parameter gestures.
-
-## Standalone convention
-
-A Chassis component that does not depend on plugin-host-only capabilities should be deployable by adding a standalone target/configuration rather than implementing a second product runtime.
-
-The standalone host supplies the same activation/process/state/editor boundaries. Device/MIDI selection and app/window chrome belong to `chassis-standalone`, not to the product processor.
-
-## Instruments
-
-The same authoring model must work when the conventional I/O changes:
-
-```rust,ignore
-impl chassis::Component for MySynth {
-    type Parameters = SynthParams;
-    type Processor = SynthProcessor;
-
-    fn capabilities() -> ComponentCapabilities {
-        chassis::instrument()
-            .stereo_output()
-            .note_input()
-    }
-}
-```
-
-Again, syntax is illustrative. The significant rule is that the core lifecycle/parameter/state/process model does not change for instruments; only declared capabilities/I/O do.
+Standalone supplies device/MIDI/window/runtime ownership around the same product implementation.
 
 ## Escape hatches
 
-Convention-over-configuration requires explicit escape hatches at each major layer:
+A convention-first framework needs deliberate lower-level paths for:
 
-- custom I/O negotiation policy;
-- manually implemented parameter schema;
-- custom host-ID overrides for legacy compatibility;
-- raw timed parameter/event access;
+- custom I/O policy;
+- manual parameter schema;
+- explicit legacy/backend ID overrides;
+- raw timed parameter/events;
 - custom smoothing;
-- separate input/output buffer processing;
-- custom state codec fields/migrations;
-- custom GUI toolkit/window implementation;
-- format-specific extensions kept behind adapter extension APIs.
+- out-of-place/multi-bus buffer processing;
+- custom state field codec/migrations;
+- custom editor/window integration;
+- format-specific optional capabilities through adapter extension APIs.
 
-An escape hatch should not require forking Chassis. It also should not weaken invariants such as realtime safety or stable identity by default.
+Escape hatches do not relax memory safety, realtime, or stable-identity invariants.
 
-## What `cargo-chassis` should eventually do
+## `cargo-chassis`
 
-The command-line tooling is part of the convention story:
+Build tooling should eventually own workspace/product discovery, export builds, local install, identity manifests, validators, packaging, signing, and notarization.
+
+Likely UX:
 
 ```text
 cargo chassis new
@@ -279,32 +209,10 @@ cargo chassis package
 cargo chassis identity
 ```
 
-Likely responsibilities:
+Build/release behavior belongs in tooling, not runtime proc macros.
 
-- discover Chassis product metadata from the Cargo workspace;
-- build requested export formats;
-- generate/copy bundles into conventional locations;
-- generate and check stable identity manifests;
-- run relevant validators;
-- package/sign/notarize through explicit platform configuration;
-- create reproducible release artifacts.
+When implementing this CLI, apply the repository's Rust CLI guidance in addition to `rust-expert`; do not invent argument/config conventions ad hoc.
 
-Do not put build/package behavior into proc macros or runtime crates.
+## Promotion rule
 
-## Design references
-
-NIH-plug and nice-plug demonstrate useful authoring ideas such as derived typed parameters, stable string parameter IDs, nested parameter groups, built-in smoothers, standalone export, and optional background tasks. Clack demonstrates a lower-level structural separation between shared/main/audio domains.
-
-Chassis should adopt the underlying lessons where they fit while retaining its own semantics:
-
-- no unconditional input-to-output copy in the base buffer model;
-- no requirement that all mutable plugin/product state live in one object owned by the audio thread;
-- state serialization separated from live DSP runtime state;
-- one format-independent component identity and state model;
-- broader deployment path to embedded/standalone/application components.
-
-## First proof
-
-Before adding macros, write the conformance component using the explicit API. Measure the amount and repetition of code.
-
-Only then introduce convenience derives/builders for boilerplate that is demonstrably mechanical. A macro is successful when it removes repeated declarations without concealing behavior an author needs to reason about during realtime processing or compatibility debugging.
+Before introducing convenience macros, write the conformance component using the explicit API and count the real repetition. A macro earns its place only when it removes mechanical declarations without concealing timing, allocation, ownership, or compatibility behavior an author needs to debug.
