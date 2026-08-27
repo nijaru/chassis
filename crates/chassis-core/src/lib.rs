@@ -124,7 +124,94 @@ impl<'a> AudioIoConfiguration<'a> {
     pub const fn ports(self) -> &'a [ConfiguredAudioPort] {
         self.ports
     }
+
+    /// Validate this active configuration against the component's stable port
+    /// descriptors.
+    ///
+    /// Validation is allocation-free. The expected number of plugin ports is
+    /// small, so the current implementation intentionally uses simple scans
+    /// rather than introducing a map/set dependency into the core contract.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AudioIoConfigurationError`] when descriptor IDs are not
+    /// unique, an active port is unknown or duplicated, or a required port is
+    /// absent from the active configuration.
+    pub fn validate(
+        self,
+        descriptors: &[AudioPortDescriptor<'_>],
+    ) -> Result<(), AudioIoConfigurationError> {
+        for (index, descriptor) in descriptors.iter().enumerate() {
+            if descriptors[..index]
+                .iter()
+                .any(|previous| previous.id == descriptor.id)
+            {
+                return Err(AudioIoConfigurationError::DuplicateDescriptorPort(
+                    descriptor.id,
+                ));
+            }
+        }
+
+        for (index, configured) in self.ports.iter().enumerate() {
+            if !descriptors
+                .iter()
+                .any(|descriptor| descriptor.id == configured.id)
+            {
+                return Err(AudioIoConfigurationError::UnknownConfiguredPort(
+                    configured.id,
+                ));
+            }
+
+            if self.ports[..index]
+                .iter()
+                .any(|previous| previous.id == configured.id)
+            {
+                return Err(AudioIoConfigurationError::DuplicateConfiguredPort(
+                    configured.id,
+                ));
+            }
+        }
+
+        for descriptor in descriptors.iter().filter(|descriptor| !descriptor.optional) {
+            if !self.ports.iter().any(|port| port.id == descriptor.id) {
+                return Err(AudioIoConfigurationError::MissingRequiredPort(
+                    descriptor.id,
+                ));
+            }
+        }
+
+        Ok(())
+    }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AudioIoConfigurationError {
+    DuplicateDescriptorPort(PortId),
+    UnknownConfiguredPort(PortId),
+    DuplicateConfiguredPort(PortId),
+    MissingRequiredPort(PortId),
+}
+
+impl fmt::Display for AudioIoConfigurationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DuplicateDescriptorPort(id) => {
+                write!(formatter, "audio port descriptor ID {} is duplicated", id.get())
+            }
+            Self::UnknownConfiguredPort(id) => {
+                write!(formatter, "configured audio port ID {} is unknown", id.get())
+            }
+            Self::DuplicateConfiguredPort(id) => {
+                write!(formatter, "configured audio port ID {} is duplicated", id.get())
+            }
+            Self::MissingRequiredPort(id) => {
+                write!(formatter, "required audio port ID {} is not active", id.get())
+            }
+        }
+    }
+}
+
+impl std::error::Error for AudioIoConfigurationError {}
 
 /// Conventional ports for an effect that does not specify otherwise.
 pub const DEFAULT_EFFECT_PORTS: [AudioPortDescriptor<'static>; 3] = [
@@ -185,6 +272,14 @@ pub struct ProcessConfig {
 }
 
 impl ProcessConfig {
+    /// Construct a processing configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProcessConfigError::InvalidSampleRate`] if `sample_rate` is
+    /// non-finite or not positive. Returns
+    /// [`ProcessConfigError::InvalidFrameRange`] when `max_frames` is zero or
+    /// `min_frames` is greater than `max_frames`.
     pub fn new(
         sample_rate: f64,
         min_frames: u32,
@@ -261,6 +356,10 @@ mod tests {
         assert_eq!(configured.len(), 2);
         assert_eq!(configured[0].layout, ChannelLayout::Stereo);
         assert_eq!(configured[1].layout, ChannelLayout::Stereo);
+        assert_eq!(
+            DEFAULT_EFFECT_CONFIGURATION.validate(&DEFAULT_EFFECT_PORTS),
+            Ok(())
+        );
     }
 
     #[test]
@@ -268,6 +367,58 @@ mod tests {
         let channels = ChannelCount::new(12).expect("non-zero channel count");
         let layout = ChannelLayout::Discrete(channels);
         assert_eq!(layout.channel_count(), 12);
+    }
+
+    #[test]
+    fn configuration_rejects_unknown_ports() {
+        let ports = [ConfiguredAudioPort {
+            id: PortId::new(99),
+            layout: ChannelLayout::Stereo,
+        }];
+        let configuration = AudioIoConfiguration::new(&ports);
+
+        assert_eq!(
+            configuration.validate(&DEFAULT_EFFECT_PORTS),
+            Err(AudioIoConfigurationError::UnknownConfiguredPort(
+                PortId::new(99)
+            ))
+        );
+    }
+
+    #[test]
+    fn configuration_requires_non_optional_ports() {
+        let ports = [ConfiguredAudioPort {
+            id: PortId::new(0),
+            layout: ChannelLayout::Stereo,
+        }];
+        let configuration = AudioIoConfiguration::new(&ports);
+
+        assert_eq!(
+            configuration.validate(&DEFAULT_EFFECT_PORTS),
+            Err(AudioIoConfigurationError::MissingRequiredPort(PortId::new(1)))
+        );
+    }
+
+    #[test]
+    fn configuration_rejects_duplicate_active_ports() {
+        let ports = [
+            ConfiguredAudioPort {
+                id: PortId::new(0),
+                layout: ChannelLayout::Stereo,
+            },
+            ConfiguredAudioPort {
+                id: PortId::new(0),
+                layout: ChannelLayout::Stereo,
+            },
+        ];
+        let configuration = AudioIoConfiguration::new(&ports);
+
+        assert_eq!(
+            configuration.validate(&DEFAULT_EFFECT_PORTS),
+            Err(AudioIoConfigurationError::DuplicateConfiguredPort(
+                PortId::new(0)
+            ))
+        );
     }
 
     #[test]
