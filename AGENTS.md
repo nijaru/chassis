@@ -92,7 +92,7 @@ These strict rules apply to the audio callback and other explicitly deterministi
 - Do not import third-party strong-copyleft code into the commercially relicensable framework without an explicit decision.
 - Keep SDK-specific constraints, especially AAX/Avid/PACE, isolated from format-independent crates.
 - Do not accept substantive external code contributions until contributor/relicensing terms are established.
-- The first adopted external runtime dependencies are exact Clack 0.2.0 crates; upgrades are deliberate compatibility/audit events, not automatic version drift.
+- The first adopted external runtime dependencies are exact published Clack 0.1.1 crates; upgrades are deliberate compatibility/audit events, not automatic version drift. Do not switch to unreleased 0.2 git sources merely because upstream `main` has bumped its development version.
 
 ## Validation commands
 
