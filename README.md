@@ -27,11 +27,11 @@ Target desktop platforms are macOS, Windows, and Linux where each export format 
 
 ## Backend strategy
 
-The first adapter now uses Clack 0.2.0 at the low-level CLAP boundary. [clap-wrapper](https://github.com/free-audio/clap-wrapper) remains the preferred initial route to VST3/AUv2/AUv3 once the native CLAP semantic path is qualified.
+The first adapter uses the published Clack 0.1.1 release at the low-level CLAP boundary. Clack's repository is already developing 0.2.0, but that version is not currently published on crates.io, so Chassis deliberately stays on the reproducible registry release rather than introducing a git dependency solely for unreleased API changes. [clap-wrapper](https://github.com/free-audio/clap-wrapper) remains the preferred initial route to VST3/AUv2/AUv3 once the native CLAP semantic path is qualified.
 
 Clack/CLAP types remain outside `chassis-core`. The initial `chassis-clap` code uses Clack's safe audio API and owns no raw CLAP pointer dereference itself. Backend qualification still requires local build/test, CLAP validation, lifecycle stress, and real-host testing.
 
-See [the Clack 0.2 adapter audit](docs/research/clack-0.2-adapter-audit.md).
+See [the Clack 0.1.1 adapter audit](docs/research/clack-0.1.1-adapter-audit.md).
 
 ## Default effect convention
 
@@ -92,7 +92,7 @@ examples/
 
 The first CLAP slice maps factory/main-thread construction, activation, f32 stereo processing, reset, and deactivation onto the existing Chassis runtime. It deliberately stops before parameters/state, transport/events, render mode, f64, sidechains/multibus, GUI, or packaging.
 
-`chassis-core` remains std-only. `chassis-clap` is the first crate with third-party dependencies and pins Clack 0.2.0 exactly while the adapter contract is being qualified.
+`chassis-core` remains std-only. `chassis-clap` is the first crate with third-party dependencies and pins published Clack 0.1.1 exactly while the adapter contract is being qualified.
 
 ## Validation
 
