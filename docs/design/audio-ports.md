@@ -4,178 +4,135 @@ Status: design direction; public API not frozen.
 
 ## Goal
 
-Make stereo effects nearly configuration-free while preserving a coherent path to instruments, auxiliary buses, surround, ambisonics, immersive channel layouts, and hosts that can change layouts while a component is inactive.
+Make stereo effects nearly configuration-free while preserving a coherent path to instruments, auxiliary buses, surround, ambisonics, immersive channel layouts, and hosts that reconfigure layouts while inactive.
 
-The core model must express Chassis semantics. CLAP, VST3, Audio Unit, and platform-specific layout identifiers belong in adapters.
+The core models Chassis semantics. CLAP/VST3/AU identifiers and call shapes belong in adapters.
 
-## Evidence from target formats
+## Stable identity versus runtime indexing
 
-The target APIs do not share one channel-layout representation:
+A port has a stable human-readable product key independent of its active layout and backend representation, for example:
 
-- CLAP describes ports separately from optional surround and ambisonic semantics. Its configurable-audio-ports extension lets the host push a set of port configuration requests which are accepted or rejected atomically while the plugin is inactive.
-- VST3 represents speaker arrangements and lets the host propose input/output bus arrangements to the processor as a configuration.
-- Core Audio can identify predefined layouts by tag or describe channels explicitly. Apple defines channel-based Atmos layouts such as 5.1.2, 7.1.4, and 9.1.6. `AUAudioUnit` also exposes channel-capability patterns for cases such as equal arbitrary input/output channel counts.
-
-Therefore Chassis should model the semantic configuration and let each adapter translate or reject it rather than copying one backend's representation.
-
-## Separate identity from configuration
-
-A port has stable product identity independent of its current channel layout.
+```text
+audio.main.in
+audio.main.out
+audio.sidechain
+```
 
 Conceptually:
 
 ```text
 AudioPortDescriptor
-├── stable id
+├── stable key
 ├── display name
 ├── direction
 ├── role
-└── activation/configuration capabilities
-
-AudioPortConfiguration
-├── port id
-└── channel layout
+└── configuration capabilities
 ```
 
-Changing stereo to 5.1 must not create a new parameter/state identity for the same conceptual main output.
+Adapters/runtime setup may derive compact numeric IDs or dense indices after schema validation. Those are **derived projections**, not author-facing compatibility identity and not serialized product state.
 
-## Whole-component I/O configuration
+Changing stereo to 5.1 does not create a different conceptual main output.
 
-Layout negotiation should operate on a coherent component configuration rather than mutating independent ports one at a time.
+## Whole-component configuration is authoritative
 
-Conceptually:
+Layout negotiation operates on one coherent proposed configuration rather than independently mutating ports:
 
 ```text
 AudioIoConfiguration
-├── inputs[]
-│   └── port id + active layout
-└── outputs[]
-    └── port id + active layout
+├── active inputs[]  -> stable port key + layout
+└── active outputs[] -> stable port key + layout
 ```
 
-A proposed configuration is validated as a whole and committed atomically while processing is inactive. This allows products to enforce relationships such as:
+The product policy validates the proposal as a whole while processing is inactive, then Chassis commits it atomically for the next activation.
 
-- main input and output must use matching layouts;
-- an instrument may have no audio input;
-- a sidechain may be available only for particular layouts;
-- an instrument may expose multiple differently-sized output buses;
-- an immersive configuration may require a coherent group of ports.
+This supports invariants such as:
 
-The active processor receives an immutable/activation-time view of the accepted configuration. Layout changes require deactivation/reconfiguration rather than racing mutable metadata against the realtime callback.
+- main input/output must match;
+- an instrument has no audio input;
+- sidechain exists only for selected layouts;
+- multiple instrument output buses have different layouts;
+- immersive ports must change coherently.
+
+The active processor receives an immutable activation-time configuration. No layout metadata races against the callback.
 
 ## Configuration policy
 
-Port descriptors answer **what ports exist**. A separate I/O policy answers **which whole-component configurations are valid**.
+Port descriptors answer **what ports exist**. A separate policy answers **which whole configurations are valid**.
 
-The framework should support two common policy forms without making either a backend detail.
-
-### Enumerated configurations
-
-Many products have a small finite set:
-
-```text
-stereo effect
-mono effect
-mono -> stereo
-stereo + stereo sidechain
-5.1 effect
-```
-
-For these, the product can declare a default plus an ordered set of supported configurations. Adapters can advertise/enumerate them directly where the host API benefits from that.
-
-### Rule-based configurations
-
-Other products naturally accept a family rather than a finite list, for example:
-
-```text
-main input and output may use any supported speaker layout,
-but they must match
-```
-
-or:
-
-```text
-up to N discrete input channels -> fixed stereo output
-```
-
-For these, Chassis should permit an explicit validation policy that receives the proposed semantic configuration and accepts or rejects it as a whole.
-
-A policy should be queryable while the component is inactive and must not depend on realtime processor state.
-
-### Common built-in policies
-
-Likely reusable policies include:
+Useful policy forms:
 
 - fixed configuration;
-- one-of enumerated configurations;
+- one of a small enumerated set;
 - matching main input/output layout;
-- matching channel count with layout-family restrictions;
-- generator/instrument with no audio input and one or more output configurations.
+- matching channel count subject to layout-family constraints;
+- generator/instrument outputs with no audio input;
+- explicit product validation for a supported family.
 
-These are conveniences, not the only allowed policies.
+A rule-based policy may accept a family such as “any supported speaker layout where main input/output match” without enumerating every future surround layout.
 
-The default effect policy initially accepts its default stereo main input/output configuration plus the same configuration with the optional stereo sidechain enabled. It should not silently accept arbitrary multichannel layouts merely because the underlying data structures could represent them.
+Policy evaluation is non-realtime/inactive and cannot depend on mutable Processor state.
+
+The initial default effect policy accepts stereo main input/output, optionally with the conventional stereo sidechain. It does not automatically accept arbitrary multichannel layouts merely because the data model can represent them.
 
 ## Layout families
 
-The intended semantic families are:
+The semantic model should support these families without an ever-growing single enum of named layouts:
 
 - mono;
 - stereo;
-- discrete N-channel audio when speaker meaning is unspecified;
-- speaker/channel-based layouts with ordered semantic speaker positions;
-- ambisonic layouts with explicit ordering and normalization;
-- future extension points where a genuinely different semantic family is required.
+- discrete N-channel audio where speaker meaning is unknown;
+- channel/speaker layouts with ordered semantic speaker positions;
+- ambisonics with explicit ordering/normalization;
+- future distinct semantic families only when requirements justify them.
 
-Do not model every immersive configuration as an ever-growing top-level enum. Named conveniences such as 5.1, 7.1, 7.1.4, or 9.1.6 can construct a speaker layout without becoming the underlying representation.
+Named conveniences such as 5.1, 7.1, 7.1.4, or 9.1.6 construct speaker layouts; they are not the underlying extensibility mechanism.
 
-Speaker positions also need an extension strategy. The common CLAP surround positions are a useful baseline, but VST3 and Core Audio expose positions not present in that exact set. The public representation must tolerate adding standardized positions without breaking downstream code.
+Channel counts should use a domain type wide enough to map target APIs without an arbitrary small framework cap. Current target APIs commonly use 32-bit counts, so the initial Rust spike should prefer a non-zero `u32`-sized representation rather than `u16`. Actual allocations/work remain bounded by the accepted activation configuration and practical host/product limits.
 
-## Atmos terminology
+## Speaker positions
 
-Chassis should distinguish channel-based immersive layouts from Dolby Atmos-specific object/metadata workflows.
+The speaker-position representation must tolerate standardized positions beyond one backend's current list. Do not expose CLAP numeric constants or VST3 speaker masks as the core identity.
 
-A 7.1.4 or 9.1.6 speaker bed can be represented as a semantic speaker layout and mapped to a host format that supports it. That is not equivalent to implementing Dolby Atmos object metadata, renderer integration, ADM/BWF workflows, or proprietary host extensions.
-
-The roadmap may add those capabilities if real products require them; they should not be implied by a `ChannelLayout::Atmos` enum variant.
+Adapters map known Chassis positions exactly or reject a configuration they cannot represent. Never silently turn labeled surround into unlabeled discrete audio merely to make a host accept it.
 
 ## Ambisonics
 
-Ambisonics is not a speaker layout. Its metadata needs to preserve at least:
+Ambisonics is not speaker audio. Preserve ordering and normalization metadata (for example ACN/FuMa and SN3D/N3D where relevant) as semantic configuration.
 
-- channel count/order relationship;
-- channel ordering, such as ACN or FuMa where applicable;
-- normalization, such as SN3D, N3D, MaxN, SN2D, or N2D where applicable.
+An adapter supporting only a subset rejects or explicitly converts under a declared policy; it does not relabel unsupported ambisonics silently.
 
-Adapters may support only a subset. For example, a backend that only exposes ACN/SN3D must reject or explicitly convert unsupported configurations rather than silently relabeling them.
+## Immersive / Atmos
 
-## Effect convention
+A channel-based 7.1.4 or 9.1.6 bed can be represented as a speaker layout when the host format supports it.
 
-The conventional effect path remains:
+That is not equivalent to Dolby Atmos object metadata, renderer integration, ADM/BWF workflows, or proprietary host extensions. Those are separate capabilities to consider only if a real product requires them.
+
+## Default effect convention
 
 ```text
 main input:   stereo, required
 main output:  stereo, required
-sidechain:    stereo, optional
+sidechain:    stereo, optional/inactive
 ```
 
-This should be expressible with one convenience constructor or derive/macro-level convention once the underlying API is settled.
-
-Products can override the convention declaratively. The common path should not require manually constructing port arrays.
+One convenience constructor/derive-level convention should cover this. Authors should not manually build per-format bus tables.
 
 ## Adapter rule
 
-Format adapters must either:
+For each proposed host layout, an adapter must either:
 
-1. map a Chassis layout/configuration without changing its semantics; or
-2. report that the configuration is unsupported.
+1. map the semantic Chassis configuration without changing meaning; or
+2. report unsupported/invalid configuration through the target format's contract.
 
-Do not silently collapse labeled surround to discrete channels, reinterpret ambisonics as speaker audio, or remap speaker identities merely to satisfy a host request.
-
-If a backend asks about one bus at a time (for example an Audio Unit format change callback), the adapter must still evaluate the resulting proposed **whole Chassis configuration** before committing the change. Backend call shape does not weaken product-level cross-bus invariants.
+If a backend changes one bus at a time, the adapter still evaluates the resulting **whole** Chassis proposal before committing it. Backend API shape does not weaken cross-bus invariants.
 
 ## Initial implementation boundary
 
-The first production proof only needs mono/stereo/discrete layout mechanics plus the stereo-effect convention and a whole-configuration validation policy. Surround and ambisonic data structures should be designed before the public API freezes, but full host validation can remain on the roadmap.
+The first processing proof only needs:
 
-The current `chassis-core` channel enum is a spike, not the final layout API. It should be replaced before publishing the crate.
+- stable port keys;
+- mono/stereo/discrete layouts;
+- default stereo effect policy with optional sidechain;
+- whole-configuration validation and activation-time dense indexing.
+
+Surround and ambisonic semantic types should be designed before public API stabilization, but full host support does not block the first CLAP processing path.
