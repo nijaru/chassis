@@ -14,8 +14,8 @@ repository = "https://github.com/nijaru/chassis"
 [workspace.dependencies]
 chassis-core = { path = "crates/chassis-core" }
 chassis-clap = { path = "crates/chassis-clap" }
-clack-plugin = "=0.1.1"
-clack-extensions = { version = "=0.1.1", default-features = false }
+clack-plugin = { git = "https://github.com/prokopyl/clack", rev = "c5975f9f89f0953b00768680357985d46178078a" }
+clack-extensions = { git = "https://github.com/prokopyl/clack", rev = "c5975f9f89f0953b00768680357985d46178078a", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "deny"
