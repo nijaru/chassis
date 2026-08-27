@@ -13,10 +13,12 @@ Permissive dependencies normally satisfy both. They retain their own licenses/no
 
 The first CLAP adapter slice adds exact crates.io requirements for:
 
-- `clack-plugin = 0.2.0`;
-- `clack-extensions = 0.2.0`, with only `audio-ports` + plugin-side support enabled directly.
+- `clack-plugin = 0.1.1`;
+- `clack-extensions = 0.1.1`, with only `audio-ports` + plugin-side support enabled directly.
 
-Clack 0.2.0 is Edition 2024, declares Rust 1.85 as its MSRV, and is `MIT OR Apache-2.0`. Its direct runtime tree for this slice is intentionally small: `clack-common`, `clap-sys`, and `bitflags` in addition to the two declared Clack crates. `clack-common` is also `MIT OR Apache-2.0`; `clap-sys` is `MIT OR Apache-2.0`; `bitflags` is permissively dual-licensed. These terms are compatible with both AGPL distribution and the intended separate proprietary Chassis license.
+The crates.io index shows 0.1.1 as the latest published Clack release as of this audit. Clack's repository bumped its development workspace to 0.2.0 on 2026-08-05, but 0.2.0 is not currently published. Chassis therefore uses 0.1.1 rather than adding a git dependency solely for unreleased API changes.
+
+Clack 0.1.1 is Edition 2024, declares Rust 1.85 as its MSRV, and is `MIT OR Apache-2.0`. Its runtime tree for this slice is intentionally small: `clack-common 0.1.1`, `clap-sys ^0.5.0`, and `bitflags ^2.11.0` in addition to the two declared Clack crates. These terms are compatible with both AGPL distribution and the intended separate proprietary Chassis license.
 
 The repository lockfile must be regenerated and reviewed by Cargo on the next local validation pass after dependency changes. Do not hand-edit registry checksums into `Cargo.lock`.
 
@@ -66,9 +68,9 @@ Dependencies are acceptable at non-realtime edges much more readily than on the 
 | Component | Role | License | Position |
 | --- | --- | --- | --- |
 | Chassis workspace | framework | AGPL-3.0-or-later + intended separate commercial license | current |
-| Clack / `clack-plugin` 0.2.0 | low-level safe CLAP plugin boundary | MIT OR Apache-2.0 | adopted for initial adapter proof; qualification still required |
-| `clack-extensions` 0.2.0 | stable CLAP extension wrappers | MIT OR Apache-2.0 | adopted narrowly for audio ports |
-| `clap-sys` 0.5.0 | raw CLAP ABI used by Clack | MIT OR Apache-2.0 | transitive; compatible |
+| Clack / `clack-plugin` 0.1.1 | low-level safe CLAP plugin boundary | MIT OR Apache-2.0 | adopted for initial adapter proof; qualification still required |
+| `clack-extensions` 0.1.1 | stable CLAP extension wrappers | MIT OR Apache-2.0 | adopted narrowly for audio ports |
+| `clap-sys` 0.5.x | raw CLAP ABI used by Clack | MIT OR Apache-2.0 | transitive; lock exact version during local validation |
 | CLAP SDK | CLAP ABI specification | MIT | compatible |
 | `clap-wrapper` | project CLAP into VST3/AU/AAX/standalone | MIT | preferred initial projection candidate; validate semantics per target |
 | Steinberg VST3 SDK | VST3 SDK | MIT | compatible |
@@ -94,7 +96,7 @@ Prefer crates.io releases for normal Rust dependencies. Git dependencies require
 
 Do not add wildcard dependency versions. Avoid duplicate major/version trees when practical, but do not contort correctness or platform support merely to eliminate harmless duplication.
 
-The first Clack requirements are exact `=0.2.0` requirements rather than a floating 0.2 range. Upgrade them deliberately after reviewing upstream changes and rerunning adapter conformance.
+The first Clack requirements are exact `=0.1.1` requirements rather than a floating 0.1 range. Upgrade them deliberately after reviewing upstream changes and rerunning adapter conformance. In particular, moving to 0.2 should happen only after a 0.2 release is actually available (or there is a concrete reason to adopt a pinned git revision) and the reentrancy/API changes have been reviewed.
 
 ## Checks
 
