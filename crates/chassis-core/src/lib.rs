@@ -158,6 +158,13 @@ pub struct ProcessConfig {
 }
 
 impl ProcessConfig {
+    /// Creates a validated process configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProcessConfigError::InvalidSampleRate`] when `sample_rate` is
+    /// non-finite or non-positive, and [`ProcessConfigError::InvalidFrameRange`]
+    /// when the maximum block size is zero or smaller than the minimum.
     pub fn new(
         sample_rate: f64,
         min_frames: u32,
