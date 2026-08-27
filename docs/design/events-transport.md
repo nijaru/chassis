@@ -16,7 +16,7 @@ The core abstraction is conceptually:
 TimedEvent
 ├── sample_offset
 └── Event
-    ├── parameter value
+    ├── parameter set / automation trajectory
     ├── parameter modulation
     ├── note on/off/choke/end
     ├── note expression
@@ -116,22 +116,47 @@ Initial adapters may advertise only the event dialects that are actually impleme
 
 ## Parameters in the event timeline
 
-Timestamped parameter base-value changes and modulation events participate in the same process timeline.
+Timestamped parameter base-value changes, automation trajectories, and modulation events participate in the same process timeline.
 
 The framework may additionally construct efficient parameter cursors/views so DSP does not search a heterogeneous event stream for every sample. That optimization must preserve the event ordering semantics.
 
 Parameter gesture begin/end is primarily a control/host communication concern. If a target format delivers gestures through the realtime event path, adapters can preserve them without requiring ordinary DSP to consume them.
 
-## Ramps
+## Automation trajectories and ramps
 
-Some formats can describe an explicit parameter ramp rather than only point changes. Chassis must decide before freezing the event API whether to:
+Chassis preserves the automation semantics supplied by the source format instead of flattening every change into a step event.
 
-1. preserve ramps as first-class timed spans; or
-2. translate them into a parameter trajectory/cursor without materializing per-sample events.
+The semantic parameter trajectory needs at least two operations:
 
-Never expand a long ramp into one heap-allocated event per sample.
+```text
+Set
+  at sample offset -> value changes immediately
 
-The choice should be driven by correctness across AU ramp events, VST3 point queues, CLAP value events, and Chassis smoothing semantics.
+LinearRamp
+  start sample/value -> end sample/value
+```
+
+The representation may ultimately be exposed primarily through a parameter cursor/span API rather than as a literal public event enum, but the distinction is part of the framework contract.
+
+Adapter behavior:
+
+- **VST3:** an `IParamValueQueue` is specified as a piecewise-linear approximation of the host automation curve. Consecutive points, including the implicit previous value at the start of a block, therefore become linear trajectory segments. Jumps remain representable by adjacent points as defined by VST3.
+- **Audio Unit:** a normal parameter event becomes `Set`; an explicit parameter-ramp event becomes a `LinearRamp` with the supplied duration and end value. A ramp may need continuation state if its duration crosses a process-block boundary.
+- **CLAP:** `CLAP_EVENT_PARAM_VALUE` is a timestamped value change and has no core ramp-duration primitive, so it becomes `Set` unless a future CLAP extension/source semantic explicitly conveys a trajectory.
+
+Adapters must not invent interpolation merely because another format uses it, and they must not discard an explicit ramp supplied by a format that has one.
+
+Never expand a ramp into one heap-allocated event per sample. Parameter cursors/trajectories compute values or spans lazily using bounded process-time state.
+
+### Interaction with product smoothing
+
+Host automation trajectory reconstruction and product smoothing are separate layers.
+
+Chassis should first reproduce the source automation trajectory correctly. Optional parameter smoothing is then a product-declared behavior applied to the control signal according to the chosen smoothing policy.
+
+The default is **no product smoothing unless the parameter declares or the DSP implements it**. This avoids silently altering host automation.
+
+A conventional smoothing helper may offer policies such as applying only to discontinuous changes or applying to every target change, but those semantics must be explicit before the API is stabilized. Products with custom control-rate behavior can consume the unsmoothed trajectory directly.
 
 ## Event storage
 
@@ -155,17 +180,19 @@ The output sink should:
 
 ## Process segmentation helpers
 
-Many processors want to process contiguous audio ranges between events. Chassis should consider a helper that yields spans conceptually like:
+Many processors want to process contiguous audio ranges between event/trajectory boundaries. Chassis should provide or strongly consider a helper that yields spans conceptually like:
 
 ```text
-frames 0..17
-apply events at 17
+frames 0..17 with current parameter trajectory
+apply boundary/events at 17
 frames 17..64
-apply events at 64
+apply boundary/events at 64
 ...
 ```
 
 This is especially useful for sample-accurate instruments and automation without forcing a branch over the full event list for every sample.
+
+A ramp need not create a boundary at every sample; the span exposes the trajectory needed to evaluate or vectorize it.
 
 Such helpers should be optional; block-based DSP can consume parameter trajectories or events differently.
 
@@ -177,13 +204,14 @@ Examples:
 
 - converting semantic note events to MIDI 1 where that is the only host path can be valid if the semantics survive;
 - discarding note IDs or per-note modulation silently is not valid when the product declares that capability as required;
-- block-quantizing sample-accurate automation without disclosure is not valid.
+- block-quantizing sample-accurate automation without disclosure is not valid;
+- replacing a source-defined linear automation segment with an arbitrary product/framework ramp is not valid.
 
 ## Initial implementation
 
 The first conformance effect needs only:
 
-- parameter value events;
+- parameter set and linear-trajectory semantics;
 - process/block-start transport;
 - the ordered event abstraction;
 - bounded output plumbing sufficient for host communication tests.
