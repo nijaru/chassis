@@ -2,9 +2,17 @@
 
 This roadmap is ordered by architectural proof, not feature count or release promises. A feature advances when its owner/lifecycle is clear and a conformance or real-product requirement can validate it.
 
+## Current position
+
+Chassis currently spans **late Phase 1 / early Phase 2** deliberately.
+
+The format-independent lifecycle/buffer conformance slice is implemented and was locally validated before the first adapter work. The first narrow `chassis-clap` source slice now exists, but it has **not yet been locally compiled/validated or format-qualified** after adding Clack dependencies.
+
+Parameter/state/event semantics remain intentionally behind the first lifecycle/buffer CLAP proof. This is not a roadmap reversal: exercising the smallest real host boundary first gives better evidence for the core ownership/buffer model before more semantic layers depend on it.
+
 ## Phase 0 — semantic foundation
 
-Current phase.
+Status: initial foundation complete enough to support executable slices; contracts remain pre-alpha and can change.
 
 - Maintain Edition 2024 / `stable` Rust baseline without prematurely freezing an MSRV.
 - Define deliberate module/public-API boundaries in `chassis-core`.
@@ -13,43 +21,74 @@ Current phase.
 - Define whole-component I/O configuration, mono/stereo/discrete layouts, and default stereo-effect policy.
 - Define process scheduling modes and activation bounds without encoding one plugin format.
 - Define safe process-buffer aliasing rules before any FFI adapter constructs Rust references.
-- Define parameter base-state authority, process trajectories, and transactional state replacement semantics.
+- Define parameter base-state authority, process trajectories, and transactional state replacement semantics at the design level.
 - Keep licensing/dependency policy compatible with AGPL + commercial dual licensing.
 - Use local explicit validation commands; no hosted CI is currently authoritative.
 
-Exit condition: the small explicit core is locally buildable/testable, its mutable authorities are named, and it does not encode FX-only, stereo-only, plugin-only, or backend-specific assumptions.
+The initial core no longer encodes a CLAP dependency and remains usable outside plugin deployment.
 
 ## Phase 1 — conformance runtime without format complexity
 
-Build the smallest deterministic component/test harness that proves the author-facing semantics before macros or GUI work.
+Status: lifecycle/buffer slice implemented and validated; parameter/state/event portions remain future work.
 
-- explicit `Component`/`Processor` lifecycle API;
-- default stereo effect + optional sidechain configuration;
-- safe planar process-buffer views;
-- a few typed parameters with stable keys;
+Implemented/validated before CLAP work:
+
+- explicit `Component`/`Processor`/`Process<S>` lifecycle API;
+- default stereo effect + optional sidechain structural configuration;
+- safe planar process-buffer views for exact alias, disjoint, input-only, and output-only relationships;
+- deterministic external conformance component;
+- activation/reset/deactivation and malformed configuration/callback tests;
+- f32 processor proof without freezing the architecture to one sample precision.
+
+Still to add through the same conformance path:
+
+- typed parameters with stable keys;
 - block/sample-time automation trajectories;
 - minimal transport/process context;
 - canonical state document + one migration fixture;
-- activation/reset/deactivation and state replacement tests;
-- realtime allocation/work-bound checks for framework-owned paths.
+- state replacement tests;
+- realtime allocation/work-bound instrumentation.
 
 Do not add background executors, generalized analyzers, voice allocation, immersive layouts, or elaborate tooling merely to make the conformance component look complete.
 
-Exit condition: the semantic runtime is ergonomic enough that the conformance effect mostly contains product processing rather than framework plumbing.
-
 ## Phase 2 — first real plugin boundary: CLAP
 
-- `chassis-clap` using Clack for the low-level safe CLAP boundary.
+Status: **initial source proof implemented; local validation and CLAP qualification are next**.
+
+Current narrow slice:
+
+- `chassis-clap` using exact Clack 0.2.0 dependencies;
+- Clack types isolated from `chassis-core`;
+- `Send` required only at the CLAP processor deployment boundary;
+- one f32 stereo main input/output pair;
+- exact in-place/disjoint Clack `ChannelPair` -> Chassis `ChannelBuffer` translation using safe Rust on the Chassis side;
+- CLAP factory/main-thread construction -> Chassis component;
+- activate/process/reset/deactivate lifecycle mapping;
+- exported `examples/clap-conformance` rlib/cdylib probe;
+- explicit rejection of unsupported port/sample configurations rather than silent semantic coercion.
+
+Immediate qualification work:
+
+1. regenerate/review `Cargo.lock` locally and pass fmt/test/clippy/deny/machete;
+2. build the conformance cdylib;
+3. package an actual platform-correct `.clap` artifact;
+4. run current CLAP validator/lifecycle/buffer stress;
+5. smoke-test in a real CLAP host;
+6. use those results to decide the general multibus/sidechain borrowing model.
+
+Then extend Phase 2 with:
+
 - product/port/parameter identity mapping and frozen adapter fixtures;
-- lifecycle/activation/process translation;
-- audio/event buffers and optional sidechain;
+- general audio-port/configuration/optional sidechain support;
+- f64 capability advertisement/dispatch where useful;
+- render/offline mode semantics;
+- audio/event buffers;
 - parameter automation/modulation and gestures;
 - state save/load while active according to a documented consistency contract;
-- fixed latency/tail metadata as needed by the conformance path;
-- CLAP validator and synthetic lifecycle/invalid-input tests;
-- Miri/model testing for applicable adapter/support code and sanitizers where native FFI requires them.
+- latency/tail/status metadata as required by the conformance path;
+- negative-space lifecycle/input tests and applicable Miri/sanitizer evidence.
 
-Exit condition: the conformance component behaves reproducibly as a CLAP plugin and survives negative-space lifecycle/state/buffer tests.
+Exit condition: the conformance component behaves reproducibly as a CLAP plugin and survives negative-space lifecycle/state/buffer tests. The existence of `chassis-clap` source alone does not satisfy this condition.
 
 ## Phase 3 — desktop formats, editor boundary, and packaging
 
