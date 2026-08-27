@@ -107,22 +107,26 @@ Changing the format before v1 is expected.
 
 ### Clack dependency/version surface
 
-The first adapter pins the published crates.io releases:
+The first adapter pins one exact safety-fixed Clack git revision:
 
-- `clack-plugin = 0.1.1`;
-- `clack-extensions = 0.1.1` with `audio-ports` + plugin-side support.
+```text
+https://github.com/prokopyl/clack
+c5975f9f89f0953b00768680357985d46178078a
+```
 
-The crates.io index shows 0.1.1 as the current published release. Clack's repository bumped its development workspace to 0.2.0 on 2026-08-05, but 0.2.0 is not currently published. Chassis deliberately uses 0.1.1 instead of adding an unreleased git dependency. The reviewed 0.1.1 source is Edition 2024, declares Rust 1.85 MSRV, uses `clap-sys ^0.5.0`, and is MIT/Apache-2.0 licensed. See `docs/research/clack-0.1.1-adapter-audit.md`.
+The latest published release available during the audit, 0.1.1, has an acknowledged plugin-side reentrancy UB issue affecting real hosts including Bitwig and `clap-wrapper`. The fix merged after 0.1.1 and changes affected handler access from exclusive mutable to shared references. Since both Bitwig and `clap-wrapper` are relevant to Chassis, using 0.1.1 solely to stay on crates.io is not acceptable.
 
-Published 0.1.1 predates Clack's July 30 reentrancy changes, so activation/deactivation and audio-port queries receive mutable main-thread references. The Chassis adapter follows those signatures without changing its own ownership semantics.
+The selected revision is after the reentrancy fix and subsequent immediate safety/lifetime work. It is MIT/Apache-2.0 licensed and is allowlisted as the project's only current git-source exception. See `docs/research/clack-pinned-adapter-audit.md`.
 
 Still required before production qualification:
 
-- regenerate/review the exact crates.io dependency graph in `Cargo.lock`;
-- inspect the exact registry source selected by the lockfile;
+- regenerate/review the exact git + transitive dependency graph in `Cargo.lock`;
+- confirm Cargo resolves exactly the pinned revision;
+- inspect the exact source used by the lockfile;
 - deeper audit of Clack unsafe/lifetime and panic containment around the process/extension path;
 - allocation/locking/reclamation audit of the exact process path;
-- advisory/source/license checks after Cargo resolves the graph.
+- advisory/source/license checks after Cargo resolves the graph;
+- move back to a suitable crates.io Clack release when a safety-fixed release is published and qualified.
 
 Keep Clack types confined to `chassis-clap` and export/test glue.
 
@@ -147,6 +151,7 @@ Need actual evidence for:
 - repeated activation/deactivation;
 - invalid/partial host sequences and panic containment;
 - processor movement between CLAP audio threads (`Send`) without simultaneous mutation;
+- reentrant host callbacks against the pinned Clack model;
 - module unload once future callbacks/tasks exist.
 
 The adapter existing in source is not evidence these sequences are qualified.
@@ -182,7 +187,7 @@ Before calling native CLAP support usable:
 - build the export on a supported platform;
 - package it according to CLAP platform conventions;
 - run current `clap-validator` and lifecycle/buffer stress;
-- smoke-test at least one real CLAP host;
+- smoke-test at least one real CLAP host, preferably including Bitwig while qualifying reentrancy-sensitive behavior;
 - record exact validator/host/toolchain versions.
 
 ### Event/parameter translation
@@ -201,6 +206,8 @@ Treat VST3/AU projection as provisional until the same conformance component pas
 - automation trajectory tests;
 - editor lifetime/resize tests;
 - real host matrix.
+
+The known Clack 0.1.1 reentrancy issue explicitly cited `clap-wrapper`; keep the pinned safety-fixed Clack source (or a future qualified release) as a prerequisite for this projection path.
 
 Replace/patch/own a native adapter only when a concrete wrapper limitation justifies it.
 
