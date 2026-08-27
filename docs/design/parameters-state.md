@@ -1,143 +1,94 @@
 # Parameters, Automation, and State
 
-Status: design direction; public API and serialization format not frozen.
+Status: design direction; public API and persistence wire format are not frozen.
 
 ## Goal
 
-Make the parameter/state path conventional enough that most plugins declare their controls and persistent state rather than implementing host plumbing, while preserving sample-accurate automation and allowing unusual products to replace smoothing or interpretation semantics.
+Most products should declare controls and persistent fields rather than implement host plumbing. Chassis must preserve sample-accurate automation/modulation while keeping one clear authority for persistent/base state.
 
-## Cross-format observations
+## Immutable schema
 
-The target APIs share several durable concepts:
+A component's parameter schema is immutable for the lifetime of an instantiated component unless a future explicit dynamic-parameter capability is added.
 
-- parameters have stable identities;
-- hosts need metadata, ranges/defaults, display formatting, and text parsing;
-- automation is process-time data and can change within an audio block;
-- VST3 represents automation as piecewise-linear point queues, Audio Unit can schedule explicit ramps, and CLAP provides timestamped value changes;
-- CLAP distinguishes base parameter value changes from modulation and supports per-note/key/channel/port modulation capabilities;
-- plugin-originated edits need host notification and gesture boundaries;
-- Audio Unit parameters have stable identifiers/addresses, ranges, units, value strings, formatting/parsing, and automation APIs.
-
-Chassis should model these semantics directly and translate them in adapters.
-
-## Canonical parameter identity
-
-The preferred Chassis identity is a stable human-readable string key, for example:
+Each parameter has a stable human-readable key such as:
 
 ```text
 input.gain
 compressor.threshold
-band.1.frequency
+band.low.frequency
 output.ceiling
 ```
 
-Reasons:
+Rust field names, declaration order, display names, and backend IDs are not persistent identity.
 
-- readable in state, tests, diagnostics, and migration code;
-- naturally namespaced for nested/repeated parameter groups;
-- independent of one plugin format's integer width;
-- renaming display labels does not affect compatibility.
+The conventional types are float, integer, boolean, and enum/choice. Enum variants also need stable identities; reordering Rust variants must not reinterpret presets.
 
-Once released, the canonical key is a compatibility contract and must not change merely because a field or UI label is renamed.
+Backend numeric IDs are deterministic derived projections of canonical keys. Their mapping algorithm and collision behavior must be frozen and covered by golden fixtures before a stable adapter release. Explicit legacy/backend overrides remain an escape hatch.
 
-Format adapters that require numeric IDs should derive a deterministic numeric representation from the canonical key and detect collisions when the parameter schema is built. A collision must fail loudly rather than silently remapping an existing parameter. The API should provide an explicit numeric-ID override as an escape hatch if a real collision or legacy compatibility requirement occurs.
+## Plain values
 
-The exact hash/mapping algorithm must be specified and frozen before publishing a stable adapter.
+Product semantics use meaningful plain values. Host-normalized values are adapter representations.
 
-## Parameter types
+Common mappings may include linear, logarithmic/exponential, skew/power, stepped/discrete, and explicit custom monotonic mappings. Mapping code must have property tests for bounds, monotonicity, finite values, and useful round trips.
 
-The conventional set should include:
+Formatting/parsing/unit metadata is shared by host UI, generic editors, and product bindings where target APIs support it.
 
-- float;
-- integer;
-- boolean;
-- enum/choice with stable variant identities.
+## One base-state authority
 
-Enum state must not depend only on declaration order. Reordering choices should not silently reinterpret existing presets.
+Chassis owns one framework `ParameterStore`-like authority per instance for the **current base/control values**.
 
-Likely later/common extensions include read-only/output parameters, bypass, trigger/momentary semantics, and host-visible grouping. These should be added from real requirements rather than encoded as product-specific hacks.
+Product `MainThread`, editor bindings, state serialization, and `Processor` do not maintain independently mutable copies of those values.
 
-## Plain values versus normalized host values
+The exact storage primitive is deliberately not frozen yet. It must satisfy:
 
-Product code should primarily work in meaningful plain units. Normalized 0..1 representations are adapter/host concerns.
+- non-blocking delivery of host automation/control changes relevant to realtime processing;
+- non-RT observation/editing without exposing mutable `Processor` state;
+- typed validation at the authority boundary;
+- a defined way to publish multi-parameter state loads as one generation/transaction from the processor's point of view;
+- a defined state-save consistency model while processing/automation may be active.
 
-A parameter definition therefore needs a mapping between plain and normalized domains plus formatting/parsing behavior.
+Do **not** implement this as unrelated atomics and then claim state serialization is an atomic snapshot. If state save needs a coherent cross-parameter snapshot, provide and test an epoch/snapshot protocol or another explicit mechanism. If the product contract permits weaker consistency, document that precisely instead of implying transactional behavior.
 
-Common mappings should be built in:
+## Process-time values are derived views
 
-- linear;
-- logarithmic/exponential frequency-style ranges;
-- skew/power curves;
-- stepped/discrete mappings;
-- custom monotonic mapping as an escape hatch.
+Processing distinguishes:
 
-Round-trip and monotonicity properties should be testable by `chassis-test`.
+1. **base state** — current persistent/control value in the framework authority;
+2. **automated trajectory** — block/sample-time values implied by host automation;
+3. **effective value** — trajectory after applicable modulation/product control semantics.
 
-## Formatting and parsing
+The processor receives process-local cursors/trajectories derived from the authority plus timestamped host events. Those cursors are not a second persistent authority.
 
-A parameter can provide conventional unit metadata plus value formatting/parsing hooks.
-
-Examples:
-
-```text
-0.707 -> "-3.01 dB"
-1000.0 -> "1.00 kHz"
-0 -> "Off"
-1 -> "On"
-```
-
-Adapters should use product formatting where the target API supports it rather than independently inventing display strings.
+The framework must define how a host automation event updates the current base value exposed to control/state APIs while preserving the exact process-time event ordering. This behavior must be verified per format before the parameter API is frozen.
 
 ## Automation and modulation
 
-Base automation and modulation are distinct semantic streams.
+Base automation and modulation are separate semantics. Modulation must not overwrite the base value.
 
-Base automation changes the parameter's underlying automated value. Modulation temporarily offsets/transforms that value according to host capabilities and must not overwrite the canonical base value.
+Chassis preserves source trajectories:
 
-The process-time representation preserves source automation trajectories:
+- an instantaneous change is a timed set;
+- VST3 point queues produce their specified piecewise-linear trajectory;
+- Audio Unit ramps remain linear spans with duration/end value;
+- CLAP core value events remain timestamped sets unless another supported extension provides richer semantics.
 
-- an instantaneous host value change becomes a timed set;
-- VST3 point queues become their specified piecewise-linear trajectory;
-- Audio Unit parameter ramps remain linear spans with duration/end value;
-- CLAP core parameter value events remain timestamped sets because core CLAP does not specify a ramp duration for them.
+Reconstructing the source trajectory is adapter/framework correctness, not parameter smoothing.
 
-This trajectory reconstruction is framework/adapter correctness, not product smoothing.
-
-The initial event model should remain monophonic/global while leaving room for CLAP-style per-note/key/channel/port modulation without redesigning parameter identity.
-
-## Parameter state views
-
-Chassis should distinguish at least three notions that frameworks often accidentally collapse:
-
-1. **canonical/base state** — the persistent/control-thread value;
-2. **process-time automated value/trajectory** — value implied by host automation at a particular sample;
-3. **effective/modulated value** — process-time value after applicable modulation.
-
-A GUI reading the current base value is not the same operation as DSP consuming a sample-accurate effective value.
-
-The ergonomic API may hide boilerplate, but it must not erase these semantics.
+Per-note/key/channel/port modulation must remain possible without redesigning canonical parameter identity, even if initial FX support is global only.
 
 ## Smoothing
 
-Smoothing is common enough to provide built-in helpers but not universal enough to mandate one behavior.
+Smoothing is common enough for optional helpers but is product DSP behavior.
 
-The default parameter semantics are **no product smoothing unless declared or implemented by the product**. Chassis first reproduces the source host automation trajectory faithfully.
+Default: reproduce host control trajectory with **no extra Chassis smoothing** unless the product declares a smoothing policy.
 
-A parameter can then opt into a conventional smoother, likely including at least linear-time and exponential approaches. The eventual smoothing API should make its interaction with host trajectories explicit rather than silently double-smoothing them.
+Useful helpers may include linear-time and exponential slew, but their interaction with explicit host ramps must be visible. Avoid silently double-smoothing a trajectory the host already specified.
 
-Useful policies to evaluate with real FX include:
+Products can consume raw trajectories/events and implement detector/control-rate behavior themselves.
 
-- smoothing discontinuous target changes while following explicit host ramps directly;
-- smoothing every effective target change when the DSP needs a physical/control-rate slew regardless of source;
-- raw trajectory access with completely custom product behavior.
+## Product-originated edits
 
-Do not freeze these policy names or details until the conformance effect and first dynamics/EQ clients demonstrate what is actually ergonomic and correct.
-
-A product that opts into smoothing is intentionally changing the control signal beyond the host trajectory; that is product DSP behavior, not adapter interpolation.
-
-## Plugin-originated edits
-
-UI or product-originated parameter edits should use a standard handle with gesture semantics conceptually equivalent to:
+Editor/control changes use one standard gesture path conceptually equivalent to:
 
 ```text
 begin_edit(param)
@@ -145,114 +96,105 @@ set_value(param, value)
 end_edit(param)
 ```
 
-The framework is responsible for updating canonical state, notifying observers/UI, and informing the host without feedback loops.
+The framework validates and updates the base-state authority, notifies observers, and informs the host without feedback loops.
 
-Realtime-originated changes require a bounded event path and format capability checks. A product must not call arbitrary main-thread host APIs from `process`.
-
-## Parameter schema lifetime
-
-The parameter schema is fixed for an instantiated component unless a future capability explicitly models dynamic parameters. Most plugin hosts assume stable parameter identity/count strongly enough that dynamic mutation should not be the default abstraction.
-
-Nested/repeated groups should be expressible declaratively while still generating stable canonical keys.
+Realtime-originated host notifications require a separately modeled bounded/capability-checked path. DSP cannot call arbitrary main-thread host APIs.
 
 ## Persistent state
 
-Host state should be a Chassis/product semantic format shared across CLAP, VST3, AU, standalone, and embedded deployment rather than one format per adapter.
+Persistent state is a Chassis/product semantic document shared across CLAP, VST3, AU, standalone, and embedded deployment.
 
-The logical state contains:
+Logical contents:
 
 ```text
 State
-├── Chassis state-envelope version
+├── Chassis envelope version
 ├── product schema version
-├── typed parameter base values keyed by canonical parameter ID
+├── typed parameter base values by canonical key
 └── typed/custom product persistent fields
 ```
 
-DSP runtime history is not persistent by convention. Filter delay lines, compressor envelopes, oscillator phases, lookahead buffers, and other transient processor state reset/reconstruct rather than appearing in presets/state blobs.
+Runtime DSP history—delay lines, detector envelopes, oscillator phase, lookahead buffers, transient caches—is not persisted by convention.
 
-## Serialization properties
+State encoding must be deterministic, bounded/defensive, portable, explicitly versioned, independent of Rust memory layout, and suitable for migrations. The separate `state-format.md` owns the wire-format prototype.
 
-The eventual encoding must be:
+## Transactional load
 
-- deterministic for identical semantic state;
-- bounded and defensive when decoding untrusted/corrupt host blobs;
-- portable across supported operating systems and plugin formats;
-- explicitly versioned;
-- capable of skipping/handling unknown fields where useful;
-- independent of Rust memory layout and compiler version.
+State bytes are untrusted input.
 
-Do not use an encoding merely because `serde` can serialize it. The on-disk/host blob becomes a long-term compatibility contract.
-
-A human-readable representation may be useful for debugging, but compact binary state is acceptable if the schema and deterministic encoding are well specified.
-
-The actual serialization dependency/format remains open until evaluated for stability, security, and license compatibility.
-
-## Typed state representation
-
-Parameter values should serialize in their meaningful typed/plain form rather than as opaque host-normalized floats where possible:
-
-- float -> finite numeric plain value;
-- integer -> integer;
-- boolean -> boolean;
-- enum -> stable variant identity.
-
-This makes state less sensitive to later changes in normalization curves. Intentional semantic range changes still require a product migration.
-
-## Migrations
-
-Loading proceeds conceptually as:
+Load path:
 
 ```text
 bytes
-  -> validate/decode envelope
-  -> identify product schema version
-  -> migrate semantic state forward
-  -> validate current parameter/custom state
-  -> publish canonical non-RT state
-  -> transfer required DSP changes through a safe activation/block boundary
+  -> bounded decode into temporary document
+  -> migrate semantic schema
+  -> validate current parameter/custom domains
+  -> build accepted state generation
+  -> publish canonical state
+  -> make Processor observe that generation at a defined safe boundary
 ```
 
-Migration code never runs on the audio thread.
+Failure before publication leaves current state unchanged. Migration and decoding never run on the audio thread.
 
-The framework should make sequential migrations conventional and testable rather than encouraging one giant version switch in product code.
+The runtime must specify what happens if state replacement races with product edits, automation, or an older asynchronous preparation. Generation/ownership rules decide which result may publish; stale work cannot silently overwrite newer authority.
+
+## State save while active
+
+Before stable release, each adapter must document when save can occur relative to processing and Chassis must provide a matching snapshot contract.
+
+Required properties:
+
+- no blocking of the audio thread;
+- no arbitrary access to live `Processor` internals;
+- no undefined mixture presented as a coherent transactional snapshot;
+- stable handling of a save racing a state load/replacement;
+- tests that exercise active automation/save where the host format permits it.
+
+## Migrations
+
+Product schema versions are monotonic migration versions, separate from marketing/package versions.
+
+Adjacent sequential migrations are the conventional path:
+
+```text
+v1 -> v2 -> v3 -> current
+```
+
+Keep fixtures from every public schema. Loading a newer unknown schema fails safely by default unless a product deliberately defines a proven forward-compatibility policy.
 
 ## Presets
 
-A preset is fundamentally named product state plus metadata. Chassis should eventually provide common serialization/storage primitives, but preset browsing, tags, search UX, cloud synchronization, and product-specific content remain outside core.
-
-Factory presets can initially be embedded state blobs generated/tested by the same state codec.
+A preset is named product state plus metadata. Chassis may provide common storage/serialization helpers later; browsers, tags, cloud sync, and product-specific UX remain outside core.
 
 ## Testing requirements
 
 `chassis-test` should eventually cover:
 
-- unique canonical IDs and unique derived host IDs;
-- stable host-ID mapping fixtures;
-- plain <-> normalized round trips;
-- formatting/parsing round trips where applicable;
-- step and linear automation trajectories at block boundaries and across blocks;
-- multiple automation points per block;
+- canonical/derived ID uniqueness and frozen mapping fixtures;
+- mapping bounds/monotonicity/round trips;
+- formatting/parsing where applicable;
+- step and linear automation trajectories across block boundaries;
 - modulation not mutating base state;
-- smoothing policy behavior independently from adapter trajectory reconstruction;
+- base-state publication after automation according to each adapter contract;
 - gesture ordering and host echo suppression;
-- deterministic state bytes;
+- coherent/defined active state-save semantics;
+- transactional state load and generation replacement;
+- deterministic state bytes and migration fixtures;
 - corrupt/truncated/oversized state rejection;
-- migration fixtures from every released schema version;
-- state round-trip across all format adapters.
+- cross-format state round trips.
 
-## Ergonomics direction
+## Ergonomics
 
-The likely end-user API is declarative, potentially derive/macro-based, but procedural macros should be added only after the semantic model is proven.
+The eventual authoring API may use derives/macros, but only after the explicit semantic API works through the conformance component and first adapter.
 
-The desired experience is approximately:
+The normal flow should be:
 
 ```text
-define parameter fields + stable IDs + ranges/defaults
+declare typed controls + stable keys + range/default/display/smoothing policy
         ↓
-Chassis provides host metadata, state, automation, GUI handles, and tests
+Chassis provides host metadata, base-state authority, state, gestures, and automation
         ↓
-processor consumes explicit realtime parameter trajectories/views/events
+Processor consumes explicit realtime trajectories/views
 ```
 
-Convention should remove plumbing, not hide timing or compatibility semantics.
+Convention removes plumbing; it does not hide ownership, timing, or compatibility.
