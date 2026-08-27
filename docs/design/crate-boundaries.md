@@ -1,6 +1,6 @@
 # Crate and Package Boundaries
 
-Status: design direction; only `chassis-core` exists today.
+Status: design direction; `chassis-core` and the first `chassis-clap` adapter now exist.
 
 ## Goal
 
@@ -39,7 +39,7 @@ The distinction is:
 
 A gain/EQ/compressor tutorial should not begin with an explanation of `chassis-core` versus `chassis-clap`.
 
-## Likely durable internal boundaries
+## Current / likely durable boundaries
 
 ```text
 chassis-core
@@ -47,9 +47,14 @@ chassis-core
   std-first, no format SDK or GUI toolkit
   unsafe denied
 
-chassis-clap
-  Clack/CLAP adapter
-  host translation + isolated necessary FFI/unsafe
+chassis-clap                    [exists, pre-alpha]
+  Clack/CLAP deployment adapter
+  current first slice uses only Clack safe APIs
+  future host translation/format-specific unsafe stays here if required
+
+examples/clap-conformance       [exists, validation artifact]
+  rlib/cdylib export probe
+  not a framework dependency or product API
 
 chassis-derive
   proc macros only after explicit APIs prove repetitive declarations
@@ -81,9 +86,19 @@ Core remains testable/usable without plugin SDKs, GUI, devices, or packaging. Em
 
 ### CLAP adapter
 
-Format glue has a different risk profile: FFI/unsafe, external bindings, host lifecycle quirks, platform builds, native validators. Isolate it so core can forbid unsafe code and product semantics cannot accidentally depend on backend types.
+Format glue has a different risk profile: external bindings, host lifecycle quirks, platform builds, native validators, and potentially FFI/unsafe where a lower layer cannot provide the required safe abstraction. Isolate it so core can forbid unsafe code and product semantics cannot accidentally depend on backend types.
+
+The first `chassis-clap` slice deliberately owns **no** unsafe code: Clack validates the raw CLAP buffers and returns safe `ChannelPair` views, which Chassis translates into `ChannelBuffer`. This is preferable to adding an unsafe layer merely because format adapters are allowed to contain one.
 
 CLAP is the first native adapter. VST3/AU through `clap-wrapper` initially belong primarily to export/build integration; create native `chassis-vst3`/`chassis-au` crates only if Chassis actually owns those adapters later.
+
+The current adapter is intentionally limited to a single f32 stereo main pair. Do not mistake that validation slice for the eventual author-facing CLAP feature set.
+
+### Conformance export
+
+`examples/clap-conformance` exists so the adapter can produce a real loadable library without making a test product part of `chassis-clap` itself. Keep validation products outside the framework runtime dependency graph.
+
+If richer synthetic host/test machinery becomes substantial, move reusable pieces into `chassis-test` rather than growing production adapter crates around tests.
 
 ### Proc macros
 
@@ -132,21 +147,22 @@ They appear only with a real host/application client. Plugin authors do not inhe
 
 ## Dependency direction
 
-Conceptually:
+Current/proposed graph:
 
 ```text
 product
    ↓
-chassis-audio (curated facade)
+chassis-audio (future curated facade)
    ├── chassis-core
    ├── optional chassis-clap/export support
    └── optional derive support
 
-chassis-clap       -> chassis-core + Clack
-chassis-iced       -> editor contract/core + Iced
-chassis-test       -> core (+ adapters behind test features)
-chassis-standalone -> core + device/window deps
-cargo-chassis      -> build/tooling metadata; not runtime DSP
+examples/clap-conformance -> chassis-core + chassis-clap
+chassis-clap              -> chassis-core + Clack
+chassis-iced              -> editor contract/core + Iced
+chassis-test              -> core (+ adapters behind test features)
+chassis-standalone        -> core + device/window deps
+cargo-chassis             -> build/tooling metadata; not runtime DSP
 ```
 
 Keep the graph acyclic. Large GUI/device/tooling dependencies must not flow downward into `chassis-core`.
@@ -161,6 +177,8 @@ Rules before publication:
 - disabling defaults must not change compatibility identity/state semantics silently;
 - feature combinations used for releases are validated explicitly;
 - avoid target-dependent public APIs where a runtime/adapter capability query is more honest.
+
+The current Clack extension feature set is deliberately narrow (`audio-ports` plus plugin-side integration). Add extension features only with the semantic layer that consumes them.
 
 ## Versioning
 
