@@ -92,7 +92,8 @@ These strict rules apply to the audio callback and other explicitly deterministi
 - Do not import third-party strong-copyleft code into the commercially relicensable framework without an explicit decision.
 - Keep SDK-specific constraints, especially AAX/Avid/PACE, isolated from format-independent crates.
 - Do not accept substantive external code contributions until contributor/relicensing terms are established.
-- The first adopted external runtime dependencies are exact published Clack 0.1.1 crates; upgrades are deliberate compatibility/audit events, not automatic version drift. Do not switch to unreleased 0.2 git sources merely because upstream `main` has bumped its development version.
+- Clack is the one current git-source exception: manifests pin full revision `c5975f9f89f0953b00768680357985d46178078a`, and `deny.toml` allowlists only the Clack repository. This is intentional because the latest published 0.1.1 release has acknowledged plugin-side reentrancy UB relevant to Bitwig and `clap-wrapper`; do not downgrade to 0.1.1 merely to avoid git. Prefer migrating back to crates.io once a suitable safety-fixed release is published and qualified.
+- Any Clack revision change is an explicit dependency/audit/conformance event, not automatic version drift.
 
 ## Validation commands
 
@@ -111,8 +112,8 @@ cargo miri test      # before promoting unsafe Rust where Miri applies
 
 ## Current implementation priority
 
-1. Locally validate the newly added `chassis-clap` + `examples/clap-conformance` slice, regenerate/review `Cargo.lock`, and fix fmt/test/clippy/deny/machete findings without weakening the design.
-2. Build/package the conformance export as an actual `.clap`, then run CLAP-native validator/lifecycle/buffer stress and a real-host smoke test.
+1. Locally validate the newly added `chassis-clap` + `examples/clap-conformance` slice, regenerate/review `Cargo.lock`, confirm it resolves the exact pinned Clack revision, and fix fmt/test/clippy/deny/machete findings without weakening the design.
+2. Build/package the conformance export as an actual `.clap`, then run CLAP-native validator/lifecycle/buffer stress and a real-host smoke test; include a host with realistic reentrant behavior such as Bitwig when practical.
 3. Use that evidence to decide the general multibus/sidechain buffer-access shape; do not force arbitrary channel layouts through the current fixed `[ChannelBuffer; 2]` proof.
 4. Add CLAP render/offline semantics and f64 only when their format mapping/advertisement are explicit.
 5. Then implement parameters/automation/state/events through the same conformance path.
