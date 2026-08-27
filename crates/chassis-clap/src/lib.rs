@@ -11,14 +11,13 @@ use chassis_core::{
     audio::{DEFAULT_EFFECT_CONFIGURATION, MAIN_INPUT, MAIN_OUTPUT},
     buffer::{ChannelBuffer, InputEndpoint, OutputEndpoint},
     process::{ProcessConfig, ProcessMode},
-    runtime::{Activated, Component, Process as ChassisProcess, Processor, activate},
+    runtime::{Activated, Component, Process as ChassisProcess, activate},
 };
 use clack_extensions::audio_ports::{
     AudioPortFlags, AudioPortInfo, AudioPortInfoWriter, AudioPortType, PluginAudioPorts,
     PluginAudioPortsImpl,
 };
 use clack_plugin::{
-    clack_export_entry,
     entry::{DefaultPluginFactory, SinglePluginEntry},
     plugin::features::{AUDIO_EFFECT, STEREO},
     prelude::{
@@ -29,7 +28,7 @@ use clack_plugin::{
 };
 
 /// Re-export of Clack's CLAP entry macro for Chassis export crates.
-pub use clack_export_entry;
+pub use clack_plugin::clack_export_entry;
 
 /// Temporary CLAP metadata contract for the first default-stereo adapter proof.
 ///
@@ -206,12 +205,14 @@ where
 }
 
 fn map_process_config(config: PluginAudioConfiguration) -> Result<ProcessConfig, PluginError> {
+    const CLAP_MAX_FRAMES: u32 = 2_147_483_647;
+
     let minimum = NonZeroU32::new(config.min_frames_count)
         .ok_or(PluginError::Message("CLAP minimum frame count must be positive"))?;
     let maximum = NonZeroU32::new(config.max_frames_count)
         .ok_or(PluginError::Message("CLAP maximum frame count must be positive"))?;
 
-    if config.min_frames_count > i32::MAX as u32 || config.max_frames_count > i32::MAX as u32 {
+    if config.min_frames_count > CLAP_MAX_FRAMES || config.max_frames_count > CLAP_MAX_FRAMES {
         return Err(PluginError::Message(
             "CLAP frame bounds exceed the specification limit",
         ));
@@ -221,11 +222,11 @@ fn map_process_config(config: PluginAudioConfiguration) -> Result<ProcessConfig,
         .map_err(|_| PluginError::Message("Invalid CLAP process configuration"))
 }
 
-fn map_main_channel(
-    pair: ChannelPair<'_, f32>,
+fn map_main_channel<'a>(
+    pair: ChannelPair<'a, f32>,
     channel: u32,
     frame_count: u32,
-) -> Result<ChannelBuffer<'_, f32>, PluginError> {
+) -> Result<ChannelBuffer<'a, f32>, PluginError> {
     let input = InputEndpoint::new(MAIN_INPUT, channel);
     let output = OutputEndpoint::new(MAIN_OUTPUT, channel);
 
