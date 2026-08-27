@@ -1,8 +1,11 @@
 [graph]
 targets = [
     "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
     "aarch64-apple-darwin",
     "x86_64-pc-windows-msvc",
+    "aarch64-pc-windows-msvc",
 ]
 all-features = true
 
@@ -26,6 +29,8 @@ allow = [
     "Zlib",
 ]
 exceptions = [
+    # Chassis workspace crates are AGPL; add each new workspace package here
+    # explicitly rather than allowing third-party AGPL dependencies globally.
     { allow = ["AGPL-3.0-or-later"], crate = "chassis-core" },
 ]
 
