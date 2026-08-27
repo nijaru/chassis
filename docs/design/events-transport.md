@@ -184,11 +184,14 @@ Valid examples may include semantic notes -> MIDI 1 when identity/expression los
 
 ## Initial implementation
 
-The first FX conformance path needs only:
+The first FX conformance path now has:
 
-- parameter set/linear-trajectory cursors;
-- block-start transport snapshot;
-- deterministic span segmentation by sample boundary;
+- bounded borrowed parameter set/linear-trajectory cursors;
+- block-start transport snapshot with explicit optional availability;
+- validation before product DSP;
 - no promise of one total cross-family event ordering.
+
+It still needs host-specific event translation, gesture/base-state publication,
+and deterministic span segmentation before the event contract is promoted.
 
 Design stable event-port/note identities before public API stabilization; prove them with an instrument later.

@@ -1,6 +1,6 @@
 # Parameters, Automation, and State
 
-Status: design direction; public API and persistence wire format are not frozen.
+Status: schema/store and borrowed process-automation prototype implemented; public API and persistence wire format are not frozen.
 
 ## Goal
 
@@ -39,7 +39,7 @@ Chassis owns one framework `ParameterStore`-like authority per instance for the 
 
 Product `MainThread`, editor bindings, state serialization, and `Processor` do not maintain independently mutable copies of those values.
 
-The exact storage primitive is deliberately not frozen yet. It must satisfy:
+The current pre-alpha storage is an owned `ParameterStore`. The final storage/synchronization primitive is deliberately not frozen yet. It must satisfy:
 
 - non-blocking delivery of host automation/control changes relevant to realtime processing;
 - non-RT observation/editing without exposing mutable `Processor` state;
@@ -57,7 +57,7 @@ Processing distinguishes:
 2. **automated trajectory** — block/sample-time values implied by host automation;
 3. **effective value** — trajectory after applicable modulation/product control semantics.
 
-The processor receives process-local cursors/trajectories derived from the authority plus timestamped host events. Those cursors are not a second persistent authority.
+The processor currently receives a borrowed `ParameterEvents` view and can create lazy floating-point set/linear cursors derived from the authority plus normalized events. Those cursors are not a second persistent authority.
 
 The framework must define how a host automation event updates the current base value exposed to control/state APIs while preserving the exact process-time event ordering. This behavior must be verified per format before the parameter API is frozen.
 
@@ -167,6 +167,12 @@ Keep fixtures from every public schema. Loading a newer unknown schema fails saf
 A preset is named product state plus metadata. Chassis may provide common storage/serialization helpers later; browsers, tags, cloud sync, and product-specific UX remain outside core.
 
 ## Testing requirements
+
+The current core conformance path covers bounded borrowed event validation,
+nondecreasing source order, sample-accurate set/linear cursor evaluation,
+parameter-domain rejection before product DSP, and optional block-start
+transport values. It does not yet define host gesture translation,
+automation-to-base publication, or active state-save consistency.
 
 `chassis-test` should eventually cover:
 

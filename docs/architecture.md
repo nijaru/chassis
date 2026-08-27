@@ -159,7 +159,7 @@ Chassis distinguishes:
 2. process-time automated trajectories derived from host events for a block;
 3. effective/modulated values consumed by DSP.
 
-The process view is derived and cannot independently become a second persistent authority. Before the API freezes, Chassis must specify how realtime automation updates are reflected into canonical base state and how a coherent state save behaves when processing is active.
+The process view is derived and cannot independently become a second persistent authority. The current core validates borrowed block automation against the canonical schema and exposes lazy set/linear trajectories. Before the API freezes, Chassis must specify how realtime automation updates are reflected into canonical base state and how a coherent state save behaves when processing is active.
 
 State loading is transactional from the product's perspective: decode, validate, and migrate into temporary non-live state first, then publish the accepted state through one defined runtime boundary. Partial state loads never mutate the active product.
 

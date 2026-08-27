@@ -174,17 +174,20 @@ Format-independent unit/integration tests cover semantic authority and negative 
 - lifecycle/process callback containment;
 - typed parameter schema/default/range/choice validation;
 - owned base-value edits and transactional parameter state application;
-- bounded deterministic state encoding/decoding and malformed-input rejection.
+- bounded deterministic state encoding/decoding and malformed-input rejection;
+- bounded sample-sorted parameter events and lazy set/linear trajectories;
+- invalid automation rejection before product DSP;
+- optional block-start transport context and frame-bound matching.
 
 As the corresponding features land, extend coverage to:
 
 - parameter mapping properties;
-- process trajectory/event ordering;
+- host-specific process trajectory/event ordering;
 - state encoding/migrations;
 - state load failure leaving live authority unchanged;
-- bounded queue/scratch behavior;
+- bounded queue/scratch behavior and allocation instrumentation;
 - generation/replacement semantics;
-- transport calculations.
+- richer transport calculations and availability mappings.
 
 Property testing is appropriate after a dependency is reviewed under the license policy.
 

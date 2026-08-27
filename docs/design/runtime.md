@@ -43,8 +43,8 @@ The names are less important than the authority split. A simple effect should re
 - `Component::activate()` creates one realtime `Processor` after structural I/O validation;
 - `Processor` owns reset/lifecycle semantics;
 - `Process<S>` is a separate capability for processing one sample representation;
-- `Activated<P>` holds the immutable activation configuration plus the exclusively owned processor;
-- `Activated::process()` constructs a borrowed `ProcessBlock`, validates callback-varying frame dimensions, then calls product DSP;
+- `Activated<P>` holds the immutable activation configuration, canonical base `ParameterStore`, and exclusively owned processor;
+- `Activated::process()` validates context, activation event bounds, and callback-varying frame dimensions, then validates borrowed parameter events against the active schema before calling product DSP with a borrowed `ProcessBlock`;
 - `Activated::deactivate(self)` consumes the active shell so processor destruction happens only after the caller has ended process/reset borrows.
 
 This split is deliberate. `Processor` is not parameterized by `f32`: a future processor can implement both `Process<f32>` and `Process<f64>` without duplicating lifecycle/DSP ownership.
@@ -59,7 +59,7 @@ The current `Activated` type is **not** the final `InstanceRuntime`. It intentio
 
 `Component` is not the live mutable plugin instance. It describes/provides stable product schema and creates runtime parts.
 
-The current explicit slice only consumes audio-port schema and processor activation. Product identity, typed parameters/state, events, editor factories, and richer I/O policy remain separate design contracts to add as executable requirements reach this layer.
+The current explicit slice consumes audio-port schema, typed parameter schema, process context, and processor activation. Product identity, state publication, host event translation, editor factories, and richer I/O policy remain separate design contracts to add as executable requirements reach this layer.
 
 Compatibility metadata should normally come from Chassis/Cargo metadata + the frozen identity manifest rather than duplicated associated constants.
 
@@ -89,17 +89,24 @@ Thread-transfer capability is deployment-specific: an adapter that moves active 
 
 `reset` preserves persistent/control state while resetting transient DSP history. Stateless processors may use the current default no-op implementation.
 
-`process` receives only borrowed realtime-safe views through `ProcessBlock<S>`.
+`process` receives only borrowed realtime-safe audio and process-context views through `ProcessBlock<S>`.
 
 ## Process block ownership
 
-`ProcessBlock` borrows safe `ChannelBuffer<S>` views and carries actual frame count plus `ProcessMode`.
+`ProcessBlock` borrows safe `ChannelBuffer<S>` views and carries actual frame count plus `ProcessContext`.
 
 Its constructor is framework-private. Product code can inspect/process the borrowed block but cannot manufacture a fake framework block directly.
+
+`ProcessContext` carries the per-call mode, optional block-start transport snapshot,
+and a borrowed `ParameterEvents` view. Event slices are bounded and sample-sorted;
+`Activated::process()` validates context/bounds and dimensions before checking
+event values against the active schema. A float cursor evaluates linear
+trajectories lazily without per-sample materialization.
 
 Per-call construction validates only facts that can change per callback without introducing hidden unbounded work:
 
 - callback frame count against activation min/max guarantees;
+- event context was validated for the same callback frame count;
 - every supplied safe channel slice has exactly that callback length.
 
 Stable endpoint/port translation should be resolved by runtime/adapter setup, not by rescanning all semantic endpoints with allocation or quadratic work in every audio callback.
@@ -134,9 +141,16 @@ Teardown should be idempotent at adapter boundaries where hosts may produce repe
 
 ## Parameters / state generations
 
-Canonical parameter/persistent state is **not implemented in the current runtime shell**.
+The current runtime shell owns validated canonical base parameter values and
+validates each block's derived automation view. It does not yet provide the final
+cross-domain `InstanceRuntime` synchronization contract: host gesture delivery,
+automation-to-base publication, coherent active state snapshots, or generation-
+checked state replacement.
 
-When added, framework instance state is authoritative; process automation/effective values are derived block views. A state load is prepared and validated off-thread, then published as one accepted generation. Stale completion cannot overwrite newer authority.
+When added, framework instance state remains authoritative; process
+automation/effective values remain derived block views. A state load is prepared
+and validated off-thread, then published as one accepted generation. Stale
+completion cannot overwrite newer authority.
 
 State save while active must use an explicitly documented snapshot consistency model and never serialize arbitrary live `Processor` fields.
 
@@ -164,6 +178,8 @@ When added:
 
 ## Validation status
 
-`crates/chassis-core/tests/conformance.rs` exercises the explicit API externally with deterministic processing, separate buffers, exact in-place buffers, reset/deactivation ownership, malformed activation, callback-size rejection, zero-frame behavior where no positive minimum is promised, and a compile-time `Send` assertion for the processor used by the future plugin path.
+`crates/chassis-core/tests/conformance.rs` exercises the explicit API externally with deterministic processing, separate buffers, exact in-place buffers, reset/deactivation ownership, malformed activation, callback-size rejection, zero-frame behavior where no positive minimum is promised, sample-accurate parameter set/linear trajectories, invalid event rejection before DSP, transport context, and a compile-time `Send` assertion for the future plugin path.
 
-This is only the first conformance slice. It does not yet prove parameters/state/events, adapters, FFI, host behavior, allocation guards, or production readiness.
+This is still a pre-alpha conformance slice. It does not yet prove state
+publication/generations, host event translation, adapters, FFI, host behavior,
+allocation instrumentation, or production readiness.

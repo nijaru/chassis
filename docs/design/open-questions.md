@@ -53,18 +53,28 @@ Do **not** generalize the current proof by allocating `Vec<ChannelBuffer>` on ev
 
 ### Process context
 
-`ProcessBlock<S>` currently carries:
+`ProcessBlock<S>` now carries:
 
 - actual frame count;
-- `ProcessMode` (`Realtime`, `BufferedRealtime`, `Offline` where supplied);
+- `ProcessContext` with `ProcessMode` (`Realtime`, `BufferedRealtime`, `Offline` where supplied);
+- optional block-start transport snapshot;
+- bounded, borrowed parameter events retaining nondecreasing source order;
 - borrowed safe channel views.
 
-The initial CLAP adapter currently emits only `ProcessMode::Realtime` and does not register the CLAP render extension. This is an explicit limitation, not a claim that offline mode maps automatically.
+The core event prototype supports instantaneous sets and lazy floating-point
+linear trajectories. `Activated::process()` validates event values against the
+active parameter schema before product DSP. It does not yet publish automation
+endpoints back into base state or provide a coherent active state-save snapshot.
+
+The initial CLAP adapter still emits only `ProcessMode::Realtime`, an unknown
+transport snapshot, and an empty parameter-event view; it does not register the
+CLAP render extension. This is an explicit limitation, not a claim that offline
+mode or CLAP event translation maps automatically.
 
 Still to add only when the corresponding semantic layer is implemented:
 
-- block-start transport snapshot;
-- parameter trajectories/events;
+- host-specific parameter/event translation and gesture semantics;
+- coherent automation/base-state publication;
 - note/MIDI/event views/sinks;
 - narrow realtime-safe output/host capabilities.
 
@@ -83,7 +93,7 @@ transport.
 Need to prove:
 
 - how UI/host edits update base state;
-- how per-block automation trajectories are constructed without polling every parameter/sample;
+- how the active runtime publishes automation endpoints without polling every parameter/sample;
 - how the post-automation current base value becomes observable;
 - how a multi-parameter state load publishes as one generation;
 - how state save while active obtains its documented cross-parameter consistency without blocking realtime;
@@ -213,7 +223,10 @@ Still required before calling native CLAP support usable in production:
 
 ### Event/parameter translation
 
-Still unimplemented. Prove CLAP's sample-sorted event stream, parameter values/modulation, note/event ports, state streams, and optional render mode without forcing CLAP-specific semantics into core.
+The core now accepts a borrowed, bounded sample-sorted parameter event view, but
+adapter translation is still unimplemented. Prove CLAP's sample-sorted event
+stream, parameter values/modulation, gestures, note/event ports, state streams,
+and optional render mode without forcing CLAP-specific semantics into core.
 
 ## Blocks VST3/AU claims
 

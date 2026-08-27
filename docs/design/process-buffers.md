@@ -44,6 +44,11 @@ Input-only and output-only views preserve generators, analyzers, event-oriented 
 
 Channel constructors accept the current callback frame count, validate that backing storage is long enough, and expose exactly that prefix. They never allocate.
 
+`ProcessConfig` also carries the activation-owned maximum number of normalized
+parameter events accepted per callback. Adapters choose that bound from their
+accepted host/product contract; zero is valid for an adapter that has no event
+projection yet.
+
 A short host/synthetic buffer is rejected with a typed `ChannelBufferError` before product DSP receives it.
 
 This slice does not attempt to infer or validate raw pointer aliasing because the existence of the safe Rust references is itself the post-validation boundary.
@@ -63,19 +68,30 @@ Products that benefit from out-of-place processing can use `input()` and `output
 
 ## ProcessBlock
 
-`ProcessBlock<'buffers, 'samples, S>` is the first borrowed realtime call type. It contains:
+`ProcessBlock<'buffers, 'samples, 'context, S>` is the first borrowed realtime call type. It contains:
 
 - actual frame count;
-- per-call `ProcessMode`;
+- per-call `ProcessContext` with `ProcessMode`;
+- block-start transport snapshot;
+- validated borrowed parameter event views;
 - a borrowed mutable slice of safe `ChannelBuffer<S>` views.
 
-Its constructor is framework-private. `Activated::process()` constructs the block after validating callback-varying dimensions.
+Its constructor is framework-private. `Activated::process()` first validates
+context, activation event bounds, and callback-varying dimensions, then checks
+event values against the active schema before product DSP receives the block.
 
 The block currently validates:
 
 - positive activation minimum when one was guaranteed;
 - activated maximum frame count;
+- the event context was validated for this exact callback frame count;
 - every supplied channel view has exactly the callback frame count.
+
+`ParameterEvents` validates a caller-supplied event count bound, finite values,
+canonical identifiers, and nondecreasing sample offsets without copying event
+storage. The active parameter schema then validates types and domains before
+product DSP. `FloatParameterCursor` evaluates set/linear trajectories lazily;
+it never expands a ramp into one event per sample.
 
 It intentionally does **not** rescan the full stable endpoint/schema mapping every callback. That mapping should be resolved once by adapter/runtime setup so high-channel-count processing does not gain hidden allocation or O(n²) semantic validation work.
 

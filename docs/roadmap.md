@@ -6,9 +6,14 @@ This roadmap is ordered by architectural proof, not feature count or release pro
 
 Chassis currently spans **late Phase 1 / early Phase 2** deliberately.
 
-The format-independent lifecycle/buffer conformance slice and first narrow `chassis-clap` adapter are locally validated. The adapter passes the current CLAP validator and a REAPER render smoke test, but is not production-qualified.
+The format-independent lifecycle/buffer conformance slice, typed parameter/state
+prototype, initial borrowed automation/context slice, and first narrow
+`chassis-clap` adapter are locally validated. The adapter passes the current CLAP
+validator and a REAPER render smoke test, but is not production-qualified.
 
-Parameter/state/event semantics remain intentionally behind the first lifecycle/buffer CLAP proof. This is not a roadmap reversal: exercising the smallest real host boundary first gives better evidence for the core ownership/buffer model before more semantic layers depend on it.
+Host-specific parameter/event translation and cross-domain state publication
+remain ahead. This is not a roadmap reversal: the core semantic contracts are
+being proven before adapters and synchronization layers depend on them.
 
 ## Phase 0 — semantic foundation
 
@@ -29,7 +34,9 @@ The initial core no longer encodes a CLAP dependency and remains usable outside 
 
 ## Phase 1 — conformance runtime without format complexity
 
-Status: lifecycle/buffer slice implemented and validated; parameter/state/event portions remain future work.
+Status: lifecycle/buffer and initial typed parameter/state/automation/context
+slices implemented and validated; host translation and publication semantics
+remain future work.
 
 Implemented/validated before CLAP work:
 
@@ -42,12 +49,17 @@ Implemented/validated before CLAP work:
 
 Still to add through the same conformance path:
 
-- typed parameters with stable keys;
-- block/sample-time automation trajectories;
-- minimal transport/process context;
-- canonical state document + one migration fixture;
-- state replacement tests;
+- host gesture semantics and automation-to-base-state publication;
+- one state migration fixture and generation/replacement tests;
+- active state-save consistency contract;
 - realtime allocation/work-bound instrumentation.
+
+Implemented in the current path:
+
+- typed parameters with stable keys and validated base values;
+- bounded deterministic canonical state document prototype;
+- borrowed sample-sorted parameter sets and lazy float set/linear trajectories;
+- optional block-start transport snapshot.
 
 Do not add background executors, generalized analyzers, voice allocation, immersive layouts, or elaborate tooling merely to make the conformance component look complete.
 

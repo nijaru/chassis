@@ -31,17 +31,19 @@ Processor
 
 Process<S>
   sample-representation-specific processing capability
-  process(ProcessBlock<S>)
+  process(ProcessBlock<S>) with context/automation
 
 Activated<P>
   immutable activation config + exclusive Processor
   canonical base ParameterStore
+  validated block context and automation boundary
   reset / process / consuming deactivate
 ```
 
 This is intentionally smaller than the eventual ergonomic API. It proves ownership,
-buffer, typed-parameter, and bounded-state semantics before automation, proc
-macros, GUI bindings, or adapters make the surface harder to change.
+buffer, typed-parameter, bounded-state, process-context, and automation semantics
+before host translation, proc macros, GUI bindings, or adapters make the surface
+harder to change.
 
 Do not add proc macros until the conformance component and first CLAP adapter show which declarations are genuinely repetitive.
 
@@ -79,7 +81,7 @@ impl chassis_core::runtime::Processor for MyProcessor {
 impl chassis_core::runtime::Process<f32> for MyProcessor {
     fn process(
         &mut self,
-        block: &mut chassis_core::process::ProcessBlock<'_, '_, f32>,
+        block: &mut chassis_core::process::ProcessBlock<'_, '_, '_, f32>,
     ) {
         for channel in block.buffers_mut() {
             // Use exact in-place storage directly, or explicitly copy a
@@ -160,11 +162,12 @@ When added, compatibility-relevant declarations remain explicit:
 - optional product smoothing policy.
 
 Rust field names and display labels are not persistent identity. The current
-store is deliberately a control/non-realtime authority; process-time event
-trajectories, host gestures, and atomic publication to `Processor` remain
-follow-up contracts. The processor's eventual parameter view will be derived
-from framework-owned base state plus current process events, not a second
-persistent store.
+store is deliberately a control/non-realtime authority. Process-time events are
+validated against that schema and exposed as borrowed sets/linear trajectories;
+host gesture translation, automation-to-base publication, and atomic
+publication to `Processor` remain follow-up contracts. The processor's eventual
+parameter view will be derived from framework-owned base state plus current
+process events, not a second persistent store.
 
 Nested/repeated groups should compose stable key prefixes. Repeated instances should use stable named identities when reordering may occur; raw array index is acceptable only when reordering is explicitly a compatibility break.
 
