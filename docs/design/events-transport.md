@@ -4,216 +4,191 @@ Status: design direction; public API not frozen.
 
 ## Goal
 
-Provide one coherent sample-accurate event model that works for effects and instruments without forcing every product to parse raw MIDI or every effect to care about note semantics.
+Provide sample-accurate process-time controls/events that work for effects and instruments without inventing ordering or transport semantics the source format did not provide.
 
-## Timeline model
+## Time model
 
-Process-time changes should be representable as events with a sample offset relative to the current block.
+Every process-time item Chassis normalizes has a block-relative sample offset or a block-start snapshot semantic.
 
-The core abstraction is conceptually:
+Relevant families include:
 
 ```text
-TimedEvent
-├── sample_offset
-└── Event
-    ├── parameter set / automation trajectory
-    ├── parameter modulation
-    ├── note on/off/choke/end
-    ├── note expression
-    ├── MIDI 1
-    ├── SysEx
-    ├── MIDI 2 / UMP (later or capability-gated)
-    ├── transport update
-    └── future typed extension events
+parameter automation trajectories
+parameter modulation
+note on/off/choke/end
+note expression
+raw MIDI / SysEx
+future MIDI 2 / UMP
+event/transport changes only where the backend actually supplies them
 ```
 
-Input events are presented in nondecreasing sample order. Output events emitted by a component must also preserve sample order.
+Do not require one giant materialized event enum/array merely for conceptual uniformity. The runtime can expose typed borrowed cursors plus optional merged/span views when that can be done without allocation or information loss.
 
-A single ordered timeline preserves relationships that separate parameter/note/MIDI iterators can otherwise obscure. Convenience filtered iterators/views can still be provided for products that only care about one event family.
+## Ordering authority
 
-## Block-start transport
+Ordering guarantees come from the source backend.
 
-The process context should expose the best-known transport state at sample zero of the block for the common case:
+- CLAP provides one input event list sorted in sample order. Preserve that order, including the backend's relative order for equal timestamps.
+- VST3 supplies parameter changes and `IEventList` separately, plus `ProcessContext`. It therefore does **not** provide one authoritative cross-family ordering between a parameter point and note/event at the same sample merely because both have offsets.
+- Other adapters must be reviewed similarly rather than forced into a CLAP-shaped total order.
 
-- playing/recording/pre-roll state;
+Chassis guarantees nondecreasing sample offsets within each source sequence and preserves stronger source ordering when it exists. It must not invent causal ordering between independent backend sequences at the same sample.
+
+A generic span helper may group all boundaries occurring at sample `N` and make their typed changes available for the subsequent audio span. If a product genuinely requires a total cross-family order at an identical sample, that is a capability requirement: an adapter lacking such source information cannot manufacture it faithfully.
+
+Output events are emitted in the order required by the target backend; where the target requires sample-sorted insertion, Chassis enforces/validates it.
+
+## Transport
+
+Expose the best-known block-start transport snapshot, with availability explicit for every field:
+
+- play/record/pre-roll state where available;
 - tempo;
-- song position in samples/seconds/beats where available;
+- song/sample/beat position;
 - time signature;
-- bar start/number where available;
-- loop range/state.
+- bar information;
+- loop/cycle range/state.
 
-A timestamped transport event later in the block updates that state from its sample offset onward. Products that do not need sample-accurate transport changes can read only the block-start snapshot.
+Do not imply intra-block transport changes universally. Core CLAP `clap_process` supplies a transport snapshot at sample zero and a sample-sorted event list; VST3 provides `ProcessContext` separately for the process call. If a backend/extension genuinely supplies timestamped transport changes, Chassis may expose them as a capability-specific timed source.
 
-Do not pretend a field is present when the host did not provide it. Transport fields should represent availability explicitly.
+Products needing only ordinary synchronization read the block snapshot. Products requiring intra-block tempo/transport changes can declare/check that capability rather than receiving fabricated events.
 
 ## Event ports
 
-Audio ports and event/note ports are separate concepts.
+Audio and event/note ports are distinct schemas.
 
-A component may have:
+A component may be:
 
-- audio only;
-- event/note input plus audio output (instrument);
-- event input and output with no audio (MIDI/note processor);
-- multiple event ports where target formats support them.
+- audio-only;
+- note/event input -> audio output instrument;
+- event-only MIDI/note processor;
+- multi-event-port where the backend supports it.
 
-Event ports need stable identity and direction similarly to audio ports, but their capabilities may differ by format.
+Event ports use stable product keys just like audio ports. Runtime/backend numeric indices are derived projections.
+
+Port capabilities should describe dialects/semantics supported rather than forcing every product to claim MIDI, notes, and every future event type.
 
 ## Semantic note events
 
-Chassis should expose semantic note events instead of forcing instruments to decode MIDI bytes for ordinary note handling.
+Ordinary instruments should receive semantic note events rather than decode MIDI bytes for note handling.
 
-A note address should preserve enough identity for modern hosts:
+A note target/address needs enough identity for modern hosts:
 
 ```text
 NoteAddress
-├── event port
+├── stable event port / derived runtime port
 ├── optional note id
 ├── optional channel
 └── optional key
 ```
 
-For a note-on, port/channel/key requirements can be stricter than for targeting/choke/expression events. Wildcard semantics should be modeled explicitly rather than overloading arbitrary sentinel integers in product code.
+Wildcard/unspecified targeting must use typed semantics rather than raw sentinel integers in product code.
 
-Note events should include at least:
+Initial semantic event families should leave room for:
 
-- note on;
-- note off;
-- choke/forced termination where the source format distinguishes it;
-- note end/output notification where useful;
+- note on/off;
+- forced termination/choke where supported;
+- note end/output notification where meaningful;
 - velocity;
-- tuning where the source format provides it.
+- tuning;
+- per-note expression.
 
-The exact cross-format subset and fallback rules need validation before the type is frozen.
+Do not freeze a least-common-denominator type until CLAP/VST3/AU/MIDI mappings are tested. Adapters expose only capabilities whose semantics they can preserve or whose degradation policy is explicit.
 
 ## Note expression
 
-Modern instrument support requires room for per-note expression from the beginning even if the first FX clients ignore it.
+Leave room from the beginning for per-note pressure, pitch/tuning, timbre/brightness, volume, pan, and format-defined expression dimensions.
 
-Common semantic expressions include pressure, tuning/pitch, timbre/brightness, volume, pan, and other host-defined or format-specific expression dimensions.
-
-Chassis should normalize common semantic expressions where mappings are well defined while retaining an escape hatch for format-specific data. Do not silently reinterpret one format's note-expression range as another's without a specified conversion.
+Normalize only when conversion semantics/ranges are specified. Keep an adapter extension path for source-specific data rather than silently mapping unlike ranges.
 
 ## Raw MIDI
 
-Raw MIDI remains first-class because many products need messages with no higher-level Chassis interpretation:
+Raw MIDI remains available for controller/program/vendor messages and utilities that need bytes rather than semantic notes.
 
-- CC/program/controller messages;
-- MIDI utilities;
-- SysEx;
-- vendor-specific data;
-- legacy host compatibility.
+MIDI data retains sample offset and event-port identity. SysEx payloads should be borrowed from host/process storage where possible; receiving them must not allocate on the callback.
 
-MIDI 1 messages should retain their event-port/cable identity and sample offset.
+MIDI 2/UMP remains on the roadmap. Do not down-convert information destructively merely to fit a MIDI-1-shaped core.
 
-SysEx data is borrowed from the process event buffer where possible; processing must not allocate merely to receive a SysEx event.
+## Parameter automation trajectories
 
-## MIDI 2
+Parameter automation is process-time control data but need not be represented as a literal mixed `Event` enum.
 
-MIDI 2/UMP belongs on the roadmap and the event model must leave room for it. Do not reduce incoming MIDI 2 to MIDI 1 if that loses information.
-
-Initial adapters may advertise only the event dialects that are actually implemented and validated.
-
-## Parameters in the event timeline
-
-Timestamped parameter base-value changes, automation trajectories, and modulation events participate in the same process timeline.
-
-The framework may additionally construct efficient parameter cursors/views so DSP does not search a heterogeneous event stream for every sample. That optimization must preserve the event ordering semantics.
-
-Parameter gesture begin/end is primarily a control/host communication concern. If a target format delivers gestures through the realtime event path, adapters can preserve them without requiring ordinary DSP to consume them.
-
-## Automation trajectories and ramps
-
-Chassis preserves the automation semantics supplied by the source format instead of flattening every change into a step event.
-
-The semantic parameter trajectory needs at least two operations:
+Chassis preserves source semantics at minimum as:
 
 ```text
 Set
-  at sample offset -> value changes immediately
+  sample offset -> target value
 
-LinearRamp
+Linear segment/ramp
   start sample/value -> end sample/value
 ```
 
-The representation may ultimately be exposed primarily through a parameter cursor/span API rather than as a literal public event enum, but the distinction is part of the framework contract.
+Adapter rules:
 
-Adapter behavior:
+- VST3 parameter queues are piecewise-linear approximations; preserve those segments.
+- Audio Unit explicit ramp events remain linear ramps with supplied duration/end value.
+- CLAP core parameter-value events are timestamped values without a ramp-duration primitive, so preserve them as sets unless another supported capability supplies richer semantics.
 
-- **VST3:** an `IParamValueQueue` is specified as a piecewise-linear approximation of the host automation curve. Consecutive points, including the implicit previous value at the start of a block, therefore become linear trajectory segments. Jumps remain representable by adjacent points as defined by VST3.
-- **Audio Unit:** a normal parameter event becomes `Set`; an explicit parameter-ramp event becomes a `LinearRamp` with the supplied duration and end value. A ramp may need continuation state if its duration crosses a process-block boundary.
-- **CLAP:** `CLAP_EVENT_PARAM_VALUE` is a timestamped value change and has no core ramp-duration primitive, so it becomes `Set` unless a future CLAP extension/source semantic explicitly conveys a trajectory.
+Never expand ramps into one allocated event per sample. Parameter cursors evaluate constant/linear spans lazily from bounded state.
 
-Adapters must not invent interpolation merely because another format uses it, and they must not discard an explicit ramp supplied by a format that has one.
+Host trajectory reconstruction and product smoothing remain separate. Chassis adds no product smoothing by default.
 
-Never expand a ramp into one heap-allocated event per sample. Parameter cursors/trajectories compute values or spans lazily using bounded process-time state.
+## Span processing
 
-### Interaction with product smoothing
-
-Host automation trajectory reconstruction and product smoothing are separate layers.
-
-Chassis should first reproduce the source automation trajectory correctly. Optional parameter smoothing is then a product-declared behavior applied to the control signal according to the chosen smoothing policy.
-
-The default is **no product smoothing unless the parameter declares or the DSP implements it**. This avoids silently altering host automation.
-
-A conventional smoothing helper may offer policies such as applying only to discontinuous changes or applying to every target change, but those semantics must be explicit before the API is stabilized. Products with custom control-rate behavior can consume the unsmoothed trajectory directly.
-
-## Event storage
-
-Process events must be borrowed or backed by bounded/preallocated storage. The audio callback cannot allocate in proportion to host event count.
-
-Adapters should provide an iterator/view over host events directly when practical. If normalization requires temporary storage or merging multiple backend event sources, allocate bounded scratch during activation and define overflow behavior.
-
-A host delivering more events than the configured bounded representation can hold must cause an explicit error/drop policy; silent memory growth on the realtime thread is not acceptable.
-
-## Output events
-
-Instruments and MIDI processors need a realtime-safe way to emit note/MIDI/parameter events to the host.
-
-The output sink should:
-
-- preserve sample offsets;
-- report capacity/rejection explicitly;
-- avoid allocation/blocking;
-- expose only event classes the active adapter can represent;
-- allow products to react when a host rejects or cannot represent an event.
-
-## Process segmentation helpers
-
-Many processors want to process contiguous audio ranges between event/trajectory boundaries. Chassis should provide or strongly consider a helper that yields spans conceptually like:
+A common ergonomic view can expose contiguous audio ranges bounded by any relevant change:
 
 ```text
-frames 0..17 with current parameter trajectory
-apply boundary/events at 17
+current state for frames 0..17
+boundary at 17:
+  parameter changes for 17
+  note/event changes for 17
 frames 17..64
-apply boundary/events at 64
 ...
 ```
 
-This is especially useful for sample-accurate instruments and automation without forcing a branch over the full event list for every sample.
+This groups by timestamp without claiming an undefined order between independent event families at one timestamp.
 
-A ramp need not create a boundary at every sample; the span exposes the trajectory needed to evaluate or vectorize it.
+Within a boundary, typed family views preserve the source order they actually possess. Products that only care about parameters do not pay to materialize notes/MIDI, and vice versa.
 
-Such helpers should be optional; block-based DSP can consume parameter trajectories or events differently.
+A ramp does not create a boundary at every sample; its cursor/trajectory remains evaluable/vectorizable across the span.
+
+## Storage and bounded work
+
+Prefer borrowed adapters/cursors over copying host event arrays.
+
+If a backend requires normalization/merge scratch, allocate it before processing from declared/observed activation requirements. Capacity/overflow behavior must follow the semantic importance of the data:
+
+- do not silently drop automation or note events merely because an arbitrary framework queue filled;
+- where loss would violate product correctness, fail/contain according to the adapter contract rather than produce knowingly wrong output;
+- display-only telemetry has different drop semantics and belongs to the telemetry contract, not this input-event path.
+
+The processor never triggers unbounded allocation merely because a host delivered many events. Where the host API permits querying event count, validate/bound work against the current process call and implementation limits with an explicit failure path.
+
+## Output events
+
+Instruments/MIDI processors need a realtime-safe output sink that:
+
+- preserves sample offsets;
+- reports target rejection/capability limits;
+- does not allocate/block;
+- exposes only event classes that can be represented;
+- keeps product ownership of retry/drop policy when a target cannot accept output.
+
+For semantically essential output, silent drop is not an acceptable generic framework default.
 
 ## Compatibility principle
 
-Adapters may lose capabilities only when the target format/host cannot represent them. Any degradation should be explicit and testable.
+Adapters lose semantics only when the target cannot represent them, and any degradation is explicit/capability-checked.
 
-Examples:
-
-- converting semantic note events to MIDI 1 where that is the only host path can be valid if the semantics survive;
-- discarding note IDs or per-note modulation silently is not valid when the product declares that capability as required;
-- block-quantizing sample-accurate automation without disclosure is not valid;
-- replacing a source-defined linear automation segment with an arbitrary product/framework ramp is not valid.
+Valid examples may include semantic notes -> MIDI 1 when identity/expression loss is acceptable to the declared product capability. Invalid examples include silent block quantization of sample-accurate automation, discarding required note IDs, inventing cross-family order at equal offsets, or replacing source-defined ramps with an unrelated framework curve.
 
 ## Initial implementation
 
-The first conformance effect needs only:
+The first FX conformance path needs only:
 
-- parameter set and linear-trajectory semantics;
-- process/block-start transport;
-- the ordered event abstraction;
-- bounded output plumbing sufficient for host communication tests.
+- parameter set/linear-trajectory cursors;
+- block-start transport snapshot;
+- deterministic span segmentation by sample boundary;
+- no promise of one total cross-family event ordering.
 
-Note/MIDI types should be designed before stable publication, then proven by an instrument client later.
+Design stable event-port/note identities before public API stabilization; prove them with an instrument later.
