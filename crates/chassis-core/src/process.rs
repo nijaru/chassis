@@ -1,6 +1,6 @@
 //! Format-independent processor activation and per-call scheduling contracts.
 
-use core::fmt;
+use core::{fmt, num::NonZeroU32};
 
 /// Scheduling/quality context for one processing call.
 ///
@@ -27,34 +27,38 @@ pub enum ProcessMode {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ProcessConfig {
     sample_rate: f64,
-    min_frames: u32,
-    max_frames: u32,
+    guaranteed_min_frames: Option<NonZeroU32>,
+    max_frames: NonZeroU32,
 }
 
 impl ProcessConfig {
     /// Construct validated activation/resource bounds.
     ///
+    /// `guaranteed_min_frames` is `None` when a backend does not promise a
+    /// positive minimum. That is distinct from whether a particular backend may
+    /// legally issue a zero-frame process call.
+    ///
     /// # Errors
     ///
     /// Returns [`ProcessConfigError::InvalidSampleRate`] when `sample_rate` is
     /// non-finite or not positive. Returns
-    /// [`ProcessConfigError::InvalidFrameRange`] when `max_frames` is zero or
-    /// `min_frames` is greater than `max_frames`.
+    /// [`ProcessConfigError::InvalidFrameRange`] when a guaranteed minimum is
+    /// greater than `max_frames`.
     pub fn new(
         sample_rate: f64,
-        min_frames: u32,
-        max_frames: u32,
+        guaranteed_min_frames: Option<NonZeroU32>,
+        max_frames: NonZeroU32,
     ) -> Result<Self, ProcessConfigError> {
         if !sample_rate.is_finite() || sample_rate <= 0.0 {
             return Err(ProcessConfigError::InvalidSampleRate);
         }
-        if max_frames == 0 || min_frames > max_frames {
+        if guaranteed_min_frames.is_some_and(|minimum| minimum > max_frames) {
             return Err(ProcessConfigError::InvalidFrameRange);
         }
 
         Ok(Self {
             sample_rate,
-            min_frames,
+            guaranteed_min_frames,
             max_frames,
         })
     }
@@ -65,18 +69,18 @@ impl ProcessConfig {
         self.sample_rate
     }
 
-    /// Return the minimum frame count advertised for this activation.
+    /// Return a positive lower block-size guarantee when the backend has one.
     ///
-    /// Zero is valid when a backend cannot promise a positive minimum or may
-    /// issue a legal zero-frame callback.
+    /// `None` means no positive minimum is promised; it does not by itself say
+    /// whether a zero-frame process call is legal.
     #[must_use]
-    pub const fn min_frames(self) -> u32 {
-        self.min_frames
+    pub const fn guaranteed_min_frames(self) -> Option<NonZeroU32> {
+        self.guaranteed_min_frames
     }
 
-    /// Return the maximum frame count provisioned for this activation.
+    /// Return the non-zero maximum frame count provisioned for this activation.
     #[must_use]
-    pub const fn max_frames(self) -> u32 {
+    pub const fn max_frames(self) -> NonZeroU32 {
         self.max_frames
     }
 }
@@ -86,7 +90,7 @@ impl ProcessConfig {
 pub enum ProcessConfigError {
     /// Sample rate was zero, negative, NaN, or infinite.
     InvalidSampleRate,
-    /// Frame bounds were inconsistent or had a zero maximum.
+    /// A known minimum block size exceeded the maximum.
     InvalidFrameRange,
 }
 
@@ -95,7 +99,7 @@ impl fmt::Display for ProcessConfigError {
         match self {
             Self::InvalidSampleRate => formatter.write_str("sample rate must be finite and positive"),
             Self::InvalidFrameRange => {
-                formatter.write_str("frame range must have max > 0 and min <= max")
+                formatter.write_str("guaranteed minimum frame count must not exceed maximum")
             }
         }
     }
@@ -108,25 +112,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rejects_invalid_values() {
+    fn rejects_invalid_sample_rate() {
+        let max_frames = NonZeroU32::new(512).expect("test maximum is non-zero");
         assert_eq!(
-            ProcessConfig::new(0.0, 0, 512),
+            ProcessConfig::new(0.0, None, max_frames),
             Err(ProcessConfigError::InvalidSampleRate)
         );
+    }
+
+    #[test]
+    fn rejects_minimum_above_maximum() {
+        let minimum = NonZeroU32::new(1024).expect("test minimum is non-zero");
+        let maximum = NonZeroU32::new(512).expect("test maximum is non-zero");
+
         assert_eq!(
-            ProcessConfig::new(48_000.0, 1024, 512),
+            ProcessConfig::new(48_000.0, Some(minimum), maximum),
             Err(ProcessConfigError::InvalidFrameRange)
         );
     }
 
     #[test]
-    fn accepts_zero_minimum_and_variable_blocks() {
-        let config = ProcessConfig::new(48_000.0, 0, 2048)
+    fn accepts_unknown_minimum() {
+        let maximum = NonZeroU32::new(2048).expect("test maximum is non-zero");
+        let config = ProcessConfig::new(48_000.0, None, maximum)
             .expect("test configuration is valid");
 
         assert_eq!(config.sample_rate(), 48_000.0);
-        assert_eq!(config.min_frames(), 0);
-        assert_eq!(config.max_frames(), 2048);
+        assert_eq!(config.guaranteed_min_frames(), None);
+        assert_eq!(config.max_frames(), maximum);
     }
 
     #[test]
