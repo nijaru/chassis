@@ -27,11 +27,15 @@ Target desktop platforms are macOS, Windows, and Linux where each export format 
 
 ## Backend strategy
 
-The first adapter uses the published Clack 0.1.1 release at the low-level CLAP boundary. Clack's repository is already developing 0.2.0, but that version is not currently published on crates.io, so Chassis deliberately stays on the reproducible registry release rather than introducing a git dependency solely for unreleased API changes. [clap-wrapper](https://github.com/free-audio/clap-wrapper) remains the preferred initial route to VST3/AUv2/AUv3 once the native CLAP semantic path is qualified.
+The first adapter uses Clack at the low-level CLAP boundary, pinned to exact revision `c5975f9f89f0953b00768680357985d46178078a`.
 
-Clack/CLAP types remain outside `chassis-core`. The initial `chassis-clap` code uses Clack's safe audio API and owns no raw CLAP pointer dereference itself. Backend qualification still requires local build/test, CLAP validation, lifecycle stress, and real-host testing.
+This git pin is an intentional safety exception. The latest published Clack release available during the adapter audit, 0.1.1, has an acknowledged plugin-side reentrancy UB bug affecting real hosts including Bitwig and `clap-wrapper`. The pinned revision contains the subsequent reentrancy fix and later hardening. Chassis prefers returning to a normal crates.io release once a suitable safety-fixed release is published and qualified.
 
-See [the Clack 0.1.1 adapter audit](docs/research/clack-0.1.1-adapter-audit.md).
+[clap-wrapper](https://github.com/free-audio/clap-wrapper) remains the preferred initial route to VST3/AUv2/AUv3 once the native CLAP semantic path is qualified.
+
+Clack/CLAP types remain outside `chassis-core`. The initial `chassis-clap` code uses Clack's safe audio API and owns no raw CLAP pointer dereference itself. Backend qualification still requires local build/test, dependency-source review, CLAP validation, lifecycle stress, and real-host testing.
+
+See [the pinned Clack adapter audit](docs/research/clack-pinned-adapter-audit.md).
 
 ## Default effect convention
 
@@ -92,7 +96,7 @@ examples/
 
 The first CLAP slice maps factory/main-thread construction, activation, f32 stereo processing, reset, and deactivation onto the existing Chassis runtime. It deliberately stops before parameters/state, transport/events, render mode, f64, sidechains/multibus, GUI, or packaging.
 
-`chassis-core` remains std-only. `chassis-clap` is the first crate with third-party dependencies and pins published Clack 0.1.1 exactly while the adapter contract is being qualified.
+`chassis-core` remains std-only. `chassis-clap` is the first crate with third-party dependencies and consumes one full-SHA pinned Clack source while the adapter contract is being qualified.
 
 ## Validation
 
@@ -108,7 +112,9 @@ cargo deny check
 cargo machete
 ```
 
-The current CLAP slice was authored in an environment without a Rust toolchain, so it must not be described as green until those commands regenerate/review `Cargo.lock` and pass locally. After that, build/package the conformance export and run CLAP-native validation before treating the adapter as qualified.
+The current CLAP slice was authored in an environment without a Rust toolchain, so it must not be described as green until those commands regenerate/review `Cargo.lock` and pass locally. In particular, confirm the lockfile resolves the exact Clack git revision and review its transitive source/license tree.
+
+After that, build/package the conformance export and run CLAP-native validation before treating the adapter as qualified.
 
 Use Miri/model tests/sanitizers/native validators as the relevant unsafe/adapters are implemented. Do not describe an unexecuted check as passing.
 
