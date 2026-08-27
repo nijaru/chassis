@@ -14,21 +14,23 @@ The first manual API now exists:
 - sample processing is a separate `Process<S>` capability;
 - `Activated<P>` owns the processor + immutable activation config and consumes itself on deactivation.
 
+The first CLAP adapter now exercises this ownership split directly. Clack requires its audio processor to be `Send`, so `chassis-clap` places `Send` on the concrete processor at the deployment boundary rather than adding it to `chassis-core::Processor` globally.
+
 This resolves the basic ownership shape but does **not** freeze trait spelling/signatures.
 
 Before promotion, still prove:
 
-- cleanup of failed/partial activation through real adapter sequences;
+- cleanup of failed/partial activation through real adapter/host sequences;
 - semantic whole-I/O policy beyond structural port presence;
 - how the eventual framework `InstanceRuntime` adds canonical parameter/state authority without turning into a giant shared object;
 - whether any additional lifecycle capability is genuinely required by CLAP/VST3/AU;
 - f32/f64 capability advertisement/dispatch using one processor architecture.
 
-Do not add derives/macros yet. The integration conformance effect uses this explicit API directly; the first CLAP adapter should be the next major ergonomic test.
+Do not add derives/macros yet. The integration conformance effect and first CLAP export use this explicit API directly.
 
 ### Safe process buffer view
 
-The first implementation now exposes:
+The core implementation exposes:
 
 - exact in-place input/output with one mutable Rust slice;
 - disjoint input/output views;
@@ -37,15 +39,17 @@ The first implementation now exposes:
 - bounded explicit copy-to-output convenience for ordinary in-place DSP;
 - callback slice-length validation without unsafe code in `chassis-core`.
 
+The first CLAP proof maps Clack `ChannelPair::InputOutput` and `ChannelPair::InPlace` directly into those safe Chassis relationships. It uses a fixed stack `[ChannelBuffer; 2]` for the one-stereo-main proof and performs no process-time heap allocation in Chassis adapter code.
+
 Remaining freeze gates:
 
-- adapter setup representation that resolves stable endpoints to host buffers without per-callback allocation/O(n²) lookup;
+- general adapter setup representation for arbitrary ports/channels without per-callback allocation or lifetime-erasing unsafe scratch;
 - ergonomic higher-level port/bus views for stereo main, sidechain, multiple buses, and non-one-to-one routing;
 - target-specific null/inactive/zero-buffer legality;
 - f64 host dispatch/advertisement;
 - benchmark copy/conversion paths before adding ownership/unsafe complexity to remove them.
 
-Adapters must prove aliasing before constructing safe references.
+Do **not** generalize the current proof by allocating `Vec<ChannelBuffer>` on every process call. If the current slice-shaped `ProcessBlock` makes a correct arbitrary-layout adapter awkward, revisit the core borrowing shape using adapter evidence rather than hiding the mismatch.
 
 ### Process context
 
@@ -54,6 +58,8 @@ Adapters must prove aliasing before constructing safe references.
 - actual frame count;
 - `ProcessMode` (`Realtime`, `BufferedRealtime`, `Offline` where supplied);
 - borrowed safe channel views.
+
+The initial CLAP adapter currently emits only `ProcessMode::Realtime` and does not register the CLAP render extension. This is an explicit limitation, not a claim that offline mode maps automatically.
 
 Still to add only when the corresponding semantic layer is implemented:
 
@@ -97,41 +103,89 @@ Freeze only after:
 
 Changing the format before v1 is expected.
 
-## Blocks CLAP production proof
+## CLAP adapter — implemented proof, not qualified
 
 ### Clack dependency/version surface
 
-Audit the exact Clack release used, including:
+The first adapter pins:
 
-- unsafe/lifetime boundary;
-- allocation/locks on process path;
-- extension coverage needed by Chassis;
-- thread-domain model;
-- transitive dependency/license/source tree.
+- `clack-plugin = 0.2.0`;
+- `clack-extensions = 0.2.0` with `audio-ports` + plugin-side support.
 
-Keep Clack types confined to `chassis-clap`.
+The reviewed Clack 0.2 workspace is Edition 2024, declares Rust 1.85 MSRV, uses `clap-sys 0.5.0`, and is MIT/Apache-2.0 licensed. See `docs/research/clack-0.2-adapter-audit.md`.
+
+Still required before production qualification:
+
+- regenerate/review the exact crates.io dependency graph in `Cargo.lock`;
+- inspect the exact registry source selected by the lockfile rather than relying only on upstream `main`;
+- deeper audit of Clack unsafe/lifetime and panic containment around the process/extension path;
+- allocation/locking/reclamation audit of the exact process path;
+- advisory/source/license checks after Cargo resolves the graph.
+
+Keep Clack types confined to `chassis-clap` and export/test glue.
 
 ### CLAP lifecycle mapping
 
-Prove create/init/activate/start/process/stop/deactivate/destroy and invalid/partial sequences against the Chassis runtime state machine.
+The first implementation maps:
 
-Need explicit containment for adapter panics/invalid host input and no unwind across ABI.
+```text
+factory/main-thread construction -> Chassis Component
+CLAP activate                    -> Chassis activate
+CLAP process                     -> Activated::process
+CLAP reset                       -> Activated::reset
+CLAP deactivate                  -> Activated::deactivate
+```
 
-The current `Activated` shell is a semantic proof, not evidence that CLAP lifecycle mapping is already correct.
+Clack supplies the CLAP create/init/start/stop/destroy machinery around these types. The Chassis audio processor currently uses Clack's default no-op start/stop behavior because core has no separate semantic start/stop state yet.
+
+Need actual evidence for:
+
+- create/init/activate/start/process/stop/deactivate/destroy legal sequences;
+- activation failure cleanup;
+- repeated activation/deactivation;
+- invalid/partial host sequences and panic containment;
+- processor movement between CLAP audio threads (`Send`) without simultaneous mutation;
+- module unload once future callbacks/tasks exist.
+
+The adapter existing in source is not evidence these sequences are qualified.
 
 ### Buffer mapping
 
-The CLAP adapter must prove its host-pointer validation and endpoint resolution before constructing `ChannelBuffer` views:
+The first proof intentionally supports exactly:
 
-- exact alias versus disjoint ranges;
-- no overlapping output references;
-- active port/channel counts and frame bounds;
-- setup-time dense mapping with no hidden per-callback allocation;
-- invalid host data contained before safe Rust references exist.
+- one stereo main input;
+- one stereo main output;
+- f32;
+- exact in-place or disjoint paired channels.
+
+It rejects missing/asymmetric required main channels, wrong port counts, non-stereo main data, non-f32 data, invalid frame bounds, and Chassis callback-bound failures before product DSP proceeds.
+
+Still required:
+
+- sidechain/aux/multiple buses;
+- stable setup-time endpoint mapping for arbitrary configurations;
+- CLAP audio-port activation/configuration negotiation;
+- f64;
+- silence/constant-mask semantics if useful;
+- synthetic malformed-buffer tests at the lowest safe boundary Clack exposes;
+- proof that generalization retains bounded no-allocation callback work.
+
+### Export/package/host qualification
+
+`examples/clap-conformance` is now an rlib/cdylib export probe. It is not yet a packaged/validated `.clap` product artifact.
+
+Before calling native CLAP support usable:
+
+- local fmt/test/clippy/deny/machete all green with updated lockfile;
+- build the export on a supported platform;
+- package it according to CLAP platform conventions;
+- run current `clap-validator` and lifecycle/buffer stress;
+- smoke-test at least one real CLAP host;
+- record exact validator/host/toolchain versions.
 
 ### Event/parameter translation
 
-Prove CLAP's sample-sorted event stream, parameter values/modulation, note/event ports, state streams, and optional render mode without forcing CLAP-specific semantics into core.
+Still unimplemented. Prove CLAP's sample-sorted event stream, parameter values/modulation, note/event ports, state streams, and optional render mode without forcing CLAP-specific semantics into core.
 
 ## Blocks VST3/AU claims
 
@@ -151,6 +205,8 @@ Replace/patch/own a native adapter only when a concrete wrapper limitation justi
 ### Export identity manifest
 
 Finalize manifest syntax and generate-once/freeze behavior before any product ships. Import paths for legacy IDs and byte-order golden fixtures are required.
+
+The current `ClapStereoEffect::{CLAP_ID, CLAP_NAME}` contract is temporary adapter-proof metadata and must not become the long-term duplicated identity source merely because it exists first.
 
 ## GUI freeze gates
 
@@ -187,7 +243,7 @@ Core must remain compatible now, but instrument helpers wait for a real instrume
 
 Before stable instrument claims, prove note identity, expression, MIDI fallback, multiple event/audio outputs, output-event capacity/rejection, and standalone behavior.
 
-The current input-only/output-only buffer forms are necessary groundwork, not an instrument-support claim.
+The current input-only/output-only buffer forms are necessary groundwork, not an instrument-support claim. The fixed stereo CLAP proof is deliberately not an instrument API.
 
 ## Surround / ambisonics / immersive
 
