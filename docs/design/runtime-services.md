@@ -4,40 +4,29 @@ Status: design direction; public API not frozen.
 
 ## Goal
 
-Provide common realtime/control infrastructure that a large fraction of effects and instruments need, while keeping product DSP semantics owned by the product.
+Provide common realtime/control infrastructure when the same semantics recur across effects and instruments, without making every supported service part of the initial core or hiding lifecycle costs.
 
-This includes host-visible latency/tail state, bypass integration, process activity status, bounded realtime communication, background work, and diagnostics hooks.
+Likely common areas are latency/tail metadata, bypass integration, realtime telemetry/control, and eventually background preparation. Each service needs one owner, explicit lifetime, and a product that does not use it should pay essentially no runtime cost.
 
 ## Latency
 
-Latency is a property of the active processing configuration, not an arbitrary value the audio thread mutates without coordination.
+Latency belongs to an accepted/active processing configuration, not to an unconstrained mutable integer on the audio thread.
 
-Use samples as the canonical Chassis unit:
+Use samples as the canonical semantic unit:
 
 ```text
 LatencySamples(u32)
 ```
 
-Adapters convert to target units such as Audio Unit seconds where necessary.
+Adapters convert where a backend requires another representation.
 
-A processor receives the resolved latency in its activation configuration. If a parameter/state change requires a different latency, the framework should coordinate the host-specific restart/reactivation path before the new latency becomes active.
+If a change requires different host-visible latency, Chassis coordinates the adapter-specific reconfiguration/restart path before the new latency becomes authoritative. Product DSP must not call arbitrary host APIs from `process`.
 
-Products should prefer a stable/worst-case latency across ordinary realtime parameter changes where practical. Apple explicitly notes that variable latency is difficult for hosts to compensate safely. Chassis should not encourage dynamic latency merely because one format can signal it.
-
-Common product patterns:
-
-- zero latency;
-- fixed latency derived from sample rate/configuration;
-- fixed maximum/worst-case latency while a lookahead/quality parameter changes internally;
-- latency change requiring host restart/reactivation.
-
-The framework can provide a control-domain request such as `request_reconfigure`/`latency_changed`, but the audio processor must not directly call arbitrary host APIs.
+Prefer stable/worst-case latency across ordinary realtime parameter changes when that is sonically/CPU practical; dynamic latency is a capability, not a convention to encourage.
 
 ## Tail
 
-Tail semantics are separate from latency.
-
-Canonical model should support at least:
+Tail is distinct from latency. A likely common semantic model is:
 
 ```text
 Tail::None
@@ -45,194 +34,111 @@ Tail::FiniteSamples(u64)
 Tail::Infinite
 ```
 
-Adapters translate to seconds/samples/format-specific infinite values.
-
-A reverb or delay may change tail duration with parameters. The framework should provide a non-RT host notification path where the target format supports tail changes.
-
-Tail reporting is metadata about potential output after input goes silent; it does not replace product DSP's own silence/activity detection.
-
-## Process activity/status
-
-The semantic status returned from `Processor::process` should be small and portable.
-
-Likely core statuses:
-
-```text
-Continue
-ContinueIfNotQuiet
-Tail
-Sleep
-```
-
-These map naturally to CLAP. Formats that do not expose equivalent scheduling hints can safely map them to successful processing while using latency/tail metadata where appropriate.
-
-`Sleep` is an optimization hint/capability, not permission to discard required future output. Products that do not implement correct silence/tail detection can always return `Continue`.
-
-A process failure should not be the normal control-flow mechanism. Activation/configuration validation should make most failures impossible once realtime processing starts. Adapter boundaries still need a defined fail-safe for panic/invalid host data, typically discard/silence output and report diagnostics without unwinding across FFI.
+Tail reporting is metadata about potential output after input stops. It does not replace the product's own silence/activity logic.
 
 ## Bypass
 
-Bypass exists in multiple host APIs and is common enough for Chassis to normalize, but Chassis should not force one audio crossfade/DSP bypass algorithm.
+Normalize host-visible bypass identity/timing where formats support it, but do not force one bypass DSP algorithm.
 
-A product can declare a canonical bypass control/capability. Adapters expose it through the target format's preferred mechanism (for example a bypass-marked parameter or Audio Unit bypass property) where possible.
+Product policy may require transparent copy, latency preservation, tail preservation, a crossfade, or custom processing. Reusable helpers can graduate into Chassis after repeated products demonstrate stable semantics.
 
-The processor receives bypass changes with the same timing guarantees as other process-time control changes when the host provides them.
+Host bypass is not the same thing as a product A/B switch, module bypass, or dry/wet control.
 
-Product policy decides what bypass means sonically:
+## Processing activity hints
 
-- transparent copy/input routing;
-- latency-preserving bypass;
-- tail-preserving bypass;
-- wet processing suspended after transition;
-- custom crossfade to avoid discontinuities.
+Do not make CLAP-style scheduling return values part of the first core `Processor` contract merely because CLAP exposes them. VST3/AU do not share the same model.
 
-Chassis should provide reusable latency-preserving/crossfade helpers later if repeated real products show a stable common implementation, but bypass DSP is not hard-coded into core.
-
-Host bypass must not be conflated with a product's separate A/B, module bypass, or dry/wet controls.
+Initially, a processor can conservatively remain active. If real products and adapters benefit from a portable activity semantic, define the smallest cross-format abstraction then and let adapters degrade conservatively where unsupported.
 
 ## Realtime telemetry
 
-Meters, gain reduction, scopes, analyzers, voice counts, and diagnostics often need audio-thread -> UI/control communication.
+Meters, gain reduction, scopes, analyzers, and diagnostics commonly need audio -> UI/control communication.
 
-Chassis should provide standard bounded primitives rather than each product creating ad hoc atomics/ring buffers.
+Two reusable classes are likely:
 
-Two common classes:
+### Latest-value publication
 
-### Latest-value telemetry
+For observations where intermediate samples may be dropped intentionally, such as peak/RMS, gain reduction, voice counts, or counters. Use atomics or another measured constant-time representation whose ownership is explicit.
 
-For values where only the newest observation matters:
+### Ordered stream publication
 
-- peak/RMS meter values;
-- gain reduction;
-- playhead-derived display values;
-- CPU/voice counters.
+For scopes, analyzer frames, or event traces. Use a bounded queue with a policy declared by the producer/consumer contract. Display telemetry commonly drops/coalesces when full; the audio thread never waits for the UI.
 
-Use atomic/latest-value publication where the type can be represented safely and cheaply. The consumer can miss intermediate values by design.
+Capacity is not an arbitrary magic framework constant. It is selected from the update rate, consumer cadence, payload size, and acceptable loss/latency, then allocated before realtime processing.
 
-### Stream telemetry
+## Control -> realtime publication
 
-For ordered sample/block data:
+Structural DSP changes may need prepared non-RT data installed at a block boundary: FIR kernels, impulse responses, wavetables, sample maps, or compiled processing structures.
 
-- waveform/scope points;
-- analyzer input frames;
-- event traces.
+The preferred shape is immutable prepared data plus a typed publication mechanism. Preparation/allocation occurs off the audio thread; adoption on the processor is bounded.
 
-Use a bounded single-producer/single-consumer or otherwise explicitly modeled queue. Queue-full behavior is part of the API, typically dropping/coalescing display-only telemetry rather than ever blocking the audio thread.
+The design must name:
 
-Do not pretend display telemetry is lossless realtime transport unless the product explicitly needs and provisions that guarantee.
+- who owns the currently active object;
+- who owns a pending replacement;
+- what happens if another replacement arrives first;
+- how an instance generation prevents stale work from publishing after reset/reload/destruction;
+- where the replaced object is finally destroyed.
 
-## Control messages to realtime
+Never let `Arc`/box/reference-count release accidentally perform an unbounded destructor on the audio thread. Deferred reclamation is part of the abstraction, not an afterthought.
 
-Non-parameter structural DSP changes may need control/main/background -> processor delivery.
+Avoid an untyped `Box<dyn Any>` queue as the primary mechanism.
 
-Examples:
+## Background preparation
 
-- swap a newly built FIR kernel;
-- install a decoded impulse response;
-- replace a wavetable/sample map snapshot;
-- switch a compiled processing graph that does not require host reactivation.
+Background work is useful for some products—IR/sample decoding, expensive kernel construction, analysis, resource indexing—but it is **not required by most simple effects**, so it is not a v0.1 core prerequisite.
 
-The conventional model should publish immutable/prepared data across a bounded block-boundary mechanism. Preparation/allocation happens off-thread; the processor performs only bounded pointer/handle adoption at a defined safe point.
+When Chassis adds a task abstraction, its lifetime must be designed before its executor implementation.
 
-Avoid a generic `Box<dyn Any>` message queue that hides allocation, type mismatches, or unbounded ownership destruction on the realtime thread.
+### No implicit process-global executor
 
-Likely implementation directions include typed bounded mailboxes and/or immutable snapshot handles. Exact primitives should be selected after the conformance component exercises realistic swaps.
+Do not create a process-global fallback thread pool merely because sharing threads is efficient. In a plugin dynamic library, process/module unload, last-instance teardown, callbacks into unloaded code, and worker joining become correctness concerns.
 
-Destruction of a large replaced object must not accidentally occur on the audio thread. A reclamation/deferred-drop path is part of any snapshot-swap abstraction.
+Acceptable future directions include:
 
-## Background work
+- use a host-provided worker/thread-pool capability when its lifecycle contract is sufficient;
+- a Chassis module/runtime object whose lifetime is explicitly tied to loaded plugin code and which shuts down only after all instances/tasks are gone;
+- an instance-owned worker for a product that explicitly accepts that cost;
+- standalone/application-owned execution supplied by the outer application.
 
-Background work is common enough for a framework convention:
+The product-facing task API should not require knowing which executor backs it, but Chassis must not hide an executor whose ownership cannot be stated.
 
-- file/sample/IR decoding;
-- expensive coefficient/filter/kernel construction;
-- analysis;
-- preset/resource indexing;
-- non-realtime network/licensing operations in optional product layers;
-- deferred destruction/reclamation.
+### Task generations and cancellation
 
-The initial abstraction should expose a bounded task service to `MainThread`/control code and, for carefully defined fixed task types, a realtime-safe dispatch path.
+Every task belongs to an instance/generation. Replacement, state load, deactivation, or destruction defines whether the task remains valid.
 
-Implementation strategy may vary by deployment:
+A completion must prove it still targets the current generation before publication. Cancellation is not equivalent to guaranteed immediate termination; teardown must remain safe even if a task notices cancellation late.
 
-```text
-CLAP plugin
-  -> host thread-pool extension when suitable/available
-  -> Chassis fallback executor otherwise
+No task calls directly into freed editor/MainThread/Processor state. Results publish through owned handles/snapshots/messages whose receiver may reject stale generations.
 
-VST3/AU projection
-  -> Chassis process-wide fallback executor unless wrapper/native host service exists
-
-standalone/application
-  -> Chassis-owned executor/runtime
-```
-
-The product API should not depend on whether a particular host supplied the workers.
-
-### Executor scope
-
-Do not create an unbounded dedicated thread pool per plugin instance by convention. A DAW may instantiate hundreds of plugins.
-
-A process-wide/shared Chassis executor with per-instance bounded ownership/cancellation is the preferred fallback direction. Products needing a dedicated realtime-adjacent thread can opt into an explicit specialized service later.
-
-### Cancellation/lifetime
-
-Tasks belong to an instance/domain and must not call into destroyed plugin state.
-
-Framework task handles should support:
-
-- cancellation at teardown/state replacement;
-- completion publication through safe handles;
-- no callback into freed `MainThread`/editor objects;
-- deterministic behavior for offline rendering where asynchronous completion would otherwise make output depend on wall-clock scheduling.
-
-Offline product DSP must not assume an async task happens to finish before a future block. Required render data must be prepared before processing or use a deterministic synchronous/non-RT preparation barrier.
+Offline rendering cannot depend on wall-clock races. Data required for deterministic output must be prepared before rendering or behind an explicit non-RT barrier.
 
 ## Main-thread scheduling
 
-Adapters should expose a semantic `schedule_main`/callback facility where the host/platform can provide it. This is needed for:
+Adapters may expose a semantic main-thread scheduling capability where the host/platform supports it. The adapter owns the definition of the host's legal main/control thread; product code must not guess from OS thread IDs.
 
-- editor/control updates;
-- host notifications that are main-thread-only;
-- completing background operations that change canonical state.
+Main-thread scheduling is useful for host notifications, editor/control updates, and accepting completed background work into canonical state.
 
-If a target host has unusual "logical main thread" behavior through a wrapper, the adapter owns that compatibility issue. Product code should not inspect OS thread IDs to guess host legality.
+## Diagnostics
 
-## Logging and diagnostics
+Non-RT code can use ordinary structured logging. Realtime diagnostics use preallocated/bounded counters or events and defer formatting/I/O.
 
-Chassis should eventually provide structured diagnostics with two paths:
+Do not synchronously format/log from the audio callback.
 
-- ordinary non-RT logging through Rust/application/host logging integrations;
-- realtime-safe diagnostics via bounded/preallocated events/counters.
-
-Never route arbitrary formatted logging synchronously from the audio callback. Formatting/IO may allocate or block.
-
-Format adapters can bridge non-RT diagnostics to host logging facilities such as CLAP's log extension where useful.
-
-The validation build may enable stricter diagnostics and invariant counters than production release builds.
-
-## Timers / file-descriptor callbacks
-
-CLAP exposes host timer and POSIX-FD support, but these are not universal plugin concepts and should not be mandatory core services.
-
-A later capability layer can expose timers/event-loop integration where a product or GUI needs them, with adapters mapping when available and falling back to toolkit/platform mechanisms when appropriate.
+FFI adapters need containment for panics or invalid host input so unwinding never crosses a foreign ABI. The exact fallback—silence/discard/status/diagnostic—belongs to the format contract and must be tested.
 
 ## Denormals / floating-point environment
 
-Denormal handling is a broadly useful DSP concern but modifies execution environment rather than product semantics.
+Denormal handling may become an optional process guard after cross-platform measurement. It changes execution environment and should not be enabled by folklore.
 
-Chassis should evaluate an optional/default process-call guard that disables costly denormal behavior on CPU architectures where that is conventional and safe, restoring host state afterward if required.
-
-Do not freeze this behavior without cross-host/architecture testing. Products remain responsible for algorithms that need unusual floating-point environment semantics.
+Likewise, do not use new algebraic/fast-math-style floating point operations merely because current Rust exposes them. Audio DSP that depends on numerical reproducibility or exact transfer behavior needs explicit evidence before allowing reassociation.
 
 ## Initial implementation boundary
 
-For the first conformance effect, implement only what is needed to prove the contracts:
+The first conformance processing path needs only:
 
-- fixed latency/tail reporting;
-- process status;
-- one latest-value telemetry primitive;
-- one bounded control/telemetry queue path;
-- a simple background task -> safe completion/snapshot path.
+- fixed latency/tail metadata if required by the adapter proof;
+- one minimal latest-value telemetry primitive if a test needs audio -> control observation;
+- one bounded typed control/publication primitive if a test needs control -> audio transfer.
 
-Dynamic host notifications, bypass helpers, richer logging, denormal guards, host thread-pool integration, and advanced snapshot reclamation can follow once the base lifecycle is validated.
+Background executors, dynamic host notifications, bypass DSP helpers, richer diagnostics, denormal guards, analyzer streams, and generalized reclamation should be added when a concrete client exercises their lifecycle.
