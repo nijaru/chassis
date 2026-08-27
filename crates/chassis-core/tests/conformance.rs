@@ -96,9 +96,13 @@ impl Processor for ConformanceProcessor {
 
 impl Process<f32> for ConformanceProcessor {
     #[allow(clippy::cast_possible_truncation)]
-    fn process(&mut self, block: &mut ProcessBlock<'_, '_, '_, f32>) {
+    fn process(&mut self, block: &mut ProcessBlock<'_, '_, '_, '_, f32>) {
         self.metrics.process_calls.fetch_add(1, Ordering::Relaxed);
         let parameter_events = block.parameter_events();
+        let base_gain = match block.parameters().get("input.gain") {
+            Some(ParameterValue::Float(value)) => *value,
+            _ => f64::from(self.gain),
+        };
 
         for buffer in block.buffers_mut() {
             let is_main_pair = buffer
@@ -113,7 +117,7 @@ impl Process<f32> for ConformanceProcessor {
             }
 
             let mut gain = parameter_events
-                .float_cursor("input.gain", f64::from(self.gain))
+                .float_cursor("input.gain", base_gain)
                 .expect("conformance gain cursor has a finite base");
             for (offset, sample) in buffer
                 .make_in_place()
@@ -195,6 +199,21 @@ fn runtime_activation_owns_validated_parameter_base_state() {
         active.parameters().get("input.gain"),
         Some(&ParameterValue::Float(0.75))
     );
+
+    let input = [1.0_f32];
+    let mut output = [0.0_f32];
+    let mut buffers = [ChannelBuffer::separate(
+        InputEndpoint::new(MAIN_INPUT, 0),
+        &input,
+        OutputEndpoint::new(MAIN_OUTPUT, 0),
+        &mut output,
+        1,
+    )
+    .expect("base-value test buffer is valid")];
+    active
+        .process(1, process_context(1, ProcessMode::Realtime), &mut buffers)
+        .expect("base-value process block is valid");
+    assert_samples(&output, &[0.75]);
 }
 
 #[test]

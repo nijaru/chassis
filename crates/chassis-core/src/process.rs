@@ -3,8 +3,10 @@
 use core::{fmt, num::NonZeroU32};
 
 use crate::{
-    audio::AudioIoConfiguration, automation::ParameterEvents, buffer::ChannelBuffer,
-    parameters::ParameterAutomationError,
+    audio::AudioIoConfiguration,
+    automation::ParameterEvents,
+    buffer::ChannelBuffer,
+    parameters::{ParameterAutomationError, ParameterStore},
 };
 
 /// Scheduling/quality context for one processing call.
@@ -294,15 +296,19 @@ impl<'a> ActivationConfig<'a> {
 /// that can vary per callback: frame-count bounds, event bounds/context, and
 /// slice lengths. Stable endpoint/schema mapping should be resolved outside the
 /// hot path rather than rescanned with allocation or quadratic work every block.
-pub struct ProcessBlock<'buffers, 'samples, 'context, S> {
+pub struct ProcessBlock<'buffers, 'samples, 'context, 'parameters, S> {
     frame_count: u32,
     context: ProcessContext<'context>,
+    parameters: &'parameters ParameterStore,
     buffers: &'buffers mut [ChannelBuffer<'samples, S>],
 }
 
-impl<'buffers, 'samples, 'context, S> ProcessBlock<'buffers, 'samples, 'context, S> {
+impl<'buffers, 'samples, 'context, 'parameters, S>
+    ProcessBlock<'buffers, 'samples, 'context, 'parameters, S>
+{
     pub(crate) fn new(
         config: &ActivationConfig<'_>,
+        parameters: &'parameters ParameterStore,
         frame_count: u32,
         context: ProcessContext<'context>,
         buffers: &'buffers mut [ChannelBuffer<'samples, S>],
@@ -352,6 +358,7 @@ impl<'buffers, 'samples, 'context, S> ProcessBlock<'buffers, 'samples, 'context,
         Ok(Self {
             frame_count,
             context,
+            parameters,
             buffers,
         })
     }
@@ -384,6 +391,12 @@ impl<'buffers, 'samples, 'context, S> ProcessBlock<'buffers, 'samples, 'context,
     #[must_use]
     pub const fn parameter_events(&self) -> ParameterEvents<'context> {
         self.context.parameter_events()
+    }
+
+    /// Return the current validated base/control parameter values.
+    #[must_use]
+    pub const fn parameters(&self) -> &'parameters ParameterStore {
+        self.parameters
     }
 
     /// Borrow all safe channel views for processing.
@@ -503,6 +516,10 @@ mod tests {
         NonZeroU32::new(value).expect("test maximum is non-zero")
     }
 
+    fn empty_parameters() -> ParameterStore {
+        ParameterStore::new(&[]).expect("empty parameter schema is valid")
+    }
+
     #[test]
     fn rejects_invalid_sample_rate() {
         assert_eq!(
@@ -537,6 +554,7 @@ mod tests {
         let process =
             ProcessConfig::new(48_000.0, None, maximum(8), 0).expect("test configuration is valid");
         let activation = ActivationConfig::new(process, DEFAULT_EFFECT_CONFIGURATION);
+        let parameters = empty_parameters();
         let input = [0.0_f32; 3];
         let mut output = [0.0_f32; 3];
         let mut buffers = [ChannelBuffer::separate(
@@ -554,7 +572,7 @@ mod tests {
             ParameterEvents::empty_for_block(2),
         );
         assert!(matches!(
-            ProcessBlock::new(&activation, 2, context, &mut buffers),
+            ProcessBlock::new(&activation, &parameters, 2, context, &mut buffers),
             Err(ProcessBlockError::BufferFrameCountMismatch { .. })
         ));
     }
@@ -587,6 +605,7 @@ mod tests {
         let process =
             ProcessConfig::new(48_000.0, None, maximum(8), 0).expect("test configuration is valid");
         let activation = ActivationConfig::new(process, DEFAULT_EFFECT_CONFIGURATION);
+        let parameters = empty_parameters();
         let context = ProcessContext::new(
             ProcessMode::Realtime,
             TransportSnapshot::unknown(),
@@ -595,7 +614,7 @@ mod tests {
         let mut buffers: [ChannelBuffer<'_, f32>; 0] = [];
 
         assert!(matches!(
-            ProcessBlock::new(&activation, 2, context, &mut buffers),
+            ProcessBlock::new(&activation, &parameters, 2, context, &mut buffers),
             Err(ProcessBlockError::ParameterEventFrameCountMismatch {
                 expected: 2,
                 actual: 1,
@@ -611,7 +630,7 @@ mod tests {
         let context =
             ProcessContext::new(ProcessMode::Realtime, TransportSnapshot::unknown(), events);
         assert!(matches!(
-            ProcessBlock::new(&activation, 2, context, &mut buffers),
+            ProcessBlock::new(&activation, &parameters, 2, context, &mut buffers),
             Err(ProcessBlockError::ParameterEventCountTooLarge {
                 actual: 1,
                 maximum: 0,

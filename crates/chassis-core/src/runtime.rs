@@ -83,7 +83,7 @@ pub trait Processor {
 /// Processing capability for one sample representation.
 pub trait Process<S>: Processor {
     /// Process one already-validated realtime block.
-    fn process(&mut self, block: &mut ProcessBlock<'_, '_, '_, S>);
+    fn process(&mut self, block: &mut ProcessBlock<'_, '_, '_, '_, S>);
 }
 
 /// Framework activation failure before an active processor is published.
@@ -181,7 +181,13 @@ where
     where
         P: Process<S>,
     {
-        let mut block = ProcessBlock::new(&self.config, frame_count, context, buffers)?;
+        let mut block = ProcessBlock::new(
+            &self.config,
+            &self.parameters,
+            frame_count,
+            context,
+            buffers,
+        )?;
         self.parameters
             .validate_events(context.parameter_events())
             .map_err(ProcessBlockError::InvalidParameterEvents)?;
