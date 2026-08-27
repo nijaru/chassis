@@ -2,49 +2,93 @@
 
 ## Purpose
 
-Chassis is a convention-first Rust framework for professional audio components. Its first production use is plugins, beginning with effects, but the core model must not assume that a DAW is always the owner of processing. The same product component should be deployable as a plugin, standalone processor, or embedded component when the surrounding adapter exists.
+Chassis is a convention-first Rust framework for professional realtime audio components.
 
-The framework should own behavior that is common across a large fraction of effects and instruments. Product-specific DSP, visual identity, project/document semantics, and domain workflows remain outside Chassis.
+Its first production surface is audio plugins, beginning with effects. The core model is intentionally usable outside a DAW so the same product processor/state model can later run as a plugin, standalone application, or embedded component. Optional hosting/device/graph layers may eventually support larger audio applications, but application-specific product semantics remain outside Chassis.
+
+The scope rule is not "minimal at all costs." Chassis should own behavior that is common enough across effects and instruments that authors should not repeatedly implement it. Product-specific DSP, visual identity, content models, timelines/projects, and domain workflows remain product responsibilities.
 
 ## Design principles
 
 ### Convention over configuration
 
-Common plugin behavior should be built in and require little ceremony. Defaults must be replaceable when a product needs different behavior.
+The normal professional-plugin case should require little framework plumbing, with explicit escape hatches for products that need different behavior.
 
-Examples:
+Initial conventions include:
 
-- an effect defaults to stereo main input/output;
-- a stereo sidechain is a standard optional port;
-- parameter types provide conventional host metadata and formatting hooks;
-- state is versioned by default;
-- realtime-safe communication has standard framework primitives;
-- validation and packaging are normal framework workflows rather than product-specific scripts.
+- audio effects default to stereo main input/output;
+- an optional stereo sidechain is available by convention;
+- parameters have typed definitions, stable identities, host metadata, automation, gestures, and state integration;
+- persistent state is versioned and migration-aware;
+- editor/host attachment, validation, and packaging have framework-supported paths;
+- realtime communication uses framework primitives with explicit ownership and overflow semantics.
+
+A convention must not become an invisible realtime cost. An unused sidechain, GUI, telemetry stream, smoother, or worker facility should not add process-time work merely because Chassis supports it.
+
+### One owner for each mutable guarantee
+
+The framework must distinguish authority from projections. Avoid two independently mutable representations of the same state.
+
+The intended conceptual ownership is:
+
+```text
+Component definition
+  immutable product schema, capabilities, identity, factories
+
+Instance runtime (framework-owned)
+  lifecycle state
+  canonical parameter/control state
+  host bridge/capabilities
+  state publication/loading coordination
+  task generations/cancellation when task support is present
+
+Processor
+  exclusive mutable realtime DSP state while active
+  process-local automation/modulation cursors
+  activation-time resources
+
+MainThread
+  optional product-owned non-realtime state/editor orchestration
+
+Shared
+  explicitly thread-safe projections/handles only
+
+Editor
+  main-thread UI capability; never owns Processor
+```
+
+The exact Rust traits are not frozen. The ownership relationships are.
+
+`Shared` is not a second authority for product state. It exposes deliberately synchronized observations or immutable snapshots whose owner and reclamation path are explicit.
 
 ### Structural realtime safety
 
-Thread ownership should be reflected in types and capabilities rather than primarily in comments.
+Realtime restrictions apply to the audio callback and other explicitly deterministic hot paths, not indiscriminately to the whole framework.
 
-The intended conceptual split is:
+On the audio path:
 
-```text
-Product
-├── Processor      audio-thread-owned mutable processing state
-├── Controller     main/control-thread product state and host interaction
-├── Shared         explicitly thread-safe shared state only
-└── Editor         optional UI/main-thread capability
-```
+- no heap allocation after activation;
+- no blocking I/O, filesystem, network, or contended/unbounded locks;
+- queues, scratch memory, retries, and work have explicit bounds derived from activation/product requirements;
+- destruction of replaced large objects is deferred off the audio thread;
+- host/FFI callbacks available to processing are represented as narrow realtime-safe capabilities.
 
-The exact traits are not frozen yet. The important invariant is that an editor or state serializer should not receive unrestricted mutable access to realtime processing state, and audio-thread code should not gain accidental access to blocking or allocation-heavy framework services.
+On main/control/editor/tooling paths, use the simplest correct ownership and synchronization model. Do not introduce lock-free structures, static allocation, custom allocators, or zero-copy complexity without a realtime or measured performance reason.
+
+### Validate boundaries; assert internal invariants
+
+Host data, persisted bytes, format metadata, and FFI inputs are untrusted boundaries. Validate them and return/report typed failures without partially publishing invalid state.
+
+Impossible states after successful validation are framework bugs. Assert non-obvious invariants where doing so turns silent corruption or undefined behavior into an observable failure. Never unwind through foreign ABI boundaries; adapters must define their containment behavior.
 
 ### Backend independence
 
-The product-facing core API must not expose CLAP, VST3, AU, Clack, clap-wrapper, GUI toolkit, or operating-system types.
+Product-facing core APIs do not expose CLAP, VST3, Audio Unit, Clack, clap-wrapper, GUI toolkit, or operating-system types.
 
-Initial format strategy:
+Initial export direction:
 
 ```text
-Chassis product API
+Chassis component API
         ↓
   chassis-clap
         ↓
@@ -52,118 +96,99 @@ Chassis product API
         ↓
        CLAP
         ↓
-  clap-wrapper where suitable
+ clap-wrapper where it remains correct
    ├── VST3
    ├── AUv2/AUv3
-   └── standalone bootstrap
+   └── simple standalone bootstrap
 ```
 
-Native adapters may replace wrappers later when measured capability, correctness, or maintenance requirements justify them.
+This is an implementation strategy, not a semantic dependency. Native adapters may replace wrappers when capability, correctness, lifecycle, or maintenance evidence justifies owning them.
 
-### Product ownership
-
-Chassis does not decide how an EQ filters, how a compressor detects gain reduction, how a synth allocates voices, or how a mastering application models revisions. Those semantics belong to the product.
-
-Chassis may eventually provide optional reusable utilities when repeated real products establish that their semantics are genuinely common.
+Dependencies on realtime-critical paths require explicit review for allocation, locks, unsafe invariants, maintenance quality, and measurable overhead. Permissive licensing alone is not sufficient.
 
 ## Core component model
 
-A Chassis audio component needs common contracts for:
+The common component contracts include:
 
-- lifecycle and activation;
-- processing configuration;
-- audio ports and channel layouts;
-- realtime/offline process context;
-- parameters, automation, and modulation;
-- note/MIDI/event streams;
+- lifecycle, activation, reset, and teardown;
+- audio/event ports and whole-component I/O negotiation;
+- process buffers and realtime/offline context;
+- typed parameters, automation, modulation, and gestures;
+- note/MIDI/event streams without assuming every component is an effect;
 - host transport information;
-- latency, tail, bypass, and restart/change notifications;
-- versioned state and migration;
-- controller/main-thread communication;
+- versioned persistent state and migrations;
+- latency/tail/bypass metadata where broadly meaningful;
 - optional editor integration;
-- bounded background work and realtime-safe telemetry.
+- narrow realtime-safe telemetry/control primitives.
 
-Effects and instruments share this model. An instrument may have no audio input and multiple outputs. A MIDI processor may have event input/output and no audio. An effect may expose a sidechain or auxiliary buses.
+Background execution, richer diagnostics, preset storage, analyzer transport, smoothing utilities, and similar common conveniences belong in Chassis when their lifecycle and semantics are proven, but they do not all need to be part of the first core implementation.
+
+Effects and instruments share the same lifecycle/process model. An instrument may have no audio input and multiple outputs. A note/MIDI processor may have event input/output and no audio. An effect may expose sidechain or auxiliary buses.
 
 ## Audio ports and channel layouts
 
 Stereo is the first production target, not an architectural assumption.
 
-The framework models named/identified ports with semantic roles and channel layouts. The initial convenience convention for effects is:
+The default effect convention is:
 
 ```text
 main input:     stereo, required
 main output:    stereo, required
-sidechain:      stereo, optional
+sidechain:      stereo, optional/inactive
 ```
 
-The representation must be extensible to:
+Stable author-facing port identity should be human-readable and independent of backend numeric IDs or runtime dense indices. Adapters/runtime setup may derive compact indices after schema validation; those derived indices are not persistent product identity.
 
-- mono and arbitrary discrete channel counts;
-- surround layouts;
-- ambisonics;
-- immersive/Atmos-style layouts;
-- multiple input/output buses;
-- instrument multi-output routing.
+Whole I/O configurations are validated and committed atomically while inactive. The representation must leave room for mono, discrete channels, labeled surround, ambisonics, immersive channel beds, multiple buses, and instrument multi-output routing without pretending Dolby Atmos object/metadata workflows are merely another speaker enum.
 
-Chassis should provide named convenience layouts only where their semantics are stable. Format adapters remain responsible for mapping Chassis layouts to each host API.
+## Process buffers
 
-## Parameters and state
+The framework preserves host buffer relationships rather than imposing unconditional copies. Rust references may only be constructed after adapters prove the relevant aliasing invariants.
 
-Parameters should eventually provide conventional typed definitions for float, integer, boolean, and enumerated values, with:
+Exact in-place aliasing, disjoint input/output buffers, input-only, and output-only cases are distinct. Unexpected partial overlap or illegal aliasing is an adapter-boundary failure; never manufacture overlapping `&`/`&mut` references because a host supplied suspicious pointers.
 
-- stable IDs;
-- normalized/plain conversion;
-- units and display parsing/formatting hooks;
-- host metadata;
-- automation/modulation delivery;
-- begin/change/end gestures;
-- optional smoothing helpers with replaceable product semantics.
+Convenience in-place processing may copy a bounded block when the host supplied separate buffers. Controlled copies are acceptable when they simplify product ownership and are not a material measured cost; zero-copy is not a goal by itself.
 
-State should be versioned by convention and support explicit migrations. Host state is a product contract and must remain deterministic and testable.
+## Parameters and persistent state
 
-Preset browsing, tagging, cloud sync, and product-specific preset UX are not core responsibilities. Common preset serialization/storage helpers can be added once requirements are proven.
+Parameter identity and metadata are immutable schema. Rust field names and UI labels are not compatibility identity.
+
+Chassis distinguishes:
+
+1. canonical/base parameter state owned by the framework instance runtime;
+2. process-time automated trajectories derived from host events for a block;
+3. effective/modulated values consumed by DSP.
+
+The process view is derived and cannot independently become a second persistent authority. Before the API freezes, Chassis must specify how realtime automation updates are reflected into canonical base state and how a coherent state save behaves when processing is active.
+
+State loading is transactional from the product's perspective: decode, validate, and migrate into temporary non-live state first, then publish the accepted state through one defined runtime boundary. Partial state loads never mutate the active product.
+
+Persistent state uses a format-independent semantic model with explicit schema versions. The current small Chassis-owned binary envelope is a prototype, not yet a compatibility promise.
 
 ## GUI boundary
 
-Chassis owns editor lifecycle and host-window integration, not visual design.
+Chassis owns editor lifecycle and host integration, not visual design.
 
-Core responsibilities include:
-
-- editor creation/destruction;
-- parent/native-window attachment;
-- logical/physical sizing and scale handling;
-- host resize negotiation;
-- parameter gestures and value observation;
-- main-thread scheduling;
-- realtime-to-GUI telemetry primitives.
-
-Toolkit adapters such as `chassis-iced` can make the conventional path easy without requiring every Chassis product to use that toolkit.
+Common responsibilities can include parent/native-window attachment, sizing/scaling negotiation, parameter binding/gestures, main-thread scheduling, and realtime-to-GUI telemetry. GUI toolkit adapters remain optional; headless components do not depend on them.
 
 ## Standalone and embedded deployment
 
-Standalone is a planned first-class deployment mode, especially useful for instruments and analyzers. A product component should not need a second DSP/state implementation to run outside a plugin host.
+Standalone is a planned first-class deployment mode, particularly useful for instruments, analyzers, and processors that make sense outside a DAW. It should run the same product processor/state implementation rather than a second DSP path.
 
-A future standalone layer may own:
-
-- audio and MIDI device selection;
-- sample rate/buffer configuration;
-- application window/editor embedding;
-- persistence and preset access;
-- transport where relevant.
-
-Embedded deployment allows a Chassis component to run inside another Rust audio application without pretending to be a plugin.
+Embedded deployment allows a component to run inside another Rust audio application without pretending to be a plugin.
 
 ## Larger audio applications
 
-The core should leave room for future `chassis-host`, `chassis-device`, and `chassis-graph` layers. Those could support plugin hosts, live processors, mastering applications, or DAW-like software.
+Future `chassis-host`, `chassis-device`, and `chassis-graph` layers may provide reusable plugin hosting, audio/MIDI device integration, and realtime graph/scheduling infrastructure when a real application requires them.
 
-They are not part of the initial implementation scope. Chassis should not define application-specific concepts such as timelines, projects, arrangements, media libraries, revisions, mixers, mastering QC, or delivery workflows.
+They are not prerequisites for plugin v0.1 and must not pull DAW/application concepts into the component core. Chassis does not own timelines, projects, arrangements, media libraries, mixer UX, mastering revisions/QC, or delivery workflows.
 
-The boundary is intentional: Chassis can eventually supply a reusable realtime/audio-component runtime underneath an application without becoming the application's product model.
+## Rust and dependency policy
 
-## Dependency policy
+Development follows the repository's `stable` Rust toolchain and Edition 2024. During private pre-alpha there is no promised MSRV beyond what Edition 2024/tooling require; do not pin a compiler merely to chase the latest release, and do not raise a future declared MSRV without an explicit reason.
 
-Core dependencies should be small, well-audited, and compatible with Chassis's AGPL/commercial dual-licensing model. Prefer permissive dependencies for code incorporated into commercial builds.
+Format-independent crates deny unsafe code. FFI adapters isolate necessary unsafe code, use `unsafe extern` where required by Edition 2024, require a `// SAFETY:` explanation for every unsafe block, and keep `unsafe_op_in_unsafe_fn` denied.
 
-Unsafe code is denied in format-independent workspace crates by default. If an adapter requires unsafe/FFI code, keep it isolated, document invariants, and test it independently.
+Public API is deliberate: use domain newtypes/enums, avoid accidental re-exports, and keep implementation-only dense indices/backend IDs out of the stable author-facing identity model.
+
+Core dependencies stay small, audited, and compatible with both AGPL distribution and the intended commercial license. Realtime-path dependencies receive a stricter mechanical-sympathy audit than non-realtime tooling dependencies.
