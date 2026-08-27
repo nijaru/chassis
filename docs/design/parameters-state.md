@@ -12,7 +12,8 @@ The target APIs share several durable concepts:
 
 - parameters have stable identities;
 - hosts need metadata, ranges/defaults, display formatting, and text parsing;
-- VST3 and CLAP expose normalized/numeric automation points with sample offsets during processing;
+- automation is process-time data and can change within an audio block;
+- VST3 represents automation as piecewise-linear point queues, Audio Unit can schedule explicit ramps, and CLAP provides timestamped value changes;
 - CLAP distinguishes base parameter value changes from modulation and supports per-note/key/channel/port modulation capabilities;
 - plugin-originated edits need host notification and gesture boundaries;
 - Audio Unit parameters have stable identifiers/addresses, ranges, units, value strings, formatting/parsing, and automation APIs.
@@ -93,7 +94,14 @@ Base automation and modulation are distinct semantic streams.
 
 Base automation changes the parameter's underlying automated value. Modulation temporarily offsets/transforms that value according to host capabilities and must not overwrite the canonical base value.
 
-Processing should receive timestamped changes at sample offsets. Adapters must preserve those offsets when the source format provides them.
+The process-time representation preserves source automation trajectories:
+
+- an instantaneous host value change becomes a timed set;
+- VST3 point queues become their specified piecewise-linear trajectory;
+- Audio Unit parameter ramps remain linear spans with duration/end value;
+- CLAP core parameter value events remain timestamped sets because core CLAP does not specify a ramp duration for them.
+
+This trajectory reconstruction is framework/adapter correctness, not product smoothing.
 
 The initial event model should remain monophonic/global while leaving room for CLAP-style per-note/key/channel/port modulation without redesigning parameter identity.
 
@@ -102,7 +110,7 @@ The initial event model should remain monophonic/global while leaving room for C
 Chassis should distinguish at least three notions that frameworks often accidentally collapse:
 
 1. **canonical/base state** — the persistent/control-thread value;
-2. **process-time automated value** — value after timestamped host automation at a particular sample;
+2. **process-time automated value/trajectory** — value implied by host automation at a particular sample;
 3. **effective/modulated value** — process-time value after applicable modulation.
 
 A GUI reading the current base value is not the same operation as DSP consuming a sample-accurate effective value.
@@ -113,9 +121,19 @@ The ergonomic API may hide boilerplate, but it must not erase these semantics.
 
 Smoothing is common enough to provide built-in helpers but not universal enough to mandate one behavior.
 
-Parameter definitions may eventually specify conventional smoothing such as none, linear time, or exponential time. Products can opt out and consume raw timestamped values/events.
+The default parameter semantics are **no product smoothing unless declared or implemented by the product**. Chassis first reproduces the source host automation trajectory faithfully.
 
-Before freezing smoothing semantics, test how smoothing should interact with already-sample-accurate automation ramps. Chassis must avoid unintentionally double-smoothing a trajectory the host has already specified precisely.
+A parameter can then opt into a conventional smoother, likely including at least linear-time and exponential approaches. The eventual smoothing API should make its interaction with host trajectories explicit rather than silently double-smoothing them.
+
+Useful policies to evaluate with real FX include:
+
+- smoothing discontinuous target changes while following explicit host ramps directly;
+- smoothing every effective target change when the DSP needs a physical/control-rate slew regardless of source;
+- raw trajectory access with completely custom product behavior.
+
+Do not freeze these policy names or details until the conformance effect and first dynamics/EQ clients demonstrate what is actually ergonomic and correct.
+
+A product that opts into smoothing is intentionally changing the control signal beyond the host trajectory; that is product DSP behavior, not adapter interpolation.
 
 ## Plugin-originated edits
 
@@ -213,8 +231,10 @@ Factory presets can initially be embedded state blobs generated/tested by the sa
 - stable host-ID mapping fixtures;
 - plain <-> normalized round trips;
 - formatting/parsing round trips where applicable;
-- automation at block boundaries and multiple points per block;
+- step and linear automation trajectories at block boundaries and across blocks;
+- multiple automation points per block;
 - modulation not mutating base state;
+- smoothing policy behavior independently from adapter trajectory reconstruction;
 - gesture ordering and host echo suppression;
 - deterministic state bytes;
 - corrupt/truncated/oversized state rejection;
@@ -232,7 +252,7 @@ define parameter fields + stable IDs + ranges/defaults
         ↓
 Chassis provides host metadata, state, automation, GUI handles, and tests
         ↓
-processor consumes explicit realtime parameter views/events
+processor consumes explicit realtime parameter trajectories/views/events
 ```
 
 Convention should remove plumbing, not hide timing or compatibility semantics.
