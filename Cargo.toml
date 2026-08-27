@@ -9,6 +9,7 @@ repository = "https://github.com/nijaru/chassis"
 
 [workspace.lints.rust]
 unsafe_code = "deny"
+unsafe_op_in_unsafe_fn = "deny"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
