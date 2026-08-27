@@ -57,7 +57,7 @@ Status: **initial source proof implemented; local validation and CLAP qualificat
 
 Current narrow slice:
 
-- `chassis-clap` using exact Clack 0.2.0 dependencies;
+- `chassis-clap` using exact published Clack 0.1.1 dependencies;
 - Clack types isolated from `chassis-core`;
 - `Send` required only at the CLAP processor deployment boundary;
 - one f32 stereo main input/output pair;
@@ -66,6 +66,8 @@ Current narrow slice:
 - activate/process/reset/deactivate lifecycle mapping;
 - exported `examples/clap-conformance` rlib/cdylib probe;
 - explicit rejection of unsupported port/sample configurations rather than silent semantic coercion.
+
+Clack's repository has bumped its development workspace to 0.2.0, but that version is not currently published. Chassis stays on crates.io 0.1.1 until an upgrade has a reproducible source and is explicitly audited.
 
 Immediate qualification work:
 
