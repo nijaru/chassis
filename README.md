@@ -47,6 +47,7 @@ Unused optional facilities should not impose process-time work.
 
 - [Architecture](docs/architecture.md)
 - [Roadmap](docs/roadmap.md)
+- [Open questions / API freeze gates](docs/design/open-questions.md)
 - [Licensing](docs/licensing.md)
 - [Dependency/license policy](docs/dependencies.md)
 
@@ -71,7 +72,7 @@ crates/
   chassis-core/
     src/
       audio.rs      stable port keys, basic layouts/configuration validation
-      process.rs    activation/process scheduling configuration
+      process.rs    activation resource bounds + per-call process-mode semantics
 ```
 
 `chassis-core` is currently unpublished `0.0.0`, std-only, and has no third-party Rust dependencies. Its current code is an implementation spike and can change freely before publication.
