@@ -2,60 +2,115 @@
 
 ## Project purpose
 
-Chassis is a convention-first Rust framework for professional audio components. Effects are the first production clients; instruments, standalone deployment, immersive layouts, and optional host/application layers are planned without making the core depend on any one of them.
+Chassis is a convention-first Rust framework for professional realtime audio components. Effects are the first production clients; instruments, standalone deployment, immersive layouts, and optional host/application layers are planned without making the core depend on any one of them.
 
-Read `docs/architecture.md`, `docs/roadmap.md`, `docs/licensing.md`, and `docs/dependencies.md` before making architectural or dependency changes. Relevant detailed contracts live under `docs/design/`; update those documents when a design decision changes rather than allowing implementation and documentation to diverge.
+Read `docs/architecture.md`, `docs/roadmap.md`, `docs/licensing.md`, and `docs/dependencies.md` before architectural or dependency changes. Relevant contracts live under `docs/design/`; update the owning document when a decision changes rather than allowing implementation and documentation to diverge.
+
+## Rust baseline
+
+- Inspect `rust-toolchain.toml`, workspace/package manifests, targets, features, and current validation commands before changing Rust requirements.
+- Development follows the named `stable` toolchain and Edition 2024. Do not pin a compiler or declare/raise an MSRV without an explicit compatibility or reproducibility reason.
+- Prefer strong domain newtypes/enums over raw strings or integers once data crosses into the semantic core.
+- Borrow at API boundaries when ownership is not needed; do not clone merely to satisfy the borrow checker.
+- Prefer typed library errors. Add error/dependency crates only when they materially simplify the design.
+- Treat every `pub` item and `pub use` as deliberate API design. This pre-alpha crate is unpublished; use that freedom to change weak abstractions before release.
+- Avoid recoverable `.unwrap()` in library code. `expect` is for a proved programmer invariant and should state the reason.
 
 ## Design rules
 
-- Design from common audio-component/plugin requirements, not by cloning or reacting to another framework's scope.
+- Design from common audio-component requirements, not by cloning or reacting to another framework's scope.
 - Prefer convention over configuration for behavior most products want; preserve explicit escape hatches.
-- Do not overfit framework APIs to any one Nijaru plugin.
-- Do not assume stereo in the core data model. Stereo main I/O plus optional stereo sidechain is the default effect convention only.
-- Do not assume every component has audio input; instruments and event-only processors must fit the model.
-- Do not assume every component runs inside a plugin host; standalone and embedded deployment must remain possible.
-- Keep DAW/application product semantics outside Chassis core: timelines, arrangements, projects, media libraries, mastering revisions/QC, mixer UX, etc.
-- Keep CLAP/VST3/AU/Clack/clap-wrapper/toolkit/platform types out of the product-facing core API.
-- Extract optional common utilities only when their semantics are broadly reusable or proven by repeated clients.
-- Keep stable product/parameter/port identities independent from Rust type names, field names, UI labels, and backend-specific IDs.
-- Treat adapter translation as semantic mapping: reject unsupported configurations rather than silently changing their meaning.
+- Do not overfit APIs to any Nijaru plugin.
+- Do not assume stereo in the core data model. Stereo main I/O plus optional stereo sidechain is only the default effect convention.
+- Do not assume audio input exists; instruments/generators and event-only processors must fit.
+- Do not assume a plugin host exists; standalone and embedded deployment must remain possible.
+- Keep DAW/application product semantics outside core: timelines, arrangements, projects, media libraries, mixer UX, mastering revisions/QC, delivery workflows, etc.
+- Keep CLAP/VST3/AU/Clack/clap-wrapper/toolkit/platform types out of product-facing core APIs.
+- Keep stable product/parameter/port identities independent from Rust names, UI labels, runtime dense indices, and backend IDs.
+- Treat adapter translation as semantic mapping: map faithfully or reject; never silently change meaning to satisfy a host.
+- Extract optional utilities when their semantics are broadly reusable or proven by repeated clients, not merely because they are common words in audio software.
+
+## Ownership and lifecycle
+
+For every mutable guarantee/resource, name one authority and its lifecycle: creation, mutation, observation, replacement/cancellation, and teardown.
+
+- Framework instance runtime owns canonical parameter/control state and lifecycle coordination.
+- `Processor` owns mutable realtime DSP state while active.
+- `MainThread` owns only optional product non-realtime state/orchestration.
+- `Shared` exposes explicitly synchronized projections/immutable snapshots; it is not a second authority.
+- Editor/background work never receives unrestricted mutable access to `Processor`.
+- Replacement/snapshot/task APIs must prevent stale work from publishing into a new generation and must define where old resources are destroyed.
+- Do not add process-global mutable state or a process-global worker runtime without an explicit unload/shutdown/lifetime design. Use `OnceLock` only when one-time process-global lifetime is actually the contract.
 
 ## Realtime rules
 
-- The audio callback must not allocate, block, perform filesystem/network I/O, or take unbounded/contended locks.
-- Prefer ownership/capability APIs that make thread misuse difficult to express.
-- Keep mutable processor state audio-thread-owned unless a specific lock-free/shared design is justified.
-- Main-thread/editor/background services must not receive unrestricted mutable access to realtime processor state.
-- Bounded queues and explicit overflow/drop policy are required for realtime communication.
-- Any adapter `unsafe`/FFI code must be isolated, documented with invariants, and independently tested.
-- Format-independent workspace crates deny unsafe code by default.
-- Convenience APIs must not hide per-block allocation or an unbounded copy on the realtime path.
+These strict rules apply to the audio callback and other explicitly deterministic hot paths. Do not impose them indiscriminately on control/editor/tooling code.
 
-## Compatibility and validation
+- No heap allocation after activation.
+- No filesystem/network I/O or blocking calls.
+- No contended/unbounded locks.
+- Queue, scratch, retry, and work bounds must follow from activation/product requirements; do not invent arbitrary caps merely to claim boundedness.
+- Bounded queues require explicit overflow/drop/coalescing policy.
+- Keep mutable DSP state audio-thread-owned unless a specific shared design is justified.
+- Large replaced objects must not be accidentally destroyed on the audio thread; define reclamation ownership.
+- Controlled copies are acceptable when semantics require them and measurement does not justify more complexity. Zero-copy is not a goal by itself.
+- Do not add cache padding/alignment, lock-free algorithms, custom allocators, `no_std`, SIMD, or unsafe code without a concrete requirement and evidence.
+- Audit every dependency used on the realtime path for allocation, locking, unsafe invariants, maintenance quality, and overhead.
 
-- Treat host behavior and format specifications as contracts, not suggestions.
-- Preserve sample-accurate event offsets where the source format provides them.
-- State, product, parameter, and port IDs are persistent compatibility contracts once released.
-- Test unusual block sizes, zero/short blocks where formats permit them, offline rendering, repeated activate/deactivate, editor open/close, state load/save, and automation.
-- Run format-native validators in addition to unit tests once adapters exist.
-- Maintain a conformance component and differential cross-format tests; do not rely on real product DSP alone to validate framework semantics.
+## Validation and failure
+
+- Validate host/FFI input, persisted bytes, IDs, lengths, and configuration where they become authoritative.
+- Expected invalid input/corrupt state returns or records a typed failure and must not partially publish state.
+- Assert non-obvious internal invariants after validation when violating them would imply a framework bug.
+- Never unwind across FFI.
+- State/product/parameter/port IDs are compatibility contracts once released.
+- Preserve sample-accurate ordering/offset semantics where the source format provides them.
+- Test negative space: malformed state, exhaustion, lifecycle replacement/cancellation, unusual blocks, state load/save, automation, editor teardown, and unsupported layouts.
+- Maintain a conformance component and differential cross-format tests; do not rely on product DSP or one successful host load as framework proof.
+- Separate correctness evidence from performance and production-readiness claims.
+
+## Unsafe/FFI rules
+
+- Format-independent crates deny unsafe code.
+- Adapter crates may use unsafe only where the FFI/host boundary requires it.
+- Every unsafe block requires a `// SAFETY:` comment describing the discharged invariants.
+- Edition 2024 `extern` blocks must use `unsafe extern` where required.
+- `unsafe_op_in_unsafe_fn` remains denied; unsafe functions state preconditions and explicit unsafe blocks discharge them.
+- Run Miri on Rust portions before promoting unsafe adapter changes; use sanitizers/host stress where Miri cannot model native boundaries.
+- Subtle atomic/memory-ordering primitives require model/property testing (for example Loom) before becoming shared framework infrastructure.
 
 ## Licensing and dependencies
 
 - Chassis is AGPL-3.0-or-later with an intended commercial dual-license path.
 - Prefer dependencies that can legally ship in proprietary commercial-license builds (MIT/Apache/BSD/ISC/public-domain or similarly permissive terms).
-- `deny.toml` is the machine-enforced dependency license/source policy. Do not widen it simply to make CI pass; review and document new license families first.
-- Do not import third-party strong-copyleft code into the framework without an explicit licensing decision.
-- Keep SDK-specific constraints (especially AAX/Avid/PACE) isolated from format-independent crates.
+- `deny.toml` records the dependency-license/source policy. Until automated runners are intentionally restored, run it locally; do not describe GitHub Actions as an enforcement gate.
+- Do not widen license policy merely to make a dependency check pass; review and document new license families first.
+- Do not import third-party strong-copyleft code into the commercially relicensable framework without an explicit decision.
+- Keep SDK-specific constraints, especially AAX/Avid/PACE, isolated from format-independent crates.
 - Do not accept substantive external code contributions until contributor/relicensing terms are established.
+
+## Validation commands
+
+The repository currently has no authoritative hosted CI. Before claiming a code slice is validated, run the applicable local commands on a supported development machine and report exactly what was run:
+
+```text
+cargo fmt --all -- --check
+cargo test --workspace
+cargo clippy --workspace --all-features --all-targets -- -D warnings
+cargo deny check
+cargo machete        # once third-party dependencies exist
+cargo miri test      # before promoting unsafe Rust where Miri applies
+```
+
+Format-native validators, host tests, fuzzing, sanitizers, and benchmarks become additional gates as the relevant adapters exist.
 
 ## Current implementation priority
 
-1. Small, format-independent `chassis-core` contracts.
-2. Conformance component/test harness.
-3. CLAP adapter via Clack.
-4. Parameters/state/process-context and robust validation.
-5. VST3/AU projection and GUI/editor integration.
-6. Real FX clients, then instruments and standalone.
+1. Audit/finalize the small format-independent semantic contracts needed by the first processing path.
+2. Build a deterministic conformance component and local test harness around those contracts.
+3. Add CLAP export via Clack and validate the lifecycle/process boundary.
+4. Fill out parameters/state/events only to the degree required by that conformance path, then iterate.
+5. Add VST3/AU projection and editor integration after CLAP semantics are proven.
+6. Use real FX clients, then standalone/instruments, to graduate broadly reusable conveniences.
 
-Do not add roadmap features merely to make the crate tree look complete. Add a crate or abstraction when there is an executable requirement for it.
+Do not create empty crates or roadmap abstractions merely to make the repository look complete.
