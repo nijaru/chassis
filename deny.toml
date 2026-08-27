@@ -32,6 +32,8 @@ exceptions = [
     # Chassis workspace crates are AGPL; add each new workspace package here
     # explicitly rather than allowing third-party AGPL dependencies globally.
     { allow = ["AGPL-3.0-or-later"], crate = "chassis-core" },
+    { allow = ["AGPL-3.0-or-later"], crate = "chassis-clap" },
+    { allow = ["AGPL-3.0-or-later"], crate = "chassis-clap-conformance" },
 ]
 
 [licenses.private]
@@ -47,4 +49,6 @@ allow-workspace = true
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = []
+# Explicit safety exception: latest published Clack 0.1.1 has acknowledged
+# plugin-side reentrancy UB. Workspace manifests pin one reviewed post-fix rev.
+allow-git = ["https://github.com/prokopyl/clack"]
