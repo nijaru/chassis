@@ -9,7 +9,16 @@ Permissive dependencies normally satisfy both. They retain their own licenses/no
 
 ## Current workspace
 
-`chassis-core` currently has **no third-party Rust dependencies**. It is std-only and inherits the workspace AGPL-3.0-or-later license.
+`chassis-core` remains std-only with no third-party Rust dependencies.
+
+The first CLAP adapter slice adds exact crates.io requirements for:
+
+- `clack-plugin = 0.2.0`;
+- `clack-extensions = 0.2.0`, with only `audio-ports` + plugin-side support enabled directly.
+
+Clack 0.2.0 is Edition 2024, declares Rust 1.85 as its MSRV, and is `MIT OR Apache-2.0`. Its direct runtime tree for this slice is intentionally small: `clack-common`, `clap-sys`, and `bitflags` in addition to the two declared Clack crates. `clack-common` is also `MIT OR Apache-2.0`; `clap-sys` is `MIT OR Apache-2.0`; `bitflags` is permissively dual-licensed. These terms are compatible with both AGPL distribution and the intended separate proprietary Chassis license.
+
+The repository lockfile must be regenerated and reviewed by Cargo on the next local validation pass after dependency changes. Do not hand-edit registry checksums into `Cargo.lock`.
 
 ## Normally acceptable license classes
 
@@ -52,13 +61,15 @@ For anything reachable from `Processor::process` or another deterministic realti
 
 Dependencies are acceptable at non-realtime edges much more readily than on the critical audio path. Do not reimplement a mature peripheral crate merely for purity; do own or tightly audit code that becomes part of Chassis's realtime correctness contract.
 
-## Current candidates
+## Current candidates / adopted dependencies
 
 | Component | Role | License | Position |
 | --- | --- | --- | --- |
 | Chassis workspace | framework | AGPL-3.0-or-later + intended separate commercial license | current |
-| Clack / `clack-plugin` | low-level safe CLAP plugin boundary | MIT OR Apache-2.0 | preferred candidate; still requires adapter/RT audit |
-| CLAP SDK | CLAP ABI | MIT | compatible |
+| Clack / `clack-plugin` 0.2.0 | low-level safe CLAP plugin boundary | MIT OR Apache-2.0 | adopted for initial adapter proof; qualification still required |
+| `clack-extensions` 0.2.0 | stable CLAP extension wrappers | MIT OR Apache-2.0 | adopted narrowly for audio ports |
+| `clap-sys` 0.5.0 | raw CLAP ABI used by Clack | MIT OR Apache-2.0 | transitive; compatible |
+| CLAP SDK | CLAP ABI specification | MIT | compatible |
 | `clap-wrapper` | project CLAP into VST3/AU/AAX/standalone | MIT | preferred initial projection candidate; validate semantics per target |
 | Steinberg VST3 SDK | VST3 SDK | MIT | compatible |
 | Apple AudioUnitSDK | AUv2 SDK | Apache-2.0 | compatible |
@@ -67,7 +78,7 @@ Dependencies are acceptable at non-realtime edges much more readily than on the 
 | CPAL | standalone audio device I/O candidate | Apache-2.0 | compatible; standalone/device layer only |
 | midir | standalone MIDI I/O candidate | MIT | compatible; standalone/device layer only |
 
-This table records compatibility/research, not permission to add a crate without an executable requirement.
+The CLAP adapter currently uses only Clack's safe plugin/process/audio APIs. Chassis owns no raw CLAP pointer dereference in this slice. That reduces our initial unsafe surface, but does not remove the obligation to review Clack's unsafe/lifetime implementation before production qualification.
 
 ## AAX exception
 
@@ -83,13 +94,18 @@ Prefer crates.io releases for normal Rust dependencies. Git dependencies require
 
 Do not add wildcard dependency versions. Avoid duplicate major/version trees when practical, but do not contort correctness or platform support merely to eliminate harmless duplication.
 
+The first Clack requirements are exact `=0.2.0` requirements rather than a floating 0.2 range. Upgrade them deliberately after reviewing upstream changes and rerunning adapter conformance.
+
 ## Checks
 
 `deny.toml` is the machine-readable license/advisory/source policy. The repository currently has no authoritative hosted CI, so run checks locally and report them accurately:
 
 ```text
+cargo fmt --all -- --check
+cargo test --workspace
+cargo clippy --workspace --all-features --all-targets -- -D warnings
 cargo deny check
-cargo machete   # once dependencies exist
+cargo machete
 ```
 
-Do not widen `deny.toml` merely to make a check pass. Review/document a new license/source class first.
+Now that third-party dependencies exist, `cargo machete` applies. Do not widen `deny.toml` merely to make a check pass. Review/document a new license/source class first.
