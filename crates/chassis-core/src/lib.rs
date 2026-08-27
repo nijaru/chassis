@@ -49,10 +49,10 @@ pub struct ChannelCount(NonZeroU16);
 impl ChannelCount {
     #[must_use]
     pub const fn new(value: u16) -> Option<Self> {
-        match NonZeroU16::new(value) {
-            Some(value) => Some(Self(value)),
-            None => None,
-        }
+        let Some(value) = NonZeroU16::new(value) else {
+            return None;
+        };
+        Some(Self(value))
     }
 
     #[must_use]
