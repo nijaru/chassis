@@ -1,6 +1,6 @@
 # Validation and Conformance Strategy
 
-Status: first format-independent conformance slice implemented; tooling expands with semantic layers/adapters.
+Status: format-independent conformance is locally validated; first CLAP adapter/export source exists but is not yet locally rebuilt or format-qualified.
 
 ## Goal
 
@@ -30,17 +30,31 @@ cargo fmt --all -- --check
 cargo test --workspace
 cargo clippy --workspace --all-features --all-targets -- -D warnings
 cargo deny check
+cargo machete
 ```
 
-Once third-party dependencies exist, also use `cargo machete`. Before promoting Rust unsafe code where Miri can model it, run `cargo miri test` for the relevant crates/tests.
+`cargo machete` now applies because the CLAP adapter has third-party dependencies. Before promoting Rust unsafe code where Miri can model it, run `cargo miri test` for the relevant crates/tests.
 
 Hosted automation may later run these commands, but the command/evidence contract is authoritative, not a CI provider.
 
-## Conformance component
+### Current evidence boundary
 
-`crates/chassis-core/tests/conformance.rs` is the first deliberately boring external-API component. Its purpose is framework semantics, not DSP quality.
+The last known-green local baseline was the core runtime/conformance workspace before Clack was added: 19/19 tests plus fmt/clippy/deny on Rust 1.98.0.
 
-The current processor applies a deterministic fixed gain and exercises:
+Since then, `chassis-clap`, Clack dependencies, and `examples/clap-conformance` have been added directly to `main` from an environment without Cargo. Therefore:
+
+- the updated lockfile has not yet been generated/reviewed;
+- compilation/test/clippy status of the new adapter slice is unknown;
+- no CLAP artifact has been packaged;
+- no native CLAP validator or host result exists yet.
+
+Do not inherit the old green claim across this dependency/code boundary.
+
+## Core conformance component
+
+`crates/chassis-core/tests/conformance.rs` is the deliberately boring external-API component for format-independent semantics.
+
+The current processor applies deterministic fixed gain and exercises:
 
 - default effect activation through the public `Component` contract;
 - separate input/output buffers using explicit bounded copy-to-output processing;
@@ -53,9 +67,99 @@ The current processor applies a deterministic fixed gain and exercises:
 - zero-frame callback accepted when no positive minimum was promised;
 - realtime, buffered-realtime, and offline per-call mode values.
 
-This is only the first slice. It does **not** yet prove typed parameters, automation, persistent state, events/transport, allocation guards, adapters, FFI safety, host behavior, or production readiness.
+Grow the same semantics as parameters/state/events land instead of creating unrelated product contracts for every layer.
 
-Grow the same deterministic component as those features land instead of creating unrelated test products for every layer.
+## CLAP conformance export
+
+`examples/clap-conformance` is the first actual format export probe. It deliberately implements a deterministic 0.5 gain and uses the explicit Chassis `Component`/`Processor`/`Process<f32>` API.
+
+The initial `chassis-clap` adapter currently attempts only:
+
+- Clack 0.2.0 plugin boundary;
+- one required stereo main input/output pair;
+- f32 processing;
+- exact in-place or separate paired channels;
+- Chassis activation/process/reset/deactivation;
+- conservative `ProcessStatus::Continue`;
+- `ProcessMode::Realtime` only.
+
+It does **not** yet claim parameters, state, events, transport, sidechain/multibus, f64, offline render semantics, latency/tail, GUI, packaging, or production host support.
+
+### First local adapter gate
+
+On a supported development machine, first let Cargo update the committed lockfile and then run:
+
+```text
+cargo fmt --all
+cargo fmt --all -- --check
+cargo test --workspace
+cargo clippy --workspace --all-features --all-targets -- -D warnings
+cargo deny check
+cargo machete
+```
+
+Review the resulting `Cargo.lock` diff rather than merely accepting that Cargo generated it. Confirm the selected Clack/clap-sys/bitflags versions and source/checksum provenance match the dependency policy.
+
+Any compile/lint failure is adapter feedback. Fix the API/translation rather than weakening the workspace lints or adding broad `allow` attributes.
+
+## Realtime allocation/work checks
+
+The core process path and first fixed-stereo CLAP translation are designed to avoid explicit process-time allocation: the adapter constructs a fixed `[ChannelBuffer; 2]` on the stack from Clack safe channel pairs.
+
+Design inspection is **not** an allocation-proof claim. Before promotion, add test/measurement evidence that both Chassis and the exact Clack path used do not allocate/block unexpectedly during process.
+
+For general multibus support, do not replace the fixed proof with callback-time `Vec<ChannelBuffer>` construction. Resolve the borrowing/endpoint model from real adapter constraints first.
+
+Also prove work bounds. Stable endpoint/schema resolution must not become per-block allocating or quadratic merely because persistent identities are human-readable.
+
+Do not optimize away the controlled `make_in_place()` copy merely to satisfy a zero-copy slogan; benchmark it under representative channel/block sizes before adding complexity.
+
+## Lifecycle and ownership torture
+
+The format-independent conformance slice proves basic activation/reset/process/deactivation sequencing. The CLAP adapter now needs host-level sequences for:
+
+- create/init/destroy without activation;
+- activate/start/process/stop/deactivate;
+- repeated activate/deactivate;
+- reset while active under legal CLAP sequencing;
+- activation failure cleanup;
+- sample-rate/block-size reactivation;
+- invalid/malformed audio port data where Clack exposes a safe synthetic boundary;
+- processor movement between host audio threads without simultaneous processing;
+- repeated instance creation/destruction;
+- eventual module unload behavior once callbacks/tasks exist.
+
+Every resource introduced by Chassis needs a testable final owner/cleanup path.
+
+## Buffer adapter tests
+
+The current Chassis CLAP translation receives Clack's safe `ChannelPair` relationships rather than raw CLAP pointers. That means Clack currently owns the raw-pointer validation/alias construction.
+
+Chassis-level tests should verify translation/containment of:
+
+- exact alias -> one Chassis `InPlace` mutable view;
+- disjoint pair -> Chassis `Separate`;
+- required input-only/output-only main channel rejection;
+- wrong port count;
+- wrong main channel count;
+- unavailable f32 representation;
+- activation/callback frame-bound failures;
+- future sidechain/aux/asymmetric layouts only after that adapter model exists.
+
+Separately audit Clack's internal unsafe implementation before production qualification; safe API consumption does not eliminate dependency trust review.
+
+## Native CLAP qualification
+
+Once the Rust workspace is green:
+
+1. build the conformance `cdylib` in release mode;
+2. package it according to the platform's CLAP layout rules rather than treating an arbitrary Cargo filename as a finished product artifact;
+3. run current CLAP validator tooling and record its exact version/options;
+4. run lifecycle/buffer stress supported by the validator/tooling;
+5. smoke-test the same artifact in at least one real CLAP host;
+6. record OS/architecture/toolchain/host versions and any deviations.
+
+A validator pass is additional evidence, not proof of production support.
 
 ## Core unit tests
 
@@ -80,40 +184,13 @@ As the corresponding features land, extend coverage to:
 
 Property testing is appropriate after a dependency is reviewed under the license policy.
 
-## Realtime allocation/work checks
+## Other format adapters
 
-The current code is designed so the first process path uses borrowed slices and no explicit allocation, but design inspection is **not** an allocation-proof claim.
-
-Before promoting the runtime path, add a test-only allocation guard and verify normal/adversarial-valid cases.
-
-Also prove work bounds. In particular, stable endpoint/schema resolution must not become a per-block allocating or quadratic scan merely because the API uses human-readable persistent keys. Resolve dense host/runtime mappings outside the callback where possible.
-
-Do not optimize away the controlled `make_in_place()` copy merely to satisfy a zero-copy slogan; benchmark it under representative channel/block sizes before adding complexity.
-
-## Lifecycle and ownership torture
-
-The current conformance slice proves basic activation/reset/process/deactivation sequencing. Expand the same framework tests as lifecycle features appear:
-
-- create/destroy without activation;
-- repeated activate/reset/process/deactivate;
-- invalid/failed activation cleanup;
-- sample-rate/block-size reactivation;
-- inactive I/O reconfiguration;
-- state load before/after activation where legal;
-- editor open/close/destroy loops;
-- legal callback races during editor/instance teardown;
-- stale worker/snapshot completion after replacement/destruction;
-- repeated instance creation/destruction and module unload once task/runtime code exists.
-
-Every resource introduced by Chassis needs a testable final owner/cleanup path.
-
-## Adapter tests
-
-Each format adapter independently verifies translation of:
+Each later format/projection independently verifies translation of:
 
 - product/port/parameter identity;
 - I/O layout/configuration;
-- raw process buffer pointer/alias/length validation before Rust references exist;
+- process buffer aliasing/length semantics;
 - endpoint-to-dense-host-buffer mapping;
 - parameter automation/modulation timing;
 - state streams;
@@ -122,7 +199,7 @@ Each format adapter independently verifies translation of:
 - editor lifetime/resizing;
 - note/MIDI semantics when implemented.
 
-Invalid host data must be contained before construction of safe `ChannelBuffer` references.
+Do not infer VST3/AU correctness from native CLAP success or from `clap-wrapper` merely building.
 
 ## Native validators
 
@@ -163,9 +240,9 @@ Invalid state must not panic, allocate without configured bounds, or partially m
 
 ## Unsafe/FFI evidence
 
-Format-independent crates deny unsafe code. The current `ChannelBuffer` layer relies only on safe references; unsafe alias proof belongs to adapters.
+Format-independent crates deny unsafe code. The first `chassis-clap` slice also owns no unsafe block; Clack supplies the CLAP ABI and safe audio views.
 
-For adapter unsafe code:
+If Chassis later owns adapter unsafe code:
 
 - minimize and isolate the unsafe surface;
 - every unsafe block has a `// SAFETY:` invariant explanation;
