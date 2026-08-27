@@ -362,7 +362,9 @@ mod tests {
 
         assert_eq!(
             AudioIoConfiguration::new(&ports).validate(&DEFAULT_EFFECT_PORTS),
-            Err(AudioIoConfigurationError::DuplicateConfiguredPort(MAIN_INPUT))
+            Err(AudioIoConfigurationError::DuplicateConfiguredPort(
+                MAIN_INPUT
+            ))
         );
     }
 }

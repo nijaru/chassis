@@ -97,7 +97,9 @@ pub enum ProcessConfigError {
 impl fmt::Display for ProcessConfigError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidSampleRate => formatter.write_str("sample rate must be finite and positive"),
+            Self::InvalidSampleRate => {
+                formatter.write_str("sample rate must be finite and positive")
+            }
             Self::InvalidFrameRange => {
                 formatter.write_str("guaranteed minimum frame count must not exceed maximum")
             }
@@ -134,10 +136,10 @@ mod tests {
     #[test]
     fn accepts_unknown_minimum() {
         let maximum = NonZeroU32::new(2048).expect("test maximum is non-zero");
-        let config = ProcessConfig::new(48_000.0, None, maximum)
-            .expect("test configuration is valid");
+        let config =
+            ProcessConfig::new(48_000.0, None, maximum).expect("test configuration is valid");
 
-        assert_eq!(config.sample_rate(), 48_000.0);
+        assert!((config.sample_rate() - 48_000.0).abs() <= f64::EPSILON);
         assert_eq!(config.guaranteed_min_frames(), None);
         assert_eq!(config.max_frames(), maximum);
     }
