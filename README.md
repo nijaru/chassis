@@ -4,7 +4,7 @@ Chassis is a convention-first Rust framework for professional realtime audio sof
 
 The first production surface is audio plugins, beginning with effects. The core component model is intentionally usable for instruments, standalone applications, and embedded processors without rewriting product DSP/state. Optional hosting/device/graph layers may later support larger audio applications without making DAW/project semantics part of Chassis core.
 
-Status: **private pre-alpha design and implementation**. Nothing in `chassis-core` is a stable public API yet.
+Status: **private pre-alpha design and implementation**. Nothing in `chassis-core` or `chassis-clap` is a stable public API yet.
 
 ## Direction
 
@@ -27,9 +27,11 @@ Target desktop platforms are macOS, Windows, and Linux where each export format 
 
 ## Backend strategy
 
-The current preferred first implementation uses [Clack](https://github.com/prokopyl/clack) at the low-level CLAP boundary. [clap-wrapper](https://github.com/free-audio/clap-wrapper) is the preferred initial route to VST3/AUv2/AUv3 while each projection passes Chassis's own semantic/host validation.
+The first adapter now uses Clack 0.2.0 at the low-level CLAP boundary. [clap-wrapper](https://github.com/free-audio/clap-wrapper) remains the preferred initial route to VST3/AUv2/AUv3 once the native CLAP semantic path is qualified.
 
-These are implementation dependencies, not the product-facing semantic model. Chassis core does not expose CLAP/VST3/AU/Clack/clap-wrapper types, and a wrapper can be replaced if lifecycle/correctness/capability evidence requires it.
+Clack/CLAP types remain outside `chassis-core`. The initial `chassis-clap` code uses Clack's safe audio API and owns no raw CLAP pointer dereference itself. Backend qualification still requires local build/test, CLAP validation, lifecycle stress, and real-host testing.
+
+See [the Clack 0.2 adapter audit](docs/research/clack-0.2-adapter-audit.md).
 
 ## Default effect convention
 
@@ -42,6 +44,8 @@ audio.sidechain  stereo optional/inactive
 ```
 
 Unused optional facilities should not impose process-time work.
+
+The first CLAP proof intentionally exports only the required stereo main pair. Sidechain/multibus/configurable-layout export is a later adapter gate rather than a hidden limitation in `chassis-core`.
 
 ## Read first
 
@@ -77,13 +81,18 @@ crates/
       runtime.rs    explicit Component/Processor/Process lifecycle shell
     tests/
       conformance.rs deterministic external-API lifecycle/buffer tests
+
+  chassis-clap/
+    src/lib.rs      first Clack lifecycle + stereo/f32 buffer translation proof
+
+examples/
+  clap-conformance/
+    src/lib.rs      exported deterministic gain component for CLAP qualification
 ```
 
-The first executable runtime slice deliberately stops before parameter/state authority, transport/events, background work, or format adapters. `Processor` owns reset/lifecycle semantics; sample processing is a separate `Process<S>` capability so an eventual f64 path does not require a second processor architecture.
+The first CLAP slice maps factory/main-thread construction, activation, f32 stereo processing, reset, and deactivation onto the existing Chassis runtime. It deliberately stops before parameters/state, transport/events, render mode, f64, sidechains/multibus, GUI, or packaging.
 
-`chassis-core` is currently unpublished `0.0.0`, std-only, and has no third-party Rust dependencies. Its current code is an implementation spike and can change freely before publication.
-
-Future crates such as `chassis-clap`, `chassis-gui`, `chassis-iced`, `chassis-test`, `chassis-standalone`, and `cargo-chassis` are created only when an executable requirement proves the boundary. The public authoring experience should still feel like one framework rather than exposing an internal crate graph.
+`chassis-core` remains std-only. `chassis-clap` is the first crate with third-party dependencies and pins Clack 0.2.0 exactly while the adapter contract is being qualified.
 
 ## Validation
 
@@ -96,9 +105,12 @@ cargo fmt --all -- --check
 cargo test --workspace
 cargo clippy --workspace --all-features --all-targets -- -D warnings
 cargo deny check
+cargo machete
 ```
 
-Add `cargo machete` once third-party dependencies exist. Use Miri/model tests/sanitizers/native validators as the relevant unsafe/adapters are implemented. Do not describe an unexecuted check as passing.
+The current CLAP slice was authored in an environment without a Rust toolchain, so it must not be described as green until those commands regenerate/review `Cargo.lock` and pass locally. After that, build/package the conformance export and run CLAP-native validation before treating the adapter as qualified.
+
+Use Miri/model tests/sanitizers/native validators as the relevant unsafe/adapters are implemented. Do not describe an unexecuted check as passing.
 
 ## Licensing
 
