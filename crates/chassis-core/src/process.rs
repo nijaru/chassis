@@ -1,36 +1,38 @@
-//! Format-independent processor activation configuration.
+//! Format-independent processor activation and per-call scheduling contracts.
 
 use core::fmt;
 
-/// Scheduling/quality context for processing.
+/// Scheduling/quality context for one processing call.
 ///
-/// This is semantic rather than format-specific. A backend only emits modes it
-/// can represent; for example CLAP may map only realtime/offline while VST3
-/// prefetch maps to [`Self::BufferedRealtime`].
+/// This is semantic rather than format-specific. Backends emit only modes they
+/// can represent. VST3 prefetch maps to [`Self::BufferedRealtime`]; CLAP core
+/// render mode maps realtime/offline and does not emit the buffered mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ProcessMode {
     /// The caller has a realtime delivery deadline.
     Realtime,
-    /// Processing may be scheduled ahead/irregularly but should retain
-    /// realtime-quality, nonblocking behavior rather than using offline-only
-    /// algorithms or waiting for wall-clock realtime.
+    /// Processing may be scheduled ahead/irregularly but must retain
+    /// realtime-quality/nonblocking behavior rather than wait for wall-clock
+    /// realtime or choose an offline-only algorithm.
     BufferedRealtime,
-    /// Non-realtime rendering where the product may deliberately select an
-    /// offline-quality path if it supports one.
+    /// Non-realtime rendering where a product may deliberately choose a more
+    /// expensive offline-quality path if it supports one.
     Offline,
 }
 
-/// Host/runtime configuration supplied when a processor is activated.
+/// Resource bounds/configuration supplied when a processor is activated.
+///
+/// Per-call scheduling mode is intentionally separate: some formats can change
+/// realtime/prefetch scheduling without reactivation.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ProcessConfig {
     sample_rate: f64,
     min_frames: u32,
     max_frames: u32,
-    mode: ProcessMode,
 }
 
 impl ProcessConfig {
-    /// Construct a validated activation configuration.
+    /// Construct validated activation/resource bounds.
     ///
     /// # Errors
     ///
@@ -42,7 +44,6 @@ impl ProcessConfig {
         sample_rate: f64,
         min_frames: u32,
         max_frames: u32,
-        mode: ProcessMode,
     ) -> Result<Self, ProcessConfigError> {
         if !sample_rate.is_finite() || sample_rate <= 0.0 {
             return Err(ProcessConfigError::InvalidSampleRate);
@@ -55,7 +56,6 @@ impl ProcessConfig {
             sample_rate,
             min_frames,
             max_frames,
-            mode,
         })
     }
 
@@ -78,12 +78,6 @@ impl ProcessConfig {
     #[must_use]
     pub const fn max_frames(self) -> u32 {
         self.max_frames
-    }
-
-    /// Return the scheduling/quality mode.
-    #[must_use]
-    pub const fn mode(self) -> ProcessMode {
-        self.mode
     }
 }
 
@@ -116,23 +110,28 @@ mod tests {
     #[test]
     fn rejects_invalid_values() {
         assert_eq!(
-            ProcessConfig::new(0.0, 0, 512, ProcessMode::Realtime),
+            ProcessConfig::new(0.0, 0, 512),
             Err(ProcessConfigError::InvalidSampleRate)
         );
         assert_eq!(
-            ProcessConfig::new(48_000.0, 1024, 512, ProcessMode::Realtime),
+            ProcessConfig::new(48_000.0, 1024, 512),
             Err(ProcessConfigError::InvalidFrameRange)
         );
     }
 
     #[test]
     fn accepts_zero_minimum_and_variable_blocks() {
-        let config = ProcessConfig::new(48_000.0, 0, 2048, ProcessMode::BufferedRealtime)
+        let config = ProcessConfig::new(48_000.0, 0, 2048)
             .expect("test configuration is valid");
 
         assert_eq!(config.sample_rate(), 48_000.0);
         assert_eq!(config.min_frames(), 0);
         assert_eq!(config.max_frames(), 2048);
-        assert_eq!(config.mode(), ProcessMode::BufferedRealtime);
+    }
+
+    #[test]
+    fn process_modes_are_per_call_semantics() {
+        assert_ne!(ProcessMode::Realtime, ProcessMode::BufferedRealtime);
+        assert_ne!(ProcessMode::BufferedRealtime, ProcessMode::Offline);
     }
 }
