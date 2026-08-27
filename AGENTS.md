@@ -13,7 +13,7 @@ Read `docs/architecture.md`, `docs/roadmap.md`, `docs/licensing.md`, and `docs/d
 - Prefer strong domain newtypes/enums over raw strings or integers once data crosses into the semantic core.
 - Borrow at API boundaries when ownership is not needed; do not clone merely to satisfy the borrow checker.
 - Prefer typed library errors. Add error/dependency crates only when they materially simplify the design.
-- Treat every `pub` item and `pub use` as deliberate API design. This pre-alpha crate is unpublished; use that freedom to change weak abstractions before release.
+- Treat every `pub` item and `pub use` as deliberate API design. These pre-alpha crates are unpublished; use that freedom to change weak abstractions before release.
 - Avoid recoverable `.unwrap()` in library code. `expect` is for a proved programmer invariant and should state the reason.
 
 ## Design rules
@@ -41,6 +41,7 @@ For every mutable guarantee/resource, name one authority and its lifecycle: crea
 - Editor/background work never receives unrestricted mutable access to `Processor`.
 - Replacement/snapshot/task APIs must prevent stale work from publishing into a new generation and must define where old resources are destroyed.
 - Do not add process-global mutable state or a process-global worker runtime without an explicit unload/shutdown/lifetime design. Use `OnceLock` only when one-time process-global lifetime is actually the contract.
+- `chassis-core::Processor` is not globally `Send`; deployment adapters add thread-transfer bounds only where their host/runtime contract requires them. CLAP currently requires the concrete processor to be `Send` because Clack models the host as free to move it between audio threads.
 
 ## Realtime rules
 
@@ -56,6 +57,7 @@ These strict rules apply to the audio callback and other explicitly deterministi
 - Controlled copies are acceptable when semantics require them and measurement does not justify more complexity. Zero-copy is not a goal by itself.
 - Do not add cache padding/alignment, lock-free algorithms, custom allocators, `no_std`, SIMD, or unsafe code without a concrete requirement and evidence.
 - Audit every dependency used on the realtime path for allocation, locking, unsafe invariants, maintenance quality, and overhead.
+- Do not generalize the first fixed-stereo CLAP proof by allocating `Vec<ChannelBuffer>` per callback. Let real adapter evidence drive the general multibus borrowing model.
 
 ## Validation and failure
 
@@ -68,6 +70,7 @@ These strict rules apply to the audio callback and other explicitly deterministi
 - Test negative space: malformed state, exhaustion, lifecycle replacement/cancellation, unusual blocks, state load/save, automation, editor teardown, and unsupported layouts.
 - Maintain a conformance component and differential cross-format tests; do not rely on product DSP or one successful host load as framework proof.
 - Separate correctness evidence from performance and production-readiness claims.
+- `examples/clap-conformance` is the first exported adapter probe. Do not treat it as product support until local Rust validation, CLAP-native validation, and host testing pass.
 
 ## Unsafe/FFI rules
 
@@ -78,6 +81,7 @@ These strict rules apply to the audio callback and other explicitly deterministi
 - `unsafe_op_in_unsafe_fn` remains denied; unsafe functions state preconditions and explicit unsafe blocks discharge them.
 - Run Miri on Rust portions before promoting unsafe adapter changes; use sanitizers/host stress where Miri cannot model native boundaries.
 - Subtle atomic/memory-ordering primitives require model/property testing (for example Loom) before becoming shared framework infrastructure.
+- The first `chassis-clap` slice intentionally contains no Chassis-owned unsafe code; Clack constructs the safe `ChannelPair` views. Keep that property until a concrete missing capability justifies owning additional unsafe surface.
 
 ## Licensing and dependencies
 
@@ -88,6 +92,7 @@ These strict rules apply to the audio callback and other explicitly deterministi
 - Do not import third-party strong-copyleft code into the commercially relicensable framework without an explicit decision.
 - Keep SDK-specific constraints, especially AAX/Avid/PACE, isolated from format-independent crates.
 - Do not accept substantive external code contributions until contributor/relicensing terms are established.
+- The first adopted external runtime dependencies are exact Clack 0.2.0 crates; upgrades are deliberate compatibility/audit events, not automatic version drift.
 
 ## Validation commands
 
@@ -98,19 +103,20 @@ cargo fmt --all -- --check
 cargo test --workspace
 cargo clippy --workspace --all-features --all-targets -- -D warnings
 cargo deny check
-cargo machete        # once third-party dependencies exist
+cargo machete
 cargo miri test      # before promoting unsafe Rust where Miri applies
 ```
 
-Format-native validators, host tests, fuzzing, sanitizers, and benchmarks become additional gates as the relevant adapters exist.
+`cargo machete` now applies because `chassis-clap` has third-party dependencies. Format-native validators, host tests, fuzzing, sanitizers, and benchmarks become additional gates as the relevant adapters exist.
 
 ## Current implementation priority
 
-1. Audit/finalize the small format-independent semantic contracts needed by the first processing path.
-2. Build a deterministic conformance component and local test harness around those contracts.
-3. Add CLAP export via Clack and validate the lifecycle/process boundary.
-4. Fill out parameters/state/events only to the degree required by that conformance path, then iterate.
-5. Add VST3/AU projection and editor integration after CLAP semantics are proven.
-6. Use real FX clients, then standalone/instruments, to graduate broadly reusable conveniences.
+1. Locally validate the newly added `chassis-clap` + `examples/clap-conformance` slice, regenerate/review `Cargo.lock`, and fix fmt/test/clippy/deny/machete findings without weakening the design.
+2. Build/package the conformance export as an actual `.clap`, then run CLAP-native validator/lifecycle/buffer stress and a real-host smoke test.
+3. Use that evidence to decide the general multibus/sidechain buffer-access shape; do not force arbitrary channel layouts through the current fixed `[ChannelBuffer; 2]` proof.
+4. Add CLAP render/offline semantics and f64 only when their format mapping/advertisement are explicit.
+5. Then implement parameters/automation/state/events through the same conformance path.
+6. Add VST3/AU projection and editor integration only after native CLAP semantics are proven.
+7. Use real FX clients, then standalone/instruments, to graduate broadly reusable conveniences.
 
 Do not create empty crates or roadmap abstractions merely to make the repository look complete.
