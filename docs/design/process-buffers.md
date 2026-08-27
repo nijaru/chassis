@@ -68,12 +68,13 @@ Products that benefit from out-of-place processing can use `input()` and `output
 
 ## ProcessBlock
 
-`ProcessBlock<'buffers, 'samples, 'context, S>` is the first borrowed realtime call type. It contains:
+`ProcessBlock<'buffers, 'samples, 'context, 'parameters, S>` is the first borrowed realtime call type. It contains:
 
 - actual frame count;
 - per-call `ProcessContext` with `ProcessMode`;
 - block-start transport snapshot;
 - validated borrowed parameter event views;
+- a borrowed immutable view of the active base/control `ParameterStore`;
 - a borrowed mutable slice of safe `ChannelBuffer<S>` views.
 
 Its constructor is framework-private. `Activated::process()` first validates
@@ -95,7 +96,7 @@ it never expands a ramp into one event per sample.
 
 It intentionally does **not** rescan the full stable endpoint/schema mapping every callback. That mapping should be resolved once by adapter/runtime setup so high-channel-count processing does not gain hidden allocation or O(n²) semantic validation work.
 
-The first CLAP adapter/conformance host must prove the exact setup-time representation used for this resolved mapping.
+The first CLAP adapter/conformance host must prove the exact setup-time representation used for this resolved mapping. Its current scalar parameter projection synchronizes the shared adapter projection into this borrowed base store before DSP; it does not add a second core authority.
 
 ## Rust aliasing contract
 

@@ -223,10 +223,18 @@ Still required before calling native CLAP support usable in production:
 
 ### Event/parameter translation
 
-The core now accepts a borrowed, bounded sample-sorted parameter event view, but
-adapter translation is still unimplemented. Prove CLAP's sample-sorted event
-stream, parameter values/modulation, gestures, note/event ports, state streams,
-and optional render mode without forcing CLAP-specific semantics into core.
+The first CLAP adapter slice now translates bounded CLAP `ParamValueEvent`s into
+borrowed core set events, maps block-start transport flags/tempo, and exposes
+explicitly mapped scalar float, integer, and boolean parameters through the
+CLAP params/state extensions. The mapping is unit-tested, but native CLAP
+parameter/state qualification is still pending.
+
+Choice/index projection, modulation, gesture output, note/event ports, broader
+state publication semantics, and optional render mode remain unimplemented.
+Prove each without forcing CLAP-specific semantics into core. In particular,
+define how a timestamped automation set becomes the next block's base value and
+what consistency a state save has while processing is active before freezing
+this API.
 
 ## Blocks VST3/AU claims
 

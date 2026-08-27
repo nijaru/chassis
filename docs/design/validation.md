@@ -48,7 +48,7 @@ The first adapter gate is locally green on Apple Silicon macOS with Rust 1.98.0:
 - its five-second, two-worker fuzz run completed without errors after the conformance effect flushed subnormal gain results;
 - REAPER 7.78/macOS-arm64 loaded the bundle, activated it, and rendered a one-second stereo f32 fixture; the processed render matched the no-FX render at 0.5 gain within 6e-8 absolute error.
 
-The skipped validator tests cover capabilities this slice deliberately does not implement, including parameters, state, events, GUI, and other optional extensions. The result proves the tested CLAP lifecycle/buffer path, not production host support or the complete CLAP contract. Bitwig is not installed in the current validation environment.
+The existing native artifact predates the current scalar parameter/state extension slice, so its skipped validator tests cover parameters, state, events, GUI, and other optional extensions as absent from that artifact. The result proves the tested CLAP lifecycle/buffer path, not the new parameter/state projection, production host support, or the complete CLAP contract. Bitwig is not installed in the current validation environment.
 
 ## Core conformance component
 
@@ -73,17 +73,21 @@ Grow the same semantics as parameters/state/events land instead of creating unre
 
 `examples/clap-conformance` is the first actual format export probe. It deliberately implements a deterministic 0.5 gain and uses the explicit Chassis `Component`/`Processor`/`Process<f32>` API.
 
-The initial `chassis-clap` adapter currently attempts only:
+The current `chassis-clap` adapter attempts only the following semantic slice:
 
 - Clack's safe plugin boundary from the pinned post-fix revision `c5975f9f89f0953b00768680357985d46178078a` (development workspace version 0.2.0);
 - one required stereo main input/output pair;
 - f32 processing;
 - exact in-place or separate paired channels;
 - Chassis activation/process/reset/deactivation;
+- explicit scalar float, integer, and boolean parameter metadata/value mapping;
+- bounded CLAP parameter-value event normalization into borrowed core set events;
+- bounded CHSS parameter state save/load with product/schema checks;
+- block-start CLAP transport play/record flags and tempo;
 - conservative `ProcessStatus::Continue`;
 - `ProcessMode::Realtime` only.
 
-It does **not** yet claim parameters, state, events, transport, sidechain/multibus, f64, offline render semantics, latency/tail, GUI, packaging, or production host support.
+It does **not** yet claim choice/index parameters, modulation or gesture output, note/MIDI events, sidechain/multibus, f64, offline render semantics, latency/tail, GUI, packaging, or production host support. The existing native CLAP artifact was qualified before this parameter/state slice and must be rerun before making claims about the new extensions.
 
 ### First local adapter gate
 
@@ -105,7 +109,7 @@ Any compile/lint failure is adapter feedback. Fix the API/translation rather tha
 
 ## Realtime allocation/work checks
 
-The core process path and first fixed-stereo CLAP translation are designed to avoid explicit process-time allocation: the adapter constructs a fixed `[ChannelBuffer; 2]` on the stack from Clack safe channel pairs.
+The core process path and fixed-stereo CLAP translation are designed to avoid explicit process-time allocation: the adapter constructs a fixed `[ChannelBuffer; 2]` on the stack from Clack safe channel pairs and preallocates normalized parameter-event/control scratch during activation.
 
 Design inspection is **not** an allocation-proof claim. Before promotion, add test/measurement evidence that both Chassis and the exact Clack path used do not allocate/block unexpectedly during process.
 
@@ -183,6 +187,7 @@ As the corresponding features land, extend coverage to:
 
 - parameter mapping properties;
 - host-specific process trajectory/event ordering;
+- scalar CLAP metadata, event, transport, and state projection tests;
 - state encoding/migrations;
 - state load failure leaving live authority unchanged;
 - bounded queue/scratch behavior and allocation instrumentation;

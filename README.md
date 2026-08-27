@@ -83,18 +83,22 @@ crates/
       buffer.rs     safe exact-alias/disjoint/input-only/output-only channel views
       process.rs    activation bounds + borrowed per-call ProcessBlock
       runtime.rs    explicit Component/Processor/Process lifecycle shell
+      parameters.rs typed schemas + validated base/control state
+      automation.rs bounded borrowed parameter trajectories
+      state.rs      deterministic bounded CHSS state document
     tests/
       conformance.rs deterministic external-API lifecycle/buffer tests
 
   chassis-clap/
-    src/lib.rs      first Clack lifecycle + stereo/f32 buffer translation proof
+    src/lib.rs      Clack lifecycle, stereo/f32 buffers, scalar params/state/transport
+    src/parameters.rs explicit CLAP IDs, scalar normalization, shared state projection
 
 examples/
   clap-conformance/
     src/lib.rs      exported deterministic gain component for CLAP qualification
 ```
 
-The first CLAP slice maps factory/main-thread construction, activation, f32 stereo processing, reset, and deactivation onto the existing Chassis runtime. It deliberately stops before parameters/state, transport/events, render mode, f64, sidechains/multibus, GUI, or packaging.
+The current CLAP slice maps factory/main-thread construction, activation, f32 stereo processing, reset, and deactivation onto the existing Chassis runtime. It also projects explicitly mapped scalar float, integer, and boolean parameters, bounded parameter-value events, block-start transport tempo/play/record flags, and bounded CHSS parameter state. Choice/modulation/gesture output, note/MIDI events, render mode, f64, sidechains/multibus, GUI, and packaging remain future adapter work. The parameter/state projection is locally unit-tested but is not yet production-qualified or validated by the existing native host artifact.
 
 `chassis-core` remains std-only. `chassis-clap` is the first crate with third-party dependencies and consumes one full-SHA pinned Clack source while the adapter contract is being qualified.
 
@@ -112,7 +116,7 @@ cargo deny check
 cargo machete
 ```
 
-The current CLAP slice was authored in an environment without a Rust toolchain, so it must not be described as green until those commands regenerate/review `Cargo.lock` and pass locally. In particular, confirm the lockfile resolves the exact Clack git revision and review its transitive source/license tree.
+Do not describe the current CLAP slice as fully green until those commands pass locally. In particular, confirm the lockfile resolves the exact Clack git revision and review its transitive source/license tree.
 
 After that, build/package the conformance export and run CLAP-native validation before treating the adapter as qualified.
 

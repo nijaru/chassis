@@ -81,7 +81,7 @@ impl chassis_core::runtime::Processor for MyProcessor {
 impl chassis_core::runtime::Process<f32> for MyProcessor {
     fn process(
         &mut self,
-        block: &mut chassis_core::process::ProcessBlock<'_, '_, '_, f32>,
+        block: &mut chassis_core::process::ProcessBlock<'_, '_, '_, '_, f32>,
     ) {
         for channel in block.buffers_mut() {
             // Use exact in-place storage directly, or explicitly copy a
@@ -148,10 +148,11 @@ Higher-level port/bus lookup helpers should be added only after representative D
 
 The current explicit runtime slice accepts an immutable schema through
 `Component::parameter_descriptors()`. Activation validates and owns a
-`ParameterStore` containing the current base/control values. The store supports
-validated edits, defaults, and parameter entries in the bounded state document.
+`ParameterStore` containing the current base/control values; `ProcessBlock`
+borrows that store for DSP observation. The store supports validated edits,
+defaults, and parameter entries in the bounded state document.
 
-When added, compatibility-relevant declarations remain explicit:
+Compatibility-relevant declarations remain explicit:
 
 - stable canonical string key;
 - value type/domain;
@@ -164,10 +165,9 @@ When added, compatibility-relevant declarations remain explicit:
 Rust field names and display labels are not persistent identity. The current
 store is deliberately a control/non-realtime authority. Process-time events are
 validated against that schema and exposed as borrowed sets/linear trajectories;
-host gesture translation, automation-to-base publication, and atomic
-publication to `Processor` remain follow-up contracts. The processor's eventual
-parameter view will be derived from framework-owned base state plus current
-process events, not a second persistent store.
+host gesture translation and automation-to-base publication remain follow-up
+contracts. The processor observes framework-owned base state through each
+`ProcessBlock` plus current process events, not a second persistent store.
 
 Nested/repeated groups should compose stable key prefixes. Repeated instances should use stable named identities when reordering may occur; raw array index is acceptable only when reordering is explicitly a compatibility break.
 

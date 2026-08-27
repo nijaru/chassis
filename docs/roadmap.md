@@ -11,9 +11,10 @@ prototype, initial borrowed automation/context slice, and first narrow
 `chassis-clap` adapter are locally validated. The adapter passes the current CLAP
 validator and a REAPER render smoke test, but is not production-qualified.
 
-Host-specific parameter/event translation and cross-domain state publication
-remain ahead. This is not a roadmap reversal: the core semantic contracts are
-being proven before adapters and synchronization layers depend on them.
+A narrow host-specific scalar parameter/event/state projection is now in
+progress; cross-domain automation publication and broader host semantics remain
+ahead. This is not a roadmap reversal: the core semantic contracts are being
+proven before adapters and synchronization layers are frozen.
 
 ## Phase 0 — semantic foundation
 
@@ -96,7 +97,8 @@ Bitwig is not installed in the current environment, so broader host qualificatio
 - f64 capability advertisement/dispatch where useful;
 - render/offline mode semantics;
 - audio/event buffers;
-- parameter automation/modulation and gestures;
+- scalar parameter automation and state projection through the CLAP params/state extensions;
+- choice/modulation/gesture semantics and richer events;
 - state save/load while active according to a documented consistency contract;
 - latency/tail/status metadata as required by the conformance path;
 - negative-space lifecycle/input tests and applicable Miri/sanitizer evidence.
