@@ -33,7 +33,7 @@ struct ConformanceProcessor;
 impl Processor for ConformanceProcessor {}
 
 impl Process<f32> for ConformanceProcessor {
-    fn process(&mut self, block: &mut ProcessBlock<'_, '_, f32>) {
+    fn process(&mut self, block: &mut ProcessBlock<'_, '_, '_, f32>) {
         for buffer in block.buffers_mut() {
             for sample in buffer
                 .make_in_place()

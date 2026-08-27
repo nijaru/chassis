@@ -17,9 +17,13 @@ use chassis_core::{
         AudioIoConfiguration, AudioIoConfigurationError, ChannelLayout, ConfiguredAudioPort,
         DEFAULT_EFFECT_CONFIGURATION, MAIN_INPUT, MAIN_OUTPUT,
     },
+    automation::{ParameterEventValue, ParameterEvents},
     buffer::{ChannelBuffer, InputEndpoint, OutputEndpoint},
     parameters::{ParameterDescriptor, ParameterValue},
-    process::{ActivationConfig, ProcessBlock, ProcessBlockError, ProcessConfig, ProcessMode},
+    process::{
+        ActivationConfig, ProcessBlock, ProcessBlockError, ProcessConfig, ProcessContext,
+        ProcessMode, TransportSnapshot,
+    },
     runtime::{ActivateError, Component, Process, Processor, activate},
 };
 
@@ -91,8 +95,10 @@ impl Processor for ConformanceProcessor {
 }
 
 impl Process<f32> for ConformanceProcessor {
-    fn process(&mut self, block: &mut ProcessBlock<'_, '_, f32>) {
+    #[allow(clippy::cast_possible_truncation)]
+    fn process(&mut self, block: &mut ProcessBlock<'_, '_, '_, f32>) {
         self.metrics.process_calls.fetch_add(1, Ordering::Relaxed);
+        let parameter_events = block.parameter_events();
 
         for buffer in block.buffers_mut() {
             let is_main_pair = buffer
@@ -106,11 +112,19 @@ impl Process<f32> for ConformanceProcessor {
                 continue;
             }
 
-            for sample in buffer
+            let mut gain = parameter_events
+                .float_cursor("input.gain", f64::from(self.gain))
+                .expect("conformance gain cursor has a finite base");
+            for (offset, sample) in buffer
                 .make_in_place()
                 .expect("conformance main channels always have paired input/output")
+                .iter_mut()
+                .enumerate()
             {
-                *sample *= self.gain;
+                *sample *= gain
+                    .value_at(u32::try_from(offset).expect("test block fits in u32"))
+                    .expect("conformance cursor offset is within the block")
+                    as f32;
             }
         }
     }
@@ -125,11 +139,19 @@ impl Drop for ConformanceProcessor {
 fn process_config(minimum: Option<u32>, maximum: u32) -> ProcessConfig {
     let minimum = minimum.map(|value| NonZeroU32::new(value).expect("test minimum is non-zero"));
     let maximum = NonZeroU32::new(maximum).expect("test maximum is non-zero");
-    ProcessConfig::new(48_000.0, minimum, maximum).expect("test process configuration is valid")
+    ProcessConfig::new(48_000.0, minimum, maximum, 8).expect("test process configuration is valid")
 }
 
 fn metric(value: &AtomicU32) -> u32 {
     value.load(Ordering::Relaxed)
+}
+
+fn process_context(frame_count: u32, mode: ProcessMode) -> ProcessContext<'static> {
+    ProcessContext::new(
+        mode,
+        TransportSnapshot::unknown(),
+        ParameterEvents::empty_for_block(frame_count),
+    )
 }
 
 fn assert_samples(actual: &[f32], expected: &[f32]) {
@@ -173,6 +195,95 @@ fn runtime_activation_owns_validated_parameter_base_state() {
         active.parameters().get("input.gain"),
         Some(&ParameterValue::Float(0.75))
     );
+}
+
+#[test]
+fn parameter_automation_is_sample_accurate_through_runtime() {
+    let metrics = Arc::new(Metrics::default());
+    let descriptor = ParameterDescriptor::float("input.gain", "Input gain", 0.0, 1.0, 1.0)
+        .expect("parameter definition is valid");
+    let component = ConformanceEffect::with_parameters(Arc::clone(&metrics), 1.0, vec![descriptor]);
+    let mut active = activate(
+        &component,
+        process_config(Some(1), 8),
+        DEFAULT_EFFECT_CONFIGURATION,
+    )
+    .expect("parameterized conformance activation is valid");
+
+    let raw_events = [
+        chassis_core::automation::ParameterEvent::set(
+            1,
+            "input.gain",
+            ParameterEventValue::Float(0.5),
+        ),
+        chassis_core::automation::ParameterEvent::linear(3, "input.gain", 0.0),
+    ];
+    let events = ParameterEvents::new(&raw_events, 4, 8).expect("events are valid");
+    let context = ProcessContext::new(
+        ProcessMode::Realtime,
+        TransportSnapshot::new(Some(true), Some(false), Some(120.0), Some(48_000))
+            .expect("transport snapshot is valid"),
+        events,
+    );
+
+    let input = [1.0_f32; 4];
+    let mut output = [0.0_f32; 4];
+    {
+        let mut buffers = [ChannelBuffer::separate(
+            InputEndpoint::new(MAIN_INPUT, 0),
+            &input,
+            OutputEndpoint::new(MAIN_OUTPUT, 0),
+            &mut output,
+            4,
+        )
+        .expect("left test buffer is valid")];
+        active
+            .process(4, context, &mut buffers)
+            .expect("valid automation block processes");
+    }
+
+    assert_samples(&output, &[1.0, 0.5, 0.25, 0.0]);
+    assert_eq!(metric(&metrics.process_calls), 1);
+    assert_eq!(context.transport().tempo_bpm(), Some(120.0));
+    assert_eq!(context.transport().sample_position(), Some(48_000));
+}
+
+#[test]
+fn invalid_parameter_events_never_reach_product_dsp() {
+    let metrics = Arc::new(Metrics::default());
+    let descriptor = ParameterDescriptor::float("input.gain", "Input gain", 0.0, 1.0, 1.0)
+        .expect("parameter definition is valid");
+    let component = ConformanceEffect::with_parameters(Arc::clone(&metrics), 1.0, vec![descriptor]);
+    let mut active = activate(
+        &component,
+        process_config(Some(1), 8),
+        DEFAULT_EFFECT_CONFIGURATION,
+    )
+    .expect("parameterized conformance activation is valid");
+    let raw_events = [chassis_core::automation::ParameterEvent::set(
+        0,
+        "missing",
+        ParameterEventValue::Float(0.5),
+    )];
+    let events = ParameterEvents::new(&raw_events, 2, 8).expect("event shape is valid");
+    let context = ProcessContext::new(ProcessMode::Realtime, TransportSnapshot::unknown(), events);
+    let input = [1.0_f32; 2];
+    let mut output = [0.0_f32; 2];
+    let mut buffers = [ChannelBuffer::separate(
+        InputEndpoint::new(MAIN_INPUT, 0),
+        &input,
+        OutputEndpoint::new(MAIN_OUTPUT, 0),
+        &mut output,
+        2,
+    )
+    .expect("test buffer is valid")];
+
+    assert!(matches!(
+        active.process(2, context, &mut buffers),
+        Err(ProcessBlockError::InvalidParameterEvents(_))
+    ));
+    assert_eq!(metric(&metrics.process_calls), 0);
+    assert_samples(&output, &[0.0, 0.0]);
 }
 
 #[test]
@@ -242,7 +353,7 @@ fn explicit_runtime_processes_separate_buffers_and_owns_lifecycle() {
         ];
 
         active
-            .process(4, ProcessMode::Realtime, &mut buffers)
+            .process(4, process_context(4, ProcessMode::Realtime), &mut buffers)
             .expect("valid realtime block processes");
     }
 
@@ -290,7 +401,11 @@ fn exact_in_place_buffers_do_not_require_a_second_alias() {
         ];
 
         active
-            .process(3, ProcessMode::BufferedRealtime, &mut buffers)
+            .process(
+                3,
+                process_context(3, ProcessMode::BufferedRealtime),
+                &mut buffers,
+            )
             .expect("valid buffered-realtime block processes");
     }
 
@@ -353,7 +468,7 @@ fn callback_dimension_failures_are_contained_before_product_dsp() {
     ];
 
     assert!(matches!(
-        active.process(9, ProcessMode::Realtime, &mut too_large),
+        active.process(9, process_context(9, ProcessMode::Realtime), &mut too_large),
         Err(ProcessBlockError::ExceedsActivatedMaximum { .. })
     ));
     assert_eq!(metric(&metrics.process_calls), 0);
@@ -378,7 +493,11 @@ fn callback_dimension_failures_are_contained_before_product_dsp() {
     ];
 
     assert!(matches!(
-        active.process(0, ProcessMode::Realtime, &mut below_minimum),
+        active.process(
+            0,
+            process_context(0, ProcessMode::Realtime),
+            &mut below_minimum
+        ),
         Err(ProcessBlockError::BelowGuaranteedMinimum { .. })
     ));
     assert_eq!(metric(&metrics.process_calls), 0);
@@ -415,7 +534,7 @@ fn zero_frame_callback_is_supported_when_no_positive_minimum_is_promised() {
     ];
 
     active
-        .process(0, ProcessMode::Offline, &mut buffers)
+        .process(0, process_context(0, ProcessMode::Offline), &mut buffers)
         .expect("zero-frame callback is valid without a positive minimum guarantee");
     assert_eq!(metric(&metrics.process_calls), 1);
 }

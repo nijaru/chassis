@@ -1,8 +1,8 @@
 //! Explicit component/processor lifecycle contracts.
 //!
 //! This module is intentionally small. It proves the semantic ownership split
-//! while keeping parameter/state persistence separate from future automation,
-//! proc-macro, and format-adapter contracts.
+//! while keeping parameter/state authority and process-time automation separate
+//! from future host translation, proc-macro, and format-adapter contracts.
 
 use core::fmt;
 
@@ -12,7 +12,7 @@ use crate::{
     },
     buffer::ChannelBuffer,
     parameters::{ParameterDescriptor, ParameterStore, ParameterStoreError},
-    process::{ActivationConfig, ProcessBlock, ProcessBlockError, ProcessConfig, ProcessMode},
+    process::{ActivationConfig, ProcessBlock, ProcessBlockError, ProcessConfig, ProcessContext},
 };
 
 /// Immutable product definition/factory for one Chassis component type.
@@ -83,7 +83,7 @@ pub trait Processor {
 /// Processing capability for one sample representation.
 pub trait Process<S>: Processor {
     /// Process one already-validated realtime block.
-    fn process(&mut self, block: &mut ProcessBlock<'_, '_, S>);
+    fn process(&mut self, block: &mut ProcessBlock<'_, '_, '_, S>);
 }
 
 /// Framework activation failure before an active processor is published.
@@ -126,8 +126,9 @@ where
 /// Active processor, canonical base parameter state, and immutable activation configuration.
 ///
 /// The parameter store is a control/non-realtime authority. Process-time
-/// automation trajectories and processor publication boundaries remain explicit
-/// follow-up contracts.
+/// automation is supplied as a validated borrowed context to each block; base
+/// state publication and cross-domain synchronization remain explicit follow-up
+/// contracts.
 pub struct Activated<'a, P> {
     config: ActivationConfig<'a>,
     processor: P,
@@ -160,25 +161,30 @@ where
         self.processor.reset();
     }
 
-    /// Process one block after validating callback-varying dimensions.
+    /// Process one block after validating dimensions, automation, and context.
     ///
     /// Stable endpoint/schema translation is intentionally not rescanned here;
-    /// adapters resolve that mapping outside the realtime hot path.
+    /// adapters resolve that mapping outside the realtime hot path. Parameter
+    /// events are validated against the active schema before product DSP runs.
     ///
     /// # Errors
     ///
-    /// Returns [`ProcessBlockError`] before product DSP runs if callback frame
-    /// dimensions violate the activation contract.
+    /// Returns [`ProcessBlockError`] before product DSP runs if the callback
+    /// dimensions, event context, or parameter values violate the activation
+    /// contract.
     pub fn process<S>(
         &mut self,
         frame_count: u32,
-        mode: ProcessMode,
+        context: ProcessContext<'_>,
         buffers: &mut [ChannelBuffer<'_, S>],
     ) -> Result<(), ProcessBlockError>
     where
         P: Process<S>,
     {
-        let mut block = ProcessBlock::new(&self.config, frame_count, mode, buffers)?;
+        let mut block = ProcessBlock::new(&self.config, frame_count, context, buffers)?;
+        self.parameters
+            .validate_events(context.parameter_events())
+            .map_err(ProcessBlockError::InvalidParameterEvents)?;
         self.processor.process(&mut block);
         Ok(())
     }

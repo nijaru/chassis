@@ -2,7 +2,10 @@
 
 use core::{fmt, num::NonZeroU32};
 
-use crate::{audio::AudioIoConfiguration, buffer::ChannelBuffer};
+use crate::{
+    audio::AudioIoConfiguration, automation::ParameterEvents, buffer::ChannelBuffer,
+    parameters::ParameterAutomationError,
+};
 
 /// Scheduling/quality context for one processing call.
 ///
@@ -22,6 +25,139 @@ pub enum ProcessMode {
     Offline,
 }
 
+/// Best-known transport values at the start of one processing block.
+///
+/// Every field is optional because a backend may not provide it. Values are a
+/// snapshot, not a promise of timestamped intra-block transport changes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TransportSnapshot {
+    playing: Option<bool>,
+    recording: Option<bool>,
+    tempo_bpm: Option<f64>,
+    sample_position: Option<i64>,
+}
+
+impl TransportSnapshot {
+    /// Construct a snapshot, validating an available tempo.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TransportSnapshotError::InvalidTempo`] when `tempo_bpm` is
+    /// non-finite or not positive.
+    pub fn new(
+        playing: Option<bool>,
+        recording: Option<bool>,
+        tempo_bpm: Option<f64>,
+        sample_position: Option<i64>,
+    ) -> Result<Self, TransportSnapshotError> {
+        if tempo_bpm.is_some_and(|tempo| !tempo.is_finite() || tempo <= 0.0) {
+            return Err(TransportSnapshotError::InvalidTempo);
+        }
+        Ok(Self {
+            playing,
+            recording,
+            tempo_bpm,
+            sample_position,
+        })
+    }
+
+    /// Construct a snapshot with no available transport values.
+    #[must_use]
+    pub const fn unknown() -> Self {
+        Self {
+            playing: None,
+            recording: None,
+            tempo_bpm: None,
+            sample_position: None,
+        }
+    }
+
+    /// Return the known playing state.
+    #[must_use]
+    pub const fn playing(self) -> Option<bool> {
+        self.playing
+    }
+
+    /// Return the known recording state.
+    #[must_use]
+    pub const fn recording(self) -> Option<bool> {
+        self.recording
+    }
+
+    /// Return the known tempo in beats per minute.
+    #[must_use]
+    pub const fn tempo_bpm(self) -> Option<f64> {
+        self.tempo_bpm
+    }
+
+    /// Return the known absolute sample position.
+    #[must_use]
+    pub const fn sample_position(self) -> Option<i64> {
+        self.sample_position
+    }
+}
+
+/// Invalid block-start transport metadata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransportSnapshotError {
+    /// An available tempo was zero, negative, NaN, or infinite.
+    InvalidTempo,
+}
+
+impl fmt::Display for TransportSnapshotError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidTempo => {
+                formatter.write_str("transport tempo must be finite and positive")
+            }
+        }
+    }
+}
+
+impl std::error::Error for TransportSnapshotError {}
+
+/// Semantic context for one process block.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ProcessContext<'a> {
+    mode: ProcessMode,
+    transport: TransportSnapshot,
+    parameter_events: ParameterEvents<'a>,
+}
+
+impl<'a> ProcessContext<'a> {
+    /// Construct process context from backend-normalized values.
+    #[must_use]
+    pub const fn new(
+        mode: ProcessMode,
+        transport: TransportSnapshot,
+        parameter_events: ParameterEvents<'a>,
+    ) -> Self {
+        Self {
+            mode,
+            transport,
+            parameter_events,
+        }
+    }
+
+    /// Return the scheduling/quality mode for this block.
+    #[must_use]
+    pub const fn mode(self) -> ProcessMode {
+        self.mode
+    }
+
+    /// Return the block-start transport snapshot.
+    #[must_use]
+    pub const fn transport(self) -> TransportSnapshot {
+        self.transport
+    }
+
+    /// Return the validated borrowed parameter events.
+    #[must_use]
+    pub const fn parameter_events(self) -> ParameterEvents<'a> {
+        self.parameter_events
+    }
+}
+
 /// Resource bounds/configuration supplied when a processor is activated.
 ///
 /// Per-call scheduling mode is intentionally separate: some formats can change
@@ -31,6 +167,7 @@ pub struct ProcessConfig {
     sample_rate: f64,
     guaranteed_min_frames: Option<NonZeroU32>,
     max_frames: NonZeroU32,
+    max_parameter_events: u32,
 }
 
 impl ProcessConfig {
@@ -38,7 +175,9 @@ impl ProcessConfig {
     ///
     /// `guaranteed_min_frames` is `None` when a backend does not promise a
     /// positive minimum. That is distinct from whether a particular backend may
-    /// legally issue a zero-frame process call.
+    /// legally issue a zero-frame process call. `max_parameter_events` is the
+    /// activation-owned bound for normalized parameter events in one callback;
+    /// zero means that the component/adapter accepts no parameter events.
     ///
     /// # Errors
     ///
@@ -50,6 +189,7 @@ impl ProcessConfig {
         sample_rate: f64,
         guaranteed_min_frames: Option<NonZeroU32>,
         max_frames: NonZeroU32,
+        max_parameter_events: u32,
     ) -> Result<Self, ProcessConfigError> {
         if !sample_rate.is_finite() || sample_rate <= 0.0 {
             return Err(ProcessConfigError::InvalidSampleRate);
@@ -62,6 +202,7 @@ impl ProcessConfig {
             sample_rate,
             guaranteed_min_frames,
             max_frames,
+            max_parameter_events,
         })
     }
 
@@ -84,6 +225,12 @@ impl ProcessConfig {
     #[must_use]
     pub const fn max_frames(self) -> NonZeroU32 {
         self.max_frames
+    }
+
+    /// Return the maximum normalized parameter events accepted per callback.
+    #[must_use]
+    pub const fn max_parameter_events(self) -> u32 {
+        self.max_parameter_events
     }
 }
 
@@ -144,22 +291,36 @@ impl<'a> ActivationConfig<'a> {
 ///
 /// Buffer entries already contain safe Rust references whose aliasing has been
 /// proved by the adapter/runtime boundary. Construction validates only facts
-/// that can vary per callback: frame-count bounds and slice lengths. Stable
-/// endpoint/schema mapping should be resolved outside the hot path rather than
-/// rescanned with allocation or quadratic work every block.
-pub struct ProcessBlock<'buffers, 'samples, S> {
+/// that can vary per callback: frame-count bounds, event bounds/context, and
+/// slice lengths. Stable endpoint/schema mapping should be resolved outside the
+/// hot path rather than rescanned with allocation or quadratic work every block.
+pub struct ProcessBlock<'buffers, 'samples, 'context, S> {
     frame_count: u32,
-    mode: ProcessMode,
+    context: ProcessContext<'context>,
     buffers: &'buffers mut [ChannelBuffer<'samples, S>],
 }
 
-impl<'buffers, 'samples, S> ProcessBlock<'buffers, 'samples, S> {
+impl<'buffers, 'samples, 'context, S> ProcessBlock<'buffers, 'samples, 'context, S> {
     pub(crate) fn new(
         config: &ActivationConfig<'_>,
         frame_count: u32,
-        mode: ProcessMode,
+        context: ProcessContext<'context>,
         buffers: &'buffers mut [ChannelBuffer<'samples, S>],
     ) -> Result<Self, ProcessBlockError> {
+        if context.parameter_events().frame_count() != frame_count {
+            return Err(ProcessBlockError::ParameterEventFrameCountMismatch {
+                expected: frame_count,
+                actual: context.parameter_events().frame_count(),
+            });
+        }
+        let maximum_parameter_events = usize::try_from(config.process().max_parameter_events())
+            .map_err(|_| ProcessBlockError::ParameterEventLimitNotRepresentable)?;
+        if context.parameter_events().len() > maximum_parameter_events {
+            return Err(ProcessBlockError::ParameterEventCountTooLarge {
+                actual: context.parameter_events().len(),
+                maximum: config.process().max_parameter_events(),
+            });
+        }
         if let Some(minimum) = config.process().guaranteed_min_frames()
             && frame_count < minimum.get()
         {
@@ -190,7 +351,7 @@ impl<'buffers, 'samples, S> ProcessBlock<'buffers, 'samples, S> {
 
         Ok(Self {
             frame_count,
-            mode,
+            context,
             buffers,
         })
     }
@@ -204,7 +365,25 @@ impl<'buffers, 'samples, S> ProcessBlock<'buffers, 'samples, S> {
     /// Return the scheduling/quality mode for this callback.
     #[must_use]
     pub const fn mode(&self) -> ProcessMode {
-        self.mode
+        self.context.mode()
+    }
+
+    /// Return the complete semantic context for this callback.
+    #[must_use]
+    pub const fn context(&self) -> ProcessContext<'context> {
+        self.context
+    }
+
+    /// Return the block-start transport snapshot.
+    #[must_use]
+    pub const fn transport(&self) -> TransportSnapshot {
+        self.context.transport()
+    }
+
+    /// Return validated borrowed parameter automation events.
+    #[must_use]
+    pub const fn parameter_events(&self) -> ParameterEvents<'context> {
+        self.context.parameter_events()
     }
 
     /// Borrow all safe channel views for processing.
@@ -214,7 +393,7 @@ impl<'buffers, 'samples, S> ProcessBlock<'buffers, 'samples, S> {
     }
 }
 
-/// Invalid process callback dimensions relative to the active configuration.
+/// Invalid process callback dimensions or semantic context relative to the active configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessBlockError {
     /// A callback was smaller than a positive minimum guaranteed at activation.
@@ -240,6 +419,24 @@ pub enum ProcessBlockError {
         /// Actual sample count exposed by one channel view.
         actual: usize,
     },
+    /// Parameter automation did not match the active schema.
+    InvalidParameterEvents(ParameterAutomationError),
+    /// Parameter events were validated for another block size.
+    ParameterEventFrameCountMismatch {
+        /// Actual process block size.
+        expected: u32,
+        /// Block size used to validate the events.
+        actual: u32,
+    },
+    /// The activation event bound cannot be represented by platform `usize`.
+    ParameterEventLimitNotRepresentable,
+    /// The callback supplied more parameter events than activation allows.
+    ParameterEventCountTooLarge {
+        /// Actual event count.
+        actual: usize,
+        /// Activation-owned maximum.
+        maximum: u32,
+    },
 }
 
 impl fmt::Display for ProcessBlockError {
@@ -260,17 +457,45 @@ impl fmt::Display for ProcessBlockError {
                 formatter,
                 "channel view has {actual} samples but process block requires {expected}"
             ),
+            Self::InvalidParameterEvents(error) => {
+                write!(formatter, "invalid parameter events: {error}")
+            }
+            Self::ParameterEventFrameCountMismatch { expected, actual } => write!(
+                formatter,
+                "parameter events were validated for {actual} frames but process block has {expected}"
+            ),
+            Self::ParameterEventLimitNotRepresentable => {
+                formatter.write_str("parameter event limit is not representable on this platform")
+            }
+            Self::ParameterEventCountTooLarge { actual, maximum } => write!(
+                formatter,
+                "process block has {actual} parameter events but activation allows {maximum}"
+            ),
         }
     }
 }
 
-impl std::error::Error for ProcessBlockError {}
+impl std::error::Error for ProcessBlockError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InvalidParameterEvents(error) => Some(error),
+            Self::BelowGuaranteedMinimum { .. }
+            | Self::ExceedsActivatedMaximum { .. }
+            | Self::FrameCountNotRepresentable
+            | Self::BufferFrameCountMismatch { .. }
+            | Self::ParameterEventFrameCountMismatch { .. }
+            | Self::ParameterEventLimitNotRepresentable
+            | Self::ParameterEventCountTooLarge { .. } => None,
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
         audio::{DEFAULT_EFFECT_CONFIGURATION, MAIN_INPUT, MAIN_OUTPUT},
+        automation::{ParameterEvent, ParameterEventValue},
         buffer::{ChannelBuffer, InputEndpoint, OutputEndpoint},
     };
 
@@ -281,7 +506,7 @@ mod tests {
     #[test]
     fn rejects_invalid_sample_rate() {
         assert_eq!(
-            ProcessConfig::new(0.0, None, maximum(512)),
+            ProcessConfig::new(0.0, None, maximum(512), 0),
             Err(ProcessConfigError::InvalidSampleRate)
         );
     }
@@ -291,25 +516,26 @@ mod tests {
         let minimum = NonZeroU32::new(1024).expect("test minimum is non-zero");
 
         assert_eq!(
-            ProcessConfig::new(48_000.0, Some(minimum), maximum(512)),
+            ProcessConfig::new(48_000.0, Some(minimum), maximum(512), 0),
             Err(ProcessConfigError::InvalidFrameRange)
         );
     }
 
     #[test]
     fn accepts_unknown_minimum() {
-        let config =
-            ProcessConfig::new(48_000.0, None, maximum(2048)).expect("test configuration is valid");
+        let config = ProcessConfig::new(48_000.0, None, maximum(2048), 0)
+            .expect("test configuration is valid");
 
         assert!((config.sample_rate() - 48_000.0).abs() <= f64::EPSILON);
         assert_eq!(config.guaranteed_min_frames(), None);
         assert_eq!(config.max_frames(), maximum(2048));
+        assert_eq!(config.max_parameter_events(), 0);
     }
 
     #[test]
     fn process_block_rejects_mismatched_channel_lengths() {
         let process =
-            ProcessConfig::new(48_000.0, None, maximum(8)).expect("test configuration is valid");
+            ProcessConfig::new(48_000.0, None, maximum(8), 0).expect("test configuration is valid");
         let activation = ActivationConfig::new(process, DEFAULT_EFFECT_CONFIGURATION);
         let input = [0.0_f32; 3];
         let mut output = [0.0_f32; 3];
@@ -322,9 +548,74 @@ mod tests {
         )
         .expect("test buffers are long enough")];
 
+        let context = ProcessContext::new(
+            ProcessMode::Realtime,
+            TransportSnapshot::unknown(),
+            ParameterEvents::empty_for_block(2),
+        );
         assert!(matches!(
-            ProcessBlock::new(&activation, 2, ProcessMode::Realtime, &mut buffers),
+            ProcessBlock::new(&activation, 2, context, &mut buffers),
             Err(ProcessBlockError::BufferFrameCountMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn process_context_carries_optional_transport_and_events() {
+        let transport = TransportSnapshot::new(Some(true), Some(false), Some(120.0), Some(12))
+            .expect("transport snapshot is valid");
+        let context = ProcessContext::new(
+            ProcessMode::Offline,
+            transport,
+            ParameterEvents::empty_for_block(4),
+        );
+
+        assert_eq!(context.mode(), ProcessMode::Offline);
+        assert_eq!(context.transport().playing(), Some(true));
+        assert_eq!(context.transport().recording(), Some(false));
+        assert_eq!(context.transport().tempo_bpm(), Some(120.0));
+        assert_eq!(context.transport().sample_position(), Some(12));
+        assert!(context.parameter_events().is_empty());
+        assert_eq!(context.parameter_events().frame_count(), 4);
+        assert_eq!(
+            TransportSnapshot::new(None, None, Some(0.0), None),
+            Err(TransportSnapshotError::InvalidTempo)
+        );
+    }
+
+    #[test]
+    fn process_block_rejects_events_for_another_block_size() {
+        let process =
+            ProcessConfig::new(48_000.0, None, maximum(8), 0).expect("test configuration is valid");
+        let activation = ActivationConfig::new(process, DEFAULT_EFFECT_CONFIGURATION);
+        let context = ProcessContext::new(
+            ProcessMode::Realtime,
+            TransportSnapshot::unknown(),
+            ParameterEvents::empty_for_block(1),
+        );
+        let mut buffers: [ChannelBuffer<'_, f32>; 0] = [];
+
+        assert!(matches!(
+            ProcessBlock::new(&activation, 2, context, &mut buffers),
+            Err(ProcessBlockError::ParameterEventFrameCountMismatch {
+                expected: 2,
+                actual: 1,
+            })
+        ));
+
+        let raw_events = [ParameterEvent::set(
+            0,
+            "gain",
+            ParameterEventValue::Float(0.5),
+        )];
+        let events = ParameterEvents::new(&raw_events, 2, 1).expect("event shape is valid");
+        let context =
+            ProcessContext::new(ProcessMode::Realtime, TransportSnapshot::unknown(), events);
+        assert!(matches!(
+            ProcessBlock::new(&activation, 2, context, &mut buffers),
+            Err(ProcessBlockError::ParameterEventCountTooLarge {
+                actual: 1,
+                maximum: 0,
+            })
         ));
     }
 

@@ -7,6 +7,7 @@
 //! while the framework contracts are still being proven.
 
 pub mod audio;
+pub mod automation;
 pub mod buffer;
 pub mod parameters;
 pub mod process;

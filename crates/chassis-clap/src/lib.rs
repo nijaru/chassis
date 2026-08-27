@@ -10,8 +10,9 @@ use core::{marker::PhantomData, num::NonZeroU32};
 
 use chassis_core::{
     audio::{DEFAULT_EFFECT_CONFIGURATION, MAIN_INPUT, MAIN_OUTPUT},
+    automation::ParameterEvents,
     buffer::{ChannelBuffer, InputEndpoint, OutputEndpoint},
-    process::{ProcessConfig, ProcessMode},
+    process::{ProcessConfig, ProcessContext, ProcessMode, TransportSnapshot},
     runtime::{Activated, Component, Process as ChassisProcess, activate},
 };
 use clack_extensions::audio_ports::{
@@ -190,8 +191,13 @@ where
             map_main_channel(right, 1, frame_count)?,
         ];
 
+        let context = ProcessContext::new(
+            ProcessMode::Realtime,
+            TransportSnapshot::unknown(),
+            ParameterEvents::empty_for_block(frame_count),
+        );
         self.active
-            .process(frame_count, ProcessMode::Realtime, &mut buffers)
+            .process(frame_count, context, &mut buffers)
             .map_err(|_| PluginError::Message("Invalid Chassis process block"))?;
 
         Ok(ProcessStatus::Continue)
@@ -222,7 +228,7 @@ fn map_process_config(config: PluginAudioConfiguration) -> Result<ProcessConfig,
         ));
     }
 
-    ProcessConfig::new(config.sample_rate, Some(minimum), maximum)
+    ProcessConfig::new(config.sample_rate, Some(minimum), maximum, 0)
         .map_err(|_| PluginError::Message("Invalid CLAP process configuration"))
 }
 

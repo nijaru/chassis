@@ -2,14 +2,17 @@
 //!
 //! [`ParameterStore`] is the semantic authority for a component's current
 //! base/control values. It validates every replacement and applies decoded
-//! state transactionally. Realtime event queues and process-local trajectories
-//! are separate contracts and are not represented by this module yet.
+//! state transactionally. Host event queues remain adapter-owned; normalized
+//! borrowed process events are validated here against the active schema.
 
 use core::fmt;
 use std::{string::String, vec::Vec};
 
-use crate::state::{
-    StateDocument, StateDocumentError, StateEncodeError, StateEntry, StateLimits, StateValue,
+use crate::{
+    automation::{ParameterEventChange, ParameterEventValue, ParameterEvents},
+    state::{
+        StateDocument, StateDocumentError, StateEncodeError, StateEntry, StateLimits, StateValue,
+    },
 };
 
 /// Stable identity of a parameter.
@@ -545,15 +548,68 @@ impl ParameterDescriptor {
             (ParameterKind::Boolean { .. }, ParameterValue::Boolean(_)) => {}
             (ParameterKind::Choice { options, .. }, ParameterValue::Choice(value)) => {
                 if !options.iter().any(|option| option.id == *value) {
-                    return Err(ParameterValueError::UnknownChoice(
-                        value.as_str().to_owned(),
-                    ));
+                    return Err(ParameterValueError::UnknownChoice);
                 }
             }
             (kind, value) => {
                 return Err(ParameterValueError::WrongType {
                     expected: kind.value_type(),
                     actual: value.value_type(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Validate one borrowed process-time event value against this descriptor.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParameterValueError`] when the event has the wrong type, is
+    /// outside this domain, or names an unknown choice.
+    pub fn validate_event_value(
+        &self,
+        value: &ParameterEventValue<'_>,
+    ) -> Result<(), ParameterValueError> {
+        match (&self.kind, value) {
+            (
+                ParameterKind::Float {
+                    minimum, maximum, ..
+                },
+                ParameterEventValue::Float(value),
+            ) => {
+                if !value.is_finite() {
+                    return Err(ParameterValueError::NonFiniteFloat);
+                }
+                if !(*minimum..=*maximum).contains(value) {
+                    return Err(ParameterValueError::FloatOutOfRange);
+                }
+            }
+            (
+                ParameterKind::Integer {
+                    minimum, maximum, ..
+                },
+                ParameterEventValue::Integer(value),
+            ) => {
+                if !(*minimum..=*maximum).contains(value) {
+                    return Err(ParameterValueError::IntegerOutOfRange);
+                }
+            }
+            (ParameterKind::Boolean { .. }, ParameterEventValue::Boolean(_)) => {}
+            (ParameterKind::Choice { options, .. }, ParameterEventValue::Choice(value)) => {
+                if !options.iter().any(|option| option.id.as_str() == *value) {
+                    return Err(ParameterValueError::UnknownChoice);
+                }
+            }
+            (kind, value) => {
+                return Err(ParameterValueError::WrongType {
+                    expected: kind.value_type(),
+                    actual: match value {
+                        ParameterEventValue::Float(_) => ParameterType::Float,
+                        ParameterEventValue::Integer(_) => ParameterType::Integer,
+                        ParameterEventValue::Boolean(_) => ParameterType::Boolean,
+                        ParameterEventValue::Choice(_) => ParameterType::Choice,
+                    },
                 });
             }
         }
@@ -651,7 +707,7 @@ impl fmt::Display for ParameterDefinitionError {
 impl std::error::Error for ParameterDefinitionError {}
 
 /// Invalid proposed parameter value.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParameterValueError {
     /// Proposed value had the wrong semantic type.
     WrongType {
@@ -667,7 +723,7 @@ pub enum ParameterValueError {
     /// Integer value was outside its inclusive range.
     IntegerOutOfRange,
     /// Choice identity was not in the descriptor's option set.
-    UnknownChoice(String),
+    UnknownChoice,
     /// State contained a value type that is not a parameter value type.
     UnsupportedStateValue(&'static str),
 }
@@ -683,7 +739,7 @@ impl fmt::Display for ParameterValueError {
             Self::IntegerOutOfRange => {
                 formatter.write_str("parameter integer is outside its range")
             }
-            Self::UnknownChoice(choice) => write!(formatter, "unknown parameter choice {choice}"),
+            Self::UnknownChoice => formatter.write_str("unknown parameter choice"),
             Self::UnsupportedStateValue(value_type) => {
                 write!(
                     formatter,
@@ -778,12 +834,12 @@ impl std::error::Error for ParameterStoreError {}
 /// One component instance's validated, mutable base/control values.
 ///
 /// The schema is owned immutably and values are kept aligned with it. This
-/// store is intended for control/non-realtime ownership; process-time
-/// trajectories and host event transport require a later explicit runtime
-/// contract.
+/// store is intended for control/non-realtime ownership; normalized process
+/// events are validated against it but remain borrowed process-local data.
 pub struct ParameterStore {
     descriptors: Vec<ParameterDescriptor>,
     values: Vec<ParameterValue>,
+    lookup: Vec<usize>,
 }
 
 impl ParameterStore {
@@ -842,9 +898,14 @@ impl ParameterStore {
             .iter()
             .map(ParameterDescriptor::default_value)
             .collect();
+        let mut lookup: Vec<_> = (0..descriptors.len()).collect();
+        lookup.sort_unstable_by(|left, right| {
+            descriptors[*left].key().cmp(descriptors[*right].key())
+        });
         Ok(Self {
             descriptors,
             values,
+            lookup,
         })
     }
 
@@ -923,6 +984,39 @@ impl ParameterStore {
         Ok(document)
     }
 
+    /// Validate normalized process-time parameter events against this schema.
+    ///
+    /// This performs no allocation on the successful path and leaves the store
+    /// unchanged. It is intended to run at the process boundary before product
+    /// DSP receives the event view.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParameterAutomationError`] for unknown keys or values outside
+    /// their descriptor domains.
+    pub fn validate_events(
+        &self,
+        events: ParameterEvents<'_>,
+    ) -> Result<(), ParameterAutomationError> {
+        for (index, event) in events.iter().enumerate() {
+            let parameter = event.parameter();
+            let Some(descriptor) = self
+                .index_of(parameter)
+                .map(|index| &self.descriptors[index])
+            else {
+                return Err(ParameterAutomationError::UnknownParameter { index });
+            };
+            let value = match event.change() {
+                ParameterEventChange::Set(value) => value,
+                ParameterEventChange::Linear { value } => ParameterEventValue::Float(value),
+            };
+            descriptor
+                .validate_event_value(&value)
+                .map_err(|error| ParameterAutomationError::InvalidValue { index, error })?;
+        }
+        Ok(())
+    }
+
     /// Encode all parameter base values using explicit state bounds.
     ///
     /// # Errors
@@ -995,9 +1089,10 @@ impl ParameterStore {
     }
 
     fn index_of(&self, key: &str) -> Option<usize> {
-        self.descriptors
-            .iter()
-            .position(|descriptor| descriptor.key().as_str() == key)
+        self.lookup
+            .binary_search_by(|index| self.descriptors[*index].key().as_str().cmp(key))
+            .ok()
+            .map(|position| self.lookup[position])
     }
 }
 
@@ -1023,12 +1118,50 @@ fn parameter_value(value: &StateValue) -> Result<ParameterValue, ParameterValueE
         StateValue::Boolean(value) => Ok(ParameterValue::Boolean(*value)),
         StateValue::Choice(value) => ChoiceId::new(value.clone())
             .map(ParameterValue::Choice)
-            .map_err(|_| ParameterValueError::UnknownChoice(value.clone())),
+            .map_err(|_| ParameterValueError::UnknownChoice),
         StateValue::Unsigned(_) => Err(ParameterValueError::UnsupportedStateValue("unsigned")),
         StateValue::Text(_) => Err(ParameterValueError::UnsupportedStateValue("text")),
         StateValue::Bytes(_) => Err(ParameterValueError::UnsupportedStateValue("bytes")),
     }
 }
+
+/// Failure while validating normalized process-time parameter events.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParameterAutomationError {
+    /// Event key did not identify a descriptor.
+    UnknownParameter {
+        /// Zero-based event index.
+        index: usize,
+    },
+    /// Event value failed descriptor validation.
+    InvalidValue {
+        /// Zero-based event index.
+        index: usize,
+        /// Domain/type failure.
+        error: ParameterValueError,
+    },
+}
+
+impl fmt::Display for ParameterAutomationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownParameter { index } => {
+                write!(
+                    formatter,
+                    "parameter event {index} targets an unknown parameter"
+                )
+            }
+            Self::InvalidValue { index, error } => {
+                write!(
+                    formatter,
+                    "invalid value for parameter event {index}: {error}"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for ParameterAutomationError {}
 
 /// Failure while exporting or applying parameter state.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1089,6 +1222,7 @@ impl std::error::Error for ParameterStateError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::automation::ParameterEvent;
 
     fn choices() -> Vec<ChoiceOption> {
         vec![
@@ -1254,6 +1388,43 @@ mod tests {
         assert!(matches!(
             store.apply_state_for_product(&invalid, "com.example.effect", 1),
             Err(ParameterStateError::InvalidValue { .. } | ParameterStateError::UnknownParameter(_))
+        ));
+    }
+
+    #[test]
+    fn automation_validation_uses_parameter_domains() {
+        let definitions = descriptors();
+        let store = ParameterStore::new(&definitions).expect("schema is valid");
+        let raw_events = [
+            ParameterEvent::set(0, "input.gain", ParameterEventValue::Float(0.5)),
+            ParameterEvent::linear(2, "input.gain", 1.0),
+            ParameterEvent::set(3, "mode", ParameterEventValue::Choice("warm")),
+        ];
+        let events = ParameterEvents::new(&raw_events, 4, 4).expect("events are valid");
+        store.validate_events(events).expect("events match schema");
+
+        let invalid = [ParameterEvent::linear(0, "quality.level", 2.0)];
+        let invalid = ParameterEvents::new(&invalid, 1, 1).expect("event shape is valid");
+        assert!(matches!(
+            store.validate_events(invalid),
+            Err(ParameterAutomationError::InvalidValue {
+                index: 0,
+                error: ParameterValueError::WrongType {
+                    expected: ParameterType::Integer,
+                    actual: ParameterType::Float,
+                },
+            })
+        ));
+
+        let unknown = [ParameterEvent::set(
+            0,
+            "missing",
+            ParameterEventValue::Boolean(true),
+        )];
+        let unknown = ParameterEvents::new(&unknown, 1, 1).expect("event shape is valid");
+        assert!(matches!(
+            store.validate_events(unknown),
+            Err(ParameterAutomationError::UnknownParameter { index: 0 })
         ));
     }
 
