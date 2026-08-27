@@ -96,7 +96,7 @@ where
     }
 }
 
-impl<'a, C> PluginMainThread<'a, ()> for ChassisMainThread<C> where C: ClapStereoEffect {}
+impl<C> PluginMainThread<'_, ()> for ChassisMainThread<C> where C: ClapStereoEffect {}
 
 impl<C> PluginAudioPortsImpl for ChassisMainThread<C>
 where
@@ -130,7 +130,7 @@ where
 
 impl<'a, C, P> PluginAudioProcessor<'a, (), ChassisMainThread<C>> for ChassisAudioProcessor<P>
 where
-    C: ClapStereoEffect,
+    C: ClapStereoEffect<Processor = P>,
     P: ChassisProcess<f32> + Send + 'static,
 {
     fn activate(
@@ -166,10 +166,9 @@ where
             .port_pair(0)
             .ok_or(PluginError::Message("Missing CLAP main audio port pair"))?;
         let frame_count = main.frames_count();
-        let channels = main
-            .channels()?
-            .into_f32()
-            .ok_or(PluginError::Message("Chassis stereo proof requires f32 audio"))?;
+        let channels = main.channels()?.into_f32().ok_or(PluginError::Message(
+            "Chassis stereo proof requires f32 audio",
+        ))?;
 
         if channels.channel_pair_count() != 2 {
             return Err(PluginError::Message(
@@ -209,10 +208,12 @@ where
 fn map_process_config(config: PluginAudioConfiguration) -> Result<ProcessConfig, PluginError> {
     const CLAP_MAX_FRAMES: u32 = 2_147_483_647;
 
-    let minimum = NonZeroU32::new(config.min_frames_count)
-        .ok_or(PluginError::Message("CLAP minimum frame count must be positive"))?;
-    let maximum = NonZeroU32::new(config.max_frames_count)
-        .ok_or(PluginError::Message("CLAP maximum frame count must be positive"))?;
+    let minimum = NonZeroU32::new(config.min_frames_count).ok_or(PluginError::Message(
+        "CLAP minimum frame count must be positive",
+    ))?;
+    let maximum = NonZeroU32::new(config.max_frames_count).ok_or(PluginError::Message(
+        "CLAP maximum frame count must be positive",
+    ))?;
 
     if config.min_frames_count > CLAP_MAX_FRAMES || config.max_frames_count > CLAP_MAX_FRAMES {
         return Err(PluginError::Message(
@@ -224,25 +225,23 @@ fn map_process_config(config: PluginAudioConfiguration) -> Result<ProcessConfig,
         .map_err(|_| PluginError::Message("Invalid CLAP process configuration"))
 }
 
-fn map_main_channel<'a>(
-    pair: ChannelPair<'a, f32>,
+fn map_main_channel(
+    pair: ChannelPair<'_, f32>,
     channel: u32,
     frame_count: u32,
-) -> Result<ChannelBuffer<'a, f32>, PluginError> {
+) -> Result<ChannelBuffer<'_, f32>, PluginError> {
     let input = InputEndpoint::new(MAIN_INPUT, channel);
     let output = OutputEndpoint::new(MAIN_OUTPUT, channel);
 
     match pair {
-        ChannelPair::InputOutput(input_samples, output_samples) => ChannelBuffer::separate(
-            input,
-            input_samples,
-            output,
-            output_samples,
-            frame_count,
-        )
-        .map_err(|_| PluginError::Message("Invalid disjoint CLAP channel buffers")),
-        ChannelPair::InPlace(samples) => ChannelBuffer::in_place(input, output, samples, frame_count)
-            .map_err(|_| PluginError::Message("Invalid in-place CLAP channel buffer")),
+        ChannelPair::InputOutput(input_samples, output_samples) => {
+            ChannelBuffer::separate(input, input_samples, output, output_samples, frame_count)
+                .map_err(|_| PluginError::Message("Invalid disjoint CLAP channel buffers"))
+        }
+        ChannelPair::InPlace(samples) => {
+            ChannelBuffer::in_place(input, output, samples, frame_count)
+                .map_err(|_| PluginError::Message("Invalid in-place CLAP channel buffer"))
+        }
         ChannelPair::InputOnly(_) | ChannelPair::OutputOnly(_) => Err(PluginError::Message(
             "Required CLAP main input/output channel is missing",
         )),

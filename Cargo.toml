@@ -12,10 +12,10 @@ license = "AGPL-3.0-or-later"
 repository = "https://github.com/nijaru/chassis"
 
 [workspace.dependencies]
-chassis-core = { path = "crates/chassis-core" }
-chassis-clap = { path = "crates/chassis-clap" }
-clack-plugin = { git = "https://github.com/prokopyl/clack", rev = "c5975f9f89f0953b00768680357985d46178078a" }
-clack-extensions = { git = "https://github.com/prokopyl/clack", rev = "c5975f9f89f0953b00768680357985d46178078a", default-features = false }
+chassis-core = { path = "crates/chassis-core", version = "0.0.0" }
+chassis-clap = { path = "crates/chassis-clap", version = "0.0.0" }
+clack-plugin = { version = "0.2.0", git = "https://github.com/prokopyl/clack", rev = "c5975f9f89f0953b00768680357985d46178078a" }
+clack-extensions = { version = "0.2.0", git = "https://github.com/prokopyl/clack", rev = "c5975f9f89f0953b00768680357985d46178078a", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "deny"

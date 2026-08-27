@@ -3,5 +3,63 @@
 version = 4
 
 [[package]]
+name = "bitflags"
+version = "2.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b588b76d00fde79687d7646a9b5bdf3cc0f655e0bbd080335a95d7e96f3587da"
+
+[[package]]
+name = "chassis-clap"
+version = "0.0.0"
+dependencies = [
+ "chassis-core",
+ "clack-extensions",
+ "clack-plugin",
+]
+
+[[package]]
+name = "chassis-clap-conformance"
+version = "0.0.0"
+dependencies = [
+ "chassis-clap",
+ "chassis-core",
+]
+
+[[package]]
 name = "chassis-core"
 version = "0.0.0"
+
+[[package]]
+name = "clack-common"
+version = "0.2.0"
+source = "git+https://github.com/prokopyl/clack?rev=c5975f9f89f0953b00768680357985d46178078a#c5975f9f89f0953b00768680357985d46178078a"
+dependencies = [
+ "bitflags",
+ "clap-sys",
+]
+
+[[package]]
+name = "clack-extensions"
+version = "0.2.0"
+source = "git+https://github.com/prokopyl/clack?rev=c5975f9f89f0953b00768680357985d46178078a#c5975f9f89f0953b00768680357985d46178078a"
+dependencies = [
+ "bitflags",
+ "clack-common",
+ "clack-plugin",
+ "clap-sys",
+]
+
+[[package]]
+name = "clack-plugin"
+version = "0.2.0"
+source = "git+https://github.com/prokopyl/clack?rev=c5975f9f89f0953b00768680357985d46178078a#c5975f9f89f0953b00768680357985d46178078a"
+dependencies = [
+ "clack-common",
+ "clap-sys",
+]
+
+[[package]]
+name = "clap-sys"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a76abbdb2907f6fd97fb6bc0b7be96b77d328f2dd9669d1075cc03369ed22154"
