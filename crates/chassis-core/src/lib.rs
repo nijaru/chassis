@@ -5,9 +5,13 @@
 //! This crate intentionally contains only types that are meaningful without a
 //! particular plugin format, GUI toolkit, or product DSP architecture.
 
-use core::fmt;
+use core::{fmt, num::NonZeroU16};
 
 /// Stable identifier for an audio port within one component definition.
+///
+/// Chassis port IDs are unique across both input and output ports. Format
+/// adapters may translate them when a backend uses separate input/output ID
+/// namespaces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct PortId(u32);
 
@@ -38,89 +42,97 @@ pub enum PortRole {
     Auxiliary,
 }
 
-/// Semantic identity of one audio channel.
+/// Non-zero number of audio channels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ChannelCount(NonZeroU16);
+
+impl ChannelCount {
+    #[must_use]
+    pub const fn new(value: u16) -> Option<Self> {
+        match NonZeroU16::new(value) {
+            Some(value) => Some(Self(value)),
+            None => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn get(self) -> u16 {
+        self.0.get()
+    }
+}
+
+/// Semantic channel layout for one active audio port.
 ///
-/// The list is intentionally extensible. Format adapters are responsible for
-/// mapping these identities into their host-specific channel-layout model.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Channel {
+/// Only the first production layout families are represented here. Surround,
+/// ambisonic, and richer speaker layouts will be added only after their
+/// format-independent semantics are settled. `Discrete` means that only the
+/// number of channels is known; adapters must not silently treat it as a
+/// labeled surround layout.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChannelLayout {
     Mono,
-    Left,
-    Right,
-    Center,
-    Lfe,
-    LeftSurround,
-    RightSurround,
-    LeftRearSurround,
-    RightRearSurround,
-    TopFrontLeft,
-    TopFrontRight,
-    TopMiddleLeft,
-    TopMiddleRight,
-    TopRearLeft,
-    TopRearRight,
-    /// A discrete channel with no stronger semantic identity.
-    Discrete(u16),
+    Stereo,
+    Discrete(ChannelCount),
 }
 
-pub static MONO_CHANNELS: [Channel; 1] = [Channel::Mono];
-pub static STEREO_CHANNELS: [Channel; 2] = [Channel::Left, Channel::Right];
-
-/// Ordered semantic channel layout for one audio port.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ChannelLayout<'a> {
-    channels: &'a [Channel],
-}
-
-impl<'a> ChannelLayout<'a> {
+impl ChannelLayout {
     #[must_use]
-    pub const fn new(channels: &'a [Channel]) -> Self {
-        Self { channels }
-    }
-
-    #[must_use]
-    pub const fn channels(self) -> &'a [Channel] {
-        self.channels
-    }
-
-    #[must_use]
-    pub const fn len(self) -> usize {
-        self.channels.len()
-    }
-
-    #[must_use]
-    pub const fn is_empty(self) -> bool {
-        self.channels.is_empty()
+    pub const fn channel_count(&self) -> u16 {
+        match self {
+            Self::Mono => 1,
+            Self::Stereo => 2,
+            Self::Discrete(channels) => channels.get(),
+        }
     }
 }
 
-impl ChannelLayout<'static> {
-    pub const MONO: Self = Self::new(&MONO_CHANNELS);
-    pub const STEREO: Self = Self::new(&STEREO_CHANNELS);
-}
-
-/// Metadata describing an audio input or output port.
+/// Stable metadata for an audio port independent of its active layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AudioPortDescriptor<'a> {
     pub id: PortId,
     pub name: &'a str,
     pub direction: PortDirection,
     pub role: PortRole,
-    pub layout: ChannelLayout<'a>,
+    /// Whether the component can operate without this port active.
     pub optional: bool,
 }
 
-/// Conventional effect layout used when a product does not specify otherwise.
+/// One active port within an I/O configuration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfiguredAudioPort {
+    pub id: PortId,
+    pub layout: ChannelLayout,
+}
+
+/// Coherent active audio I/O configuration for a component.
 ///
-/// Stereo is a convenience here, not a limitation of [`AudioPortDescriptor`]
-/// or [`ChannelLayout`].
+/// Configuration changes occur while processing is inactive and are validated
+/// as a whole. Optional ports that are not active are omitted from `ports`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AudioIoConfiguration<'a> {
+    ports: &'a [ConfiguredAudioPort],
+}
+
+impl<'a> AudioIoConfiguration<'a> {
+    #[must_use]
+    pub const fn new(ports: &'a [ConfiguredAudioPort]) -> Self {
+        Self { ports }
+    }
+
+    #[must_use]
+    pub const fn ports(self) -> &'a [ConfiguredAudioPort] {
+        self.ports
+    }
+}
+
+/// Conventional ports for an effect that does not specify otherwise.
 pub const DEFAULT_EFFECT_PORTS: [AudioPortDescriptor<'static>; 3] = [
     AudioPortDescriptor {
         id: PortId::new(0),
         name: "Main Input",
         direction: PortDirection::Input,
         role: PortRole::Main,
-        layout: ChannelLayout::STEREO,
         optional: false,
     },
     AudioPortDescriptor {
@@ -128,7 +140,6 @@ pub const DEFAULT_EFFECT_PORTS: [AudioPortDescriptor<'static>; 3] = [
         name: "Main Output",
         direction: PortDirection::Output,
         role: PortRole::Main,
-        layout: ChannelLayout::STEREO,
         optional: false,
     },
     AudioPortDescriptor {
@@ -136,10 +147,26 @@ pub const DEFAULT_EFFECT_PORTS: [AudioPortDescriptor<'static>; 3] = [
         name: "Sidechain",
         direction: PortDirection::Input,
         role: PortRole::Sidechain,
-        layout: ChannelLayout::STEREO,
         optional: true,
     },
 ];
+
+/// Default active effect configuration: stereo main input and output.
+///
+/// The conventional sidechain port exists but is inactive until requested.
+pub static DEFAULT_EFFECT_CONFIGURATION_PORTS: [ConfiguredAudioPort; 2] = [
+    ConfiguredAudioPort {
+        id: PortId::new(0),
+        layout: ChannelLayout::Stereo,
+    },
+    ConfiguredAudioPort {
+        id: PortId::new(1),
+        layout: ChannelLayout::Stereo,
+    },
+];
+
+pub const DEFAULT_EFFECT_CONFIGURATION: AudioIoConfiguration<'static> =
+    AudioIoConfiguration::new(&DEFAULT_EFFECT_CONFIGURATION_PORTS);
 
 /// Whether processing is constrained by realtime delivery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -158,13 +185,6 @@ pub struct ProcessConfig {
 }
 
 impl ProcessConfig {
-    /// Creates a validated process configuration.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ProcessConfigError::InvalidSampleRate`] when `sample_rate` is
-    /// non-finite or non-positive, and [`ProcessConfigError::InvalidFrameRange`]
-    /// when the maximum block size is zero or smaller than the minimum.
     pub fn new(
         sample_rate: f64,
         min_frames: u32,
@@ -233,26 +253,21 @@ mod tests {
     #[test]
     fn default_effect_convention_is_stereo_with_optional_sidechain() {
         assert_eq!(DEFAULT_EFFECT_PORTS.len(), 3);
-        assert_eq!(DEFAULT_EFFECT_PORTS[0].layout, ChannelLayout::STEREO);
-        assert_eq!(DEFAULT_EFFECT_PORTS[1].layout, ChannelLayout::STEREO);
-        assert_eq!(DEFAULT_EFFECT_PORTS[2].layout, ChannelLayout::STEREO);
         assert!(!DEFAULT_EFFECT_PORTS[0].optional);
         assert!(!DEFAULT_EFFECT_PORTS[1].optional);
         assert!(DEFAULT_EFFECT_PORTS[2].optional);
+
+        let configured = DEFAULT_EFFECT_CONFIGURATION.ports();
+        assert_eq!(configured.len(), 2);
+        assert_eq!(configured[0].layout, ChannelLayout::Stereo);
+        assert_eq!(configured[1].layout, ChannelLayout::Stereo);
     }
 
     #[test]
-    fn arbitrary_layouts_are_not_limited_to_stereo() {
-        let channels = [
-            Channel::Left,
-            Channel::Right,
-            Channel::Center,
-            Channel::Lfe,
-            Channel::LeftSurround,
-            Channel::RightSurround,
-        ];
-        let layout = ChannelLayout::new(&channels);
-        assert_eq!(layout.len(), 6);
+    fn discrete_layouts_are_not_limited_to_stereo() {
+        let channels = ChannelCount::new(12).expect("non-zero channel count");
+        let layout = ChannelLayout::Discrete(channels);
+        assert_eq!(layout.channel_count(), 12);
     }
 
     #[test]
