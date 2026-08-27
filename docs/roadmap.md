@@ -6,7 +6,7 @@ This roadmap is ordered by architectural proof, not feature count or release pro
 
 Chassis currently spans **late Phase 1 / early Phase 2** deliberately.
 
-The format-independent lifecycle/buffer conformance slice is implemented and was locally validated before the first adapter work. The first narrow `chassis-clap` source slice now exists, but it has **not yet been locally compiled/validated or format-qualified** after adding Clack dependencies.
+The format-independent lifecycle/buffer conformance slice and first narrow `chassis-clap` adapter are locally validated. The adapter passes the current CLAP validator and a REAPER render smoke test, but is not production-qualified.
 
 Parameter/state/event semantics remain intentionally behind the first lifecycle/buffer CLAP proof. This is not a roadmap reversal: exercising the smallest real host boundary first gives better evidence for the core ownership/buffer model before more semantic layers depend on it.
 
@@ -53,11 +53,11 @@ Do not add background executors, generalized analyzers, voice allocation, immers
 
 ## Phase 2 — first real plugin boundary: CLAP
 
-Status: **initial source proof implemented; local validation and CLAP qualification are next**.
+Status: **initial source proof is locally validated and CLAP-qualified for the tested slice; broader host qualification remains**.
 
 Current narrow slice:
 
-- `chassis-clap` using exact published Clack 0.1.1 dependencies;
+- `chassis-clap` using the reviewed post-fix Clack revision `c5975f9f89f0953b00768680357985d46178078a` (development workspace version 0.2.0);
 - Clack types isolated from `chassis-core`;
 - `Send` required only at the CLAP processor deployment boundary;
 - one f32 stereo main input/output pair;
@@ -67,18 +67,17 @@ Current narrow slice:
 - exported `examples/clap-conformance` rlib/cdylib probe;
 - explicit rejection of unsupported port/sample configurations rather than silent semantic coercion.
 
-Clack's repository has bumped its development workspace to 0.2.0, but that version is not currently published. Chassis stays on crates.io 0.1.1 until an upgrade has a reproducible source and is explicitly audited.
+Clack's repository has bumped its development workspace to 0.2.0, but that version is not currently published. Chassis uses the explicitly reviewed, full-SHA post-fix revision above rather than the affected crates.io 0.1.1 release; return to crates.io only after a suitable safety-fixed release is published and audited.
 
-Immediate qualification work:
+Completed qualification work:
 
-1. regenerate/review `Cargo.lock` locally and pass fmt/test/clippy/deny/machete;
-2. build the conformance cdylib;
-3. package an actual platform-correct `.clap` artifact;
-4. run current CLAP validator/lifecycle/buffer stress;
-5. smoke-test in a real CLAP host;
-6. use those results to decide the general multibus/sidechain borrowing model.
+1. regenerated/reviewed `Cargo.lock` and passed fmt/test/clippy/deny/machete;
+2. built the conformance cdylib in release mode;
+3. packaged a platform-correct macOS `.clap` artifact;
+4. ran `clap-validator` 0.4.1 (source commit `b2f1d9b79b1d264a5747f46707d72b1aa40a02ef`) lifecycle/buffer stress with 19 passes, 0 failures, and 25 intentional skips;
+5. loaded and rendered the same artifact in REAPER 7.78/macOS-arm64, verifying the fixed 0.5 gain against a no-FX render.
 
-Then extend Phase 2 with:
+Bitwig is not installed in the current environment, so broader host qualification remains. Use these results to decide the general multibus/sidechain borrowing model before extending Phase 2 with:
 
 - product/port/parameter identity mapping and frozen adapter fixtures;
 - general audio-port/configuration/optional sidechain support;

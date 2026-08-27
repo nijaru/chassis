@@ -1,6 +1,6 @@
 # Validation and Conformance Strategy
 
-Status: format-independent conformance is locally validated; first CLAP adapter/export source exists but is not yet locally rebuilt or format-qualified.
+Status: format-independent conformance and the first narrow CLAP adapter are locally validated. The adapter has passed the current CLAP validator and a REAPER render smoke test; production host qualification remains open.
 
 ## Goal
 
@@ -39,16 +39,15 @@ Hosted automation may later run these commands, but the command/evidence contrac
 
 ### Current evidence boundary
 
-The last known-green local baseline was the core runtime/conformance workspace before Clack was added: 19/19 tests plus fmt/clippy/deny on Rust 1.98.0.
+The first adapter gate is locally green on Apple Silicon macOS with Rust 1.98.0:
 
-Since then, `chassis-clap`, published Clack 0.1.1 dependencies, and `examples/clap-conformance` have been added directly to `main` from an environment without Cargo. Therefore:
+- the Cargo-generated lockfile resolves every Clack package to the reviewed revision `c5975f9f89f0953b00768680357985d46178078a`;
+- workspace tests, fmt, Clippy, cargo-deny, and cargo-machete pass;
+- the release `cdylib` is packaged as a macOS `.clap` bundle and has a valid `Info.plist`;
+- `clap-validator` 0.4.1 (source commit `b2f1d9b79b1d264a5747f46707d72b1aa40a02ef`) reports 19 passed, 0 failed, and 25 skipped tests;
+- REAPER 7.78/macOS-arm64 loaded the bundle, activated it, and rendered a one-second stereo f32 fixture; the processed render matched the no-FX render at 0.5 gain within 6e-8 absolute error.
 
-- the updated lockfile has not yet been generated/reviewed;
-- compilation/test/clippy status of the new adapter slice is unknown;
-- no CLAP artifact has been packaged;
-- no native CLAP validator or host result exists yet.
-
-Do not inherit the old green claim across this dependency/code boundary.
+The skipped validator tests cover capabilities this slice deliberately does not implement, including parameters, state, events, GUI, and other optional extensions. The result proves the tested CLAP lifecycle/buffer path, not production host support or the complete CLAP contract. Bitwig is not installed in the current validation environment.
 
 ## Core conformance component
 
@@ -75,7 +74,7 @@ Grow the same semantics as parameters/state/events land instead of creating unre
 
 The initial `chassis-clap` adapter currently attempts only:
 
-- published Clack 0.1.1 plugin boundary;
+- Clack's safe plugin boundary from the pinned post-fix revision `c5975f9f89f0953b00768680357985d46178078a` (development workspace version 0.2.0);
 - one required stereo main input/output pair;
 - f32 processing;
 - exact in-place or separate paired channels;
@@ -87,7 +86,7 @@ It does **not** yet claim parameters, state, events, transport, sidechain/multib
 
 ### First local adapter gate
 
-On a supported development machine, first let Cargo update the committed lockfile and then run:
+On a supported development machine, regenerate and review the committed lockfile, then run:
 
 ```text
 cargo fmt --all
@@ -96,9 +95,10 @@ cargo test --workspace
 cargo clippy --workspace --all-features --all-targets -- -D warnings
 cargo deny check
 cargo machete
+cargo build --release -p chassis-clap-conformance
 ```
 
-Review the resulting `Cargo.lock` diff rather than merely accepting that Cargo generated it. Confirm the selected Clack 0.1.1, `clap-sys`, and `bitflags` versions and source/checksum provenance match the dependency policy.
+Review the resulting `Cargo.lock` diff rather than merely accepting that Cargo generated it. Confirm every Clack package resolves to the full pinned revision, and confirm `clap-sys`, `bitflags`, and their registry checksums have expected provenance.
 
 Any compile/lint failure is adapter feedback. Fix the API/translation rather than weakening the workspace lints or adding broad `allow` attributes.
 
@@ -150,16 +150,16 @@ Separately audit Clack's internal unsafe implementation before production qualif
 
 ## Native CLAP qualification
 
-Once the Rust workspace is green:
+The first narrow adapter qualification has been exercised locally:
 
-1. build the conformance `cdylib` in release mode;
-2. package it according to the platform's CLAP layout rules rather than treating an arbitrary Cargo filename as a finished product artifact;
-3. run current CLAP validator tooling and record its exact version/options;
-4. run lifecycle/buffer stress supported by the validator/tooling;
-5. smoke-test the same artifact in at least one real CLAP host;
-6. record OS/architecture/toolchain/host versions and any deviations.
+1. the conformance `cdylib` was built in release mode;
+2. it was packaged as a macOS `.clap` bundle with a platform-correct `Contents/MacOS` executable and `Info.plist`;
+3. `clap-validator` 0.4.1 was built from source commit `b2f1d9b79b1d264a5747f46707d72b1aa40a02ef` and run with `validate --json`; it reported 19 passed, 0 failed, and 25 skipped tests;
+4. validator lifecycle, buffer, block-size, sample-rate, reset/reactivate, transport-null, and transport-fuzz cases completed without failures;
+5. the same bundle was loaded by REAPER 7.78/macOS-arm64 and rendered through a real project; a no-FX differential render confirmed the fixed 0.5 gain;
+6. the environment was Apple Silicon macOS with Rust 1.98.0 and the stable toolchain named by `rust-toolchain.toml`.
 
-A validator pass is additional evidence, not proof of production support.
+Bitwig validation remains pending because it is not installed in this environment. A validator pass and one REAPER smoke test are additional evidence, not proof of production support.
 
 ## Core unit tests
 
@@ -217,7 +217,14 @@ Record validator versions and exact configurations for release qualification.
 
 Validators do not replace DAWs. Before claiming production support, maintain a tested host/OS/architecture matrix with reproducible scenarios.
 
-Likely early coverage includes REAPER, Ableton Live, Logic Pro for AU, and a CLAP-heavy host such as Bitwig. Exact versions are release evidence, not permanent architecture assumptions.
+Current evidence:
+
+| Host | Platform | Result | Scenario |
+| --- | --- | --- | --- |
+| REAPER 7.78 | macOS arm64 | pass | loaded the packaged CLAP, activated it, and rendered a stereo f32 fixture with differential 0.5-gain verification |
+| Bitwig | — | not run | not installed in the validation environment |
+
+Likely early coverage also includes Ableton Live, Logic Pro for AU, and a CLAP-heavy host such as Bitwig. Exact versions are release evidence, not permanent architecture assumptions.
 
 ## Differential cross-format testing
 
