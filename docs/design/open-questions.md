@@ -107,17 +107,19 @@ Changing the format before v1 is expected.
 
 ### Clack dependency/version surface
 
-The first adapter pins:
+The first adapter pins the published crates.io releases:
 
-- `clack-plugin = 0.2.0`;
-- `clack-extensions = 0.2.0` with `audio-ports` + plugin-side support.
+- `clack-plugin = 0.1.1`;
+- `clack-extensions = 0.1.1` with `audio-ports` + plugin-side support.
 
-The reviewed Clack 0.2 workspace is Edition 2024, declares Rust 1.85 MSRV, uses `clap-sys 0.5.0`, and is MIT/Apache-2.0 licensed. See `docs/research/clack-0.2-adapter-audit.md`.
+The crates.io index shows 0.1.1 as the current published release. Clack's repository bumped its development workspace to 0.2.0 on 2026-08-05, but 0.2.0 is not currently published. Chassis deliberately uses 0.1.1 instead of adding an unreleased git dependency. The reviewed 0.1.1 source is Edition 2024, declares Rust 1.85 MSRV, uses `clap-sys ^0.5.0`, and is MIT/Apache-2.0 licensed. See `docs/research/clack-0.1.1-adapter-audit.md`.
+
+Published 0.1.1 predates Clack's July 30 reentrancy changes, so activation/deactivation and audio-port queries receive mutable main-thread references. The Chassis adapter follows those signatures without changing its own ownership semantics.
 
 Still required before production qualification:
 
 - regenerate/review the exact crates.io dependency graph in `Cargo.lock`;
-- inspect the exact registry source selected by the lockfile rather than relying only on upstream `main`;
+- inspect the exact registry source selected by the lockfile;
 - deeper audit of Clack unsafe/lifetime and panic containment around the process/extension path;
 - allocation/locking/reclamation audit of the exact process path;
 - advisory/source/license checks after Cargo resolves the graph.
