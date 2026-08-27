@@ -1,115 +1,142 @@
 # Roadmap
 
-This roadmap is ordered by architectural proof, not release promises. Features move forward when real product requirements and validation justify them.
+This roadmap is ordered by architectural proof, not feature count or release promises. A feature advances when its owner/lifecycle is clear and a conformance or real-product requirement can validate it.
 
-## Phase 0 — foundation
+## Phase 0 — semantic foundation
 
-- Define the format-independent audio-component model.
-- Establish explicit realtime/main/shared ownership boundaries.
-- Define audio-port and extensible channel-layout metadata.
-- Establish repository architecture, dependency, testing, and licensing policies.
-- Build a tiny conformance component used to stress framework semantics rather than DSP quality.
+Current phase.
 
-Exit condition: `chassis-core` is small, compilable, and does not encode FX-only, stereo-only, plugin-only, or backend-specific assumptions.
+- Maintain Edition 2024 / `stable` Rust baseline without prematurely freezing an MSRV.
+- Define deliberate module/public-API boundaries in `chassis-core`.
+- Establish stable product/parameter/port identity versus derived backend/runtime indices.
+- Establish Processor / framework instance runtime / optional MainThread / Shared ownership.
+- Define whole-component I/O configuration, mono/stereo/discrete layouts, and default stereo-effect policy.
+- Define process scheduling modes and activation bounds without encoding one plugin format.
+- Define safe process-buffer aliasing rules before any FFI adapter constructs Rust references.
+- Define parameter base-state authority, process trajectories, and transactional state replacement semantics.
+- Keep licensing/dependency policy compatible with AGPL + commercial dual licensing.
+- Use local explicit validation commands; no hosted CI is currently authoritative.
 
-## Phase 1 — first complete plugin path
+Exit condition: the small explicit core is locally buildable/testable, its mutable authorities are named, and it does not encode FX-only, stereo-only, plugin-only, or backend-specific assumptions.
 
-Primary client: a simple effect.
+## Phase 1 — conformance runtime without format complexity
 
-- CLAP adapter using Clack.
-- Stereo main input/output convention with optional stereo sidechain.
-- Typed parameters and stable IDs.
-- Sample-accurate automation/modulation delivery.
-- Host parameter gestures and plugin-to-host changes.
-- Versioned state and migrations.
-- Process/transport context.
-- Latency, tail, bypass, and host restart/change notifications.
-- Realtime-safe telemetry/control primitives.
-- Headless processing and state tests.
-- Realtime allocation assertions.
-- CLAP validation and lifecycle torture tests.
+Build the smallest deterministic component/test harness that proves the author-facing semantics before macros or GUI work.
 
-Exit condition: the conformance effect is robust enough to begin using Chassis from a real effect product without product-specific framework patches.
+- explicit `Component`/`Processor` lifecycle API;
+- default stereo effect + optional sidechain configuration;
+- safe planar process-buffer views;
+- a few typed parameters with stable keys;
+- block/sample-time automation trajectories;
+- minimal transport/process context;
+- canonical state document + one migration fixture;
+- activation/reset/deactivation and state replacement tests;
+- realtime allocation/work-bound checks for framework-owned paths.
 
-## Phase 2 — desktop product formats and GUI
+Do not add background executors, generalized analyzers, voice allocation, immersive layouts, or elaborate tooling merely to make the conformance component look complete.
 
-- VST3 projection and validation.
-- AUv2/AUv3 projection and validation on macOS.
-- Cross-platform packaging on macOS, Windows, and Linux where the target format applies.
-- Editor lifecycle, resize/scaling, and native parent-window contract.
-- First production GUI adapter, likely Iced/wgpu after a focused evaluation.
-- Generic parameter editor for framework testing/debugging.
-- Pluginval, Steinberg validator, AUVal, and clap-validator gates where applicable.
-- Signing/notarization hooks and release packaging.
+Exit condition: the semantic runtime is ergonomic enough that the conformance effect mostly contains product processing rather than framework plumbing.
 
-Initial wrapper strategy may use `clap-wrapper`; wrapper behavior remains subject to Chassis's own host and validator matrix.
+## Phase 2 — first real plugin boundary: CLAP
 
-## Phase 3 — standalone deployment and common utilities
+- `chassis-clap` using Clack for the low-level safe CLAP boundary.
+- product/port/parameter identity mapping and frozen adapter fixtures;
+- lifecycle/activation/process translation;
+- audio/event buffers and optional sidechain;
+- parameter automation/modulation and gestures;
+- state save/load while active according to a documented consistency contract;
+- fixed latency/tail metadata as needed by the conformance path;
+- CLAP validator and synthetic lifecycle/invalid-input tests;
+- Miri/model testing for applicable adapter/support code and sanitizers where native FFI requires them.
 
-- Product-grade standalone runtime.
-- Audio device configuration.
-- MIDI device configuration.
-- Shared editor/state path with plugin deployments.
-- Standard parameter smoothing helpers with opt-out/custom semantics.
-- Common preset serialization/storage primitives.
-- Standard meter/telemetry channels.
-- Optional analyzer/FFT transport helpers where repeated clients establish common requirements.
+Exit condition: the conformance component behaves reproducibly as a CLAP plugin and survives negative-space lifecycle/state/buffer tests.
 
-Standalone must run the same product processor/state implementation used by plugin deployments.
+## Phase 3 — desktop formats, editor boundary, and packaging
 
-## Phase 4 — instruments as first-class clients
+- VST3 projection through `clap-wrapper` while its semantics pass Chassis tests; replace with native adapter only if evidence warrants it.
+- AUv2/AUv3 projection and validation on macOS under the same rule.
+- macOS/Windows/Linux packaging where formats apply.
+- editor lifecycle, parent window, resize/scaling, and parameter-binding contract.
+- evaluate the first production GUI adapter, likely Iced/wgpu, without making the core depend on Iced.
+- generic/debug parameter editor for framework testing.
+- native validators (`auval`, Steinberg validator, pluginval where useful) plus real-host matrix.
+- identity manifests and signing/notarization/package hooks.
 
-The core must be instrument-compatible earlier; this phase proves it with real products.
+Exit condition: the same conformance product has cross-format semantic parity and a stable editor lifecycle on the supported desktop matrix.
 
-- Note/MIDI input as a primary processing source.
-- No-audio-input generators/instruments.
-- Multiple audio output buses.
-- Note expression/MPE support as host/format capability allows.
-- MIDI/event output.
-- Instrument-oriented standalone behavior.
-- Stress tests for high event counts and dynamic voice-driven processing behavior.
+## Phase 4 — first commercial-grade FX clients and common conveniences
 
-Potential optional helpers such as voice allocation belong outside the core unless multiple real instruments demonstrate a stable common abstraction.
+Use real effects to graduate only repeated framework behavior:
 
-## Phase 5 — advanced routing and immersive audio
+1. mastering limiter — latency, automation, offline parity, realtime safety;
+2. tonal EQ — many controls/state plus polished custom GUI;
+3. compressor/dynamics — sidechain, metering, routing.
 
-- Generalized multi-bus routing validation.
-- Surround channel layouts.
-- Ambisonic layouts.
-- Immersive/Atmos-style layout mapping where plugin formats and hosts expose the necessary semantics.
-- Layout negotiation and dynamic layout changes where formats support them.
-- Expanded offline-render and high-channel-count performance tests.
+Candidate conveniences that may move into Chassis based on evidence:
 
-The initial stereo API must not require redesign to reach this phase.
+- parameter smoothing helpers;
+- latest-value meter publication;
+- bounded analyzer/scope transport;
+- preset serialization/storage primitives;
+- typed immutable DSP snapshot publication/reclamation;
+- background preparation with a proven module/instance lifecycle;
+- reusable bypass helpers where semantics actually converge.
 
-## Phase 6 — hosting and audio-application runtime
+Product-specific DSP remains in the products.
 
-Only pursue this if real application use justifies maintaining it.
+## Phase 5 — product-grade standalone and instruments
 
-Potential crates:
+The core is instrument-compatible earlier; this phase proves it.
 
-- `chassis-host`: plugin discovery/loading/hosting, likely using `clack-host` for CLAP.
-- `chassis-device`: reusable audio/MIDI device runtime.
-- `chassis-graph`: realtime processing graph and scheduling primitives.
+- standalone runtime using the same component/processor/state/editor model;
+- audio device and MIDI device integration;
+- note/MIDI input as a primary processing source;
+- no-audio-input generators;
+- multiple audio outputs;
+- MIDI/event output;
+- note expression/MPE according to host capabilities;
+- high-event-count and voice-driven stress tests.
 
-These layers could support modular hosts, live processors, mastering software, or DAW-like applications. Chassis will still not define timeline, project, arrangement, media-library, mixer UX, mastering revision/QC, or delivery semantics.
+Voice allocation, sample streaming, oscillator/filter libraries, etc. are optional utilities only if repeated products establish a reusable abstraction.
+
+## Phase 6 — advanced routing and immersive audio
+
+- labeled surround layouts;
+- ambisonics with explicit ordering/normalization;
+- high-channel-count and generalized multi-bus validation;
+- channel-based immersive beds such as 7.1.4/9.1.6 where hosts/formats support them;
+- dynamic inactive layout negotiation where formats permit it;
+- expanded high-channel-count performance evidence.
+
+Dolby Atmos object/metadata/renderer workflows are a separate capability and are added only if a product requires them.
+
+## Phase 7 — optional audio-application runtime
+
+Pursue only with a real host/application client.
+
+Potential layers:
+
+- `chassis-host`: plugin discovery/loading/hosting;
+- `chassis-device`: reusable audio/MIDI device ownership/runtime;
+- `chassis-graph`: realtime processing graph/scheduling.
+
+These may support live processors, modular hosts, mastering applications, or DAW-like software while leaving timelines, projects, arrangements, media libraries, mixer UX, mastering workflows, and delivery semantics to the application.
 
 ## Later / conditional
 
-- AAX distribution when product demand justifies Avid/PACE integration and licensing.
+- AAX once Avid/PACE integration, licensing, and demand justify it.
 - LV2 if Linux ecosystem demand warrants it.
-- MIDI 2.0 when host/platform support and Rust dependencies are sufficiently production-ready.
-- Sandboxed/out-of-process plugin hosting if Chassis develops a host/application layer.
-- Additional GUI adapters based on actual user demand.
+- MIDI 2.0 when target hosts and Rust dependencies are production-ready.
+- sandboxed/out-of-process hosting if an application/host layer needs crash isolation.
+- additional GUI adapters based on actual users/products.
 
-## Product proof sequence
+## Promotion rule
 
-Once the framework reaches the appropriate phase, use increasingly demanding real clients:
+A Chassis feature graduates into the common framework only when:
 
-1. Conformance effect — framework semantics only.
-2. Mastering limiter — latency, automation, offline parity, realtime safety.
-3. Tonal EQ — many parameters, state, polished custom GUI.
-4. Compressor/dynamics processor — sidechain, metering, routing.
-5. Instrument — notes, expression, multi-output, standalone.
-
-Framework features should graduate from product-local code only when their semantics are broadly reusable.
+1. its semantic owner/lifecycle is explicit;
+2. its resource/work bounds are appropriate for the domain;
+3. a conformance or real client demonstrates the need;
+4. negative-space tests cover failure/replacement/teardown where relevant;
+5. any performance claim has representative measurements;
+6. its dependencies remain compatible with the licensing and critical-path policies.
