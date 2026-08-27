@@ -4,236 +4,191 @@ Status: design direction; tooling evolves with implemented adapters.
 
 ## Goal
 
-Chassis should make framework correctness observable. A format adapter is not considered production-ready because a trivial plugin loads once in one DAW.
+Framework correctness must be observable and reproducible. “It builds,” one validator pass, or one successful DAW load is not enough to promote a Chassis adapter or API.
 
-Validation needs to cover:
+Keep separate claims for:
 
+- Rust/type-level correctness;
 - format/API conformance;
 - realtime invariants;
-- state/parameter compatibility;
-- lifecycle and thread ownership;
+- lifecycle/ownership correctness;
+- state/identity compatibility;
 - cross-format semantic parity;
-- operating-system/host behavior;
-- performance regressions in framework-owned paths.
+- performance;
+- production host qualification.
+
+A stronger claim requires matching evidence.
+
+## Current validation authority
+
+There is currently **no authoritative hosted CI** for Chassis. GitHub Actions was removed rather than leaving a permanently failing/non-running badge that could be mistaken for validation.
+
+Until hosted automation is intentionally restored, validation is local/tool-driven and must record exactly what was run. A code change is not “green” because no remote check exists.
+
+Baseline Rust commands on a supported development machine:
+
+```text
+cargo fmt --all -- --check
+cargo test --workspace
+cargo clippy --workspace --all-features --all-targets -- -D warnings
+cargo deny check
+```
+
+Once third-party dependencies exist, also use `cargo machete` to detect dead dependencies. Before promoting Rust unsafe code where Miri can model it, run `cargo miri test` for the relevant crates/tests.
+
+Hosted automation may later run these commands, but the command/evidence contract is authoritative, not a particular CI provider.
 
 ## Conformance component
 
-Before a real product becomes the primary framework test, build a deliberately boring component whose purpose is to exercise Chassis semantics.
+Build a deliberately boring component whose purpose is framework semantics, not DSP quality.
 
-It should eventually support enough features to stress the framework:
+Grow it with the implementation rather than implementing every roadmap feature up front. The first useful slice needs:
 
-- mono and stereo configurations;
-- optional stereo sidechain;
-- auxiliary output or second configuration when routing support lands;
-- float/int/bool/enum parameters;
+- default stereo main input/output plus optional sidechain configuration;
+- a few typed parameters;
+- deterministic processing;
 - timestamped automation;
-- explicit latency/tail changes;
-- state save/load and at least one migration fixture;
-- editor open/close/resize when GUI support lands;
-- realtime-to-GUI telemetry;
-- bounded background task round-trip;
-- note/MIDI input/output when instrument/event support lands;
-- offline rendering;
-- deterministic output that is easy to verify numerically.
+- state round-trip;
+- lifecycle activation/reset/deactivation;
+- offline/realtime process mode coverage where available.
 
-Do not make the conformance component an example of sophisticated DSP. Its output should be intentionally simple enough that framework failures are unambiguous.
+Add latency/tail, editor lifecycle, telemetry, background preparation, note/MIDI, multiple buses, etc. when those framework features actually land.
 
-## Layered tests
+## Core tests
 
-### Core unit/property tests
+Format-independent tests cover semantic authority and negative space:
 
-`chassis-core` and other format-independent crates test semantic invariants without loading plugin binaries:
-
-- IDs and configuration validation;
-- parameter mappings;
+- stable-key/schema uniqueness;
+- whole I/O configuration validation;
+- parameter domain/mapping properties;
+- process trajectory/event ordering;
 - state encoding/migrations;
-- event ordering;
-- bounded queue behavior;
-- transport calculations;
-- layout negotiation.
+- state load failure leaving live authority unchanged;
+- bounded queue/scratch behavior when those primitives exist;
+- generation/replacement semantics;
+- transport calculations.
 
-Property-based tests are appropriate for ranges/mappings/state decoders once a dependency is selected under the project license policy.
+Property testing is appropriate for mapping/state parsers after a dependency is reviewed under the license policy.
 
-### Adapter tests
+## Adapter tests
 
-Each adapter tests host-format translation independently:
+Each format adapter independently verifies translation of:
 
-- metadata/identity;
-- ports/layouts;
-- parameters and formatting;
-- automation sample offsets;
+- product/port/parameter identity;
+- I/O layout/configuration;
+- process buffer aliasing and lengths;
+- parameter automation/modulation timing;
 - state streams;
 - lifecycle sequences;
-- process buffers/in-place aliasing;
-- latency/tail/bypass notifications;
-- editor lifetime/resize;
-- note/MIDI translation.
+- latency/tail/bypass capabilities when implemented;
+- editor lifetime/resizing;
+- note/MIDI semantics when implemented.
 
-Format-specific unsafe/FFI code receives focused tests rather than being exercised only indirectly by a full plugin.
+Adapter tests specifically attack invalid host pointers/lengths/configuration where a safe synthetic boundary can model them. FFI validation precedes construction of safe Rust references.
 
-### Binary validators
+## Native validators
 
-Use the native ecosystem validators where applicable:
+Use target ecosystem validators as additional evidence:
 
 - CLAP validator tooling;
 - Steinberg VST3 validator;
-- pluginval where useful for VST3/AU and host-style lifecycle stress;
 - `auval` for Audio Unit;
-- future AAX/PACE/Avid validation when supported.
+- pluginval where useful;
+- AAX/Avid/PACE validation only when that adapter exists.
 
-Run strict validator configurations in CI where the operating system/tooling permits it.
+Record validator versions and exact configurations for release qualification.
 
-### Real host matrix
+## Real-host matrix
 
-Validators cannot replace real DAWs. Maintain an explicit supported/tested host matrix.
+Validators do not replace DAWs. Before claiming production support, maintain a tested host/OS/architecture matrix with reproducible scenarios.
 
-Initial desktop proof should include at least:
-
-- REAPER on macOS/Windows/Linux where formats apply;
-- Ableton Live on macOS/Windows;
-- Logic Pro for Audio Unit;
-- one CLAP-heavy host such as Bitwig when CLAP-specific behavior matters.
-
-The exact supported versions are release metadata, not forever assumptions.
-
-Automate what can be automated; keep reproducible manual scripts/fixtures for host behavior that cannot run in public CI.
+Likely early coverage includes REAPER, Ableton Live, Logic Pro for AU, and a CLAP-heavy host such as Bitwig. Exact versions are release evidence, not permanent architecture assumptions.
 
 ## Differential cross-format testing
 
-The same Chassis conformance component should render deterministic test cases through each exported format and compare semantic results.
-
-Examples:
+Render the same deterministic conformance cases through each exported format and compare semantic results:
 
 ```text
-same input + same state + same automation
-CLAP -> reference output/state
+same product state + input + automation/events
+CLAP -> reference
 VST3 -> compare
 AU   -> compare
 ```
 
-The comparison may be bit-exact for framework-only/pass-through behaviors and tolerance-based where host sample format or target API semantics necessarily differ.
+Compare audio output where meaningful plus state, parameters, port configuration, identity fixtures, latency/tail, and event timing. Use bit-exact comparison for framework-only behavior when possible and explicit tolerances only where semantics require them.
 
-Also compare:
+## Realtime allocation/work checks
 
-- restored parameter values;
-- reported latency/tail;
-- port configurations;
-- product identity fixtures;
-- automation timestamps;
-- note/event output where applicable.
+Framework-owned process paths need evidence that no heap allocation occurs after activation.
 
-This catches translation bugs that each format's validator may individually consider legal.
+Test normal and adversarial-but-valid cases including automation-heavy blocks, optional buses, maximum configured dimensions, telemetry/control capacity exhaustion, and output-event rejection.
 
-## Realtime allocation checks
+Also test that work remains bounded by validated dimensions. An allocation guard alone does not prove deterministic latency.
 
-Processing code owned by Chassis must be testable under a guard that detects heap allocation on the audio thread.
+Do not optimize away controlled copies merely to satisfy a zero-copy slogan; benchmark them under representative channel/block sizes before adding ownership/unsafe complexity.
 
-The guard belongs in `chassis-test`/test-only support, not as a production global allocator requirement.
+## Lifecycle and ownership torture
 
-Test at least:
-
-- normal process path;
-- automation-heavy blocks;
-- sidechain/aux routing;
-- maximum configured block size;
-- telemetry queue full/overflow behavior;
-- event output capacity exhaustion.
-
-Any intentional adapter conversion scratch is allocated during activation and reused.
-
-## Lifecycle torture
-
-Repeatedly exercise valid and adversarial host sequences:
+Exercise creation, failure, replacement, cancellation, and teardown—not only the happy path:
 
 - create/destroy without activation;
-- activate/reset/process/deactivate loops;
+- repeated activate/reset/process/deactivate;
+- invalid/failed activation cleanup;
 - state load before/after activation where legal;
-- changing block size/sample rate via reactivation;
-- changing I/O configuration while inactive;
-- editor create/open/close/destroy loops;
-- editor close racing legal host callbacks;
-- plugin teardown after failed initialization;
-- rapid host rescan/instance creation where feasible.
+- sample-rate/block-size reactivation;
+- inactive I/O reconfiguration;
+- editor open/close/destroy loops;
+- legal callback races during editor/instance teardown;
+- stale worker/snapshot completion after state replacement or destruction;
+- repeated instance creation/destruction and module unload scenarios once task/runtime code exists.
 
-The framework should maintain synthetic host tests for these sequences even before every sequence can be reproduced in a real DAW.
+Every resource introduced by Chassis needs a testable final owner/cleanup path.
 
-## State fuzzing
+## State corruption/fuzz testing
 
-Host state blobs are untrusted input. Fuzz the decoder/migration boundary with:
+Treat host state as untrusted bytes. Test/fuzz arbitrary/truncated/oversized input, duplicate keys, invalid UTF-8/types/numerics, unknown versions, migration chains, and resource exhaustion.
 
-- arbitrary bytes;
-- truncated envelopes;
-- oversized declared lengths;
-- duplicate keys;
-- unknown fields/versions;
-- invalid numeric parameter values;
-- malformed enum identities;
-- migration chains.
+Invalid state must not panic, allocate without configured bounds, or partially mutate live authority.
 
-The decoder must reject invalid input without panic, unbounded allocation, or partial mutation of live product state.
+## Unsafe/FFI evidence
 
-## Unsafe/FFI checking
+Format-independent crates deny unsafe code.
 
-Format-independent crates deny unsafe code by default.
+For adapter unsafe code:
 
-Adapters that necessarily use FFI should:
+- minimize and isolate the unsafe surface;
+- every unsafe block has a `// SAFETY:` invariant explanation;
+- use Edition 2024 `unsafe extern` forms;
+- keep `unsafe_op_in_unsafe_fn` denied;
+- run Miri on modelable Rust logic;
+- use sanitizers/native stress for C/C++/Objective-C boundaries where practical;
+- use Loom/model tests before framework-wide adoption of subtle atomic memory-ordering algorithms.
 
-- minimize unsafe surface area;
-- document every unsafe invariant;
-- use Miri where it can model the Rust portion;
-- run sanitizers/host stress for native C/C++/Objective-C wrapper paths where practical;
-- fuzz parsers/translators that accept arbitrary host data;
-- avoid assuming a host follows the spec when a defensive check can be done off the realtime hot path.
+Never infer memory safety solely from a host spec; validate the facts needed to create Rust references.
 
-Concurrency primitives with subtle memory ordering should receive model/property testing (for example Loom) before use in framework-wide realtime communication.
+## Performance evidence
 
-## CI tiers
+Benchmark framework overhead separately from product DSP:
 
-Suggested progression:
-
-```text
-Every commit/PR
-├── fmt/clippy
-├── unit tests: Linux/macOS/Windows
-├── cargo-deny license/advisory/source policy
-└── fast core property tests
-
-Adapter PRs
-├── build exported binaries
-├── native validators
-├── state/identity fixtures
-└── differential headless tests
-
-Nightly/release
-├── fuzz corpus/regression suite
-├── sanitizer/Miri jobs where supported
-├── extended lifecycle torture
-├── benchmarks
-└── broader host matrix/manual qualification
-```
-
-## Performance baselines
-
-Benchmark framework-owned overhead separately from product DSP:
-
-- pass-through processing;
+- pass-through/buffer access;
 - parameter/event iteration;
-- format translation;
-- telemetry queues;
+- adapter translation;
+- telemetry/control primitives;
 - state encode/decode off-thread;
-- editor telemetry throughput where relevant.
+- any conversion/copy path introduced by an adapter.
 
-Track throughput and allocations rather than optimizing from intuition. Chassis should not add abstraction solely because it benchmarks well on an unrealistic microcase, but regressions in common framework paths should be visible.
+Record workload, sample rate, block sizes, channels/layout, CPU/architecture, build mode, and relevant toolchain. Do not promote a lock-free/SIMD/cache-layout optimization without an apples-to-apples baseline that shows it matters.
 
 ## Release evidence
 
-A Chassis release intended for commercial plugin use should publish/record a concise compatibility matrix:
+A release advertised for commercial plugin use should record:
 
-- operating systems/architectures;
-- plugin formats;
-- validator versions/results;
-- tested DAWs;
+- Rust/tooling versions used to build and validate;
+- supported OS/architectures/formats;
+- native validator versions/results;
+- tested DAW matrix;
+- identity/state compatibility fixtures;
 - known limitations;
-- relevant identity/state compatibility guarantees.
+- relevant performance/realtime evidence.
 
-The framework should earn trust through reproducible evidence rather than claims about implementation style or development process.
+Reproducible evidence, not development style or framework confidence, earns production status.
