@@ -41,7 +41,7 @@ Hosted automation may later run these commands, but the command/evidence contrac
 
 The last known-green local baseline was the core runtime/conformance workspace before Clack was added: 19/19 tests plus fmt/clippy/deny on Rust 1.98.0.
 
-Since then, `chassis-clap`, Clack dependencies, and `examples/clap-conformance` have been added directly to `main` from an environment without Cargo. Therefore:
+Since then, `chassis-clap`, published Clack 0.1.1 dependencies, and `examples/clap-conformance` have been added directly to `main` from an environment without Cargo. Therefore:
 
 - the updated lockfile has not yet been generated/reviewed;
 - compilation/test/clippy status of the new adapter slice is unknown;
@@ -75,7 +75,7 @@ Grow the same semantics as parameters/state/events land instead of creating unre
 
 The initial `chassis-clap` adapter currently attempts only:
 
-- Clack 0.2.0 plugin boundary;
+- published Clack 0.1.1 plugin boundary;
 - one required stereo main input/output pair;
 - f32 processing;
 - exact in-place or separate paired channels;
@@ -98,7 +98,7 @@ cargo deny check
 cargo machete
 ```
 
-Review the resulting `Cargo.lock` diff rather than merely accepting that Cargo generated it. Confirm the selected Clack/clap-sys/bitflags versions and source/checksum provenance match the dependency policy.
+Review the resulting `Cargo.lock` diff rather than merely accepting that Cargo generated it. Confirm the selected Clack 0.1.1, `clap-sys`, and `bitflags` versions and source/checksum provenance match the dependency policy.
 
 Any compile/lint failure is adapter feedback. Fix the API/translation rather than weakening the workspace lints or adding broad `allow` attributes.
 
