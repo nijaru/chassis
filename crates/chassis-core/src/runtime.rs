@@ -7,8 +7,7 @@ use core::fmt;
 
 use crate::{
     audio::{
-        AudioIoConfiguration, AudioIoConfigurationError, AudioPortDescriptor,
-        DEFAULT_EFFECT_PORTS,
+        AudioIoConfiguration, AudioIoConfigurationError, AudioPortDescriptor, DEFAULT_EFFECT_PORTS,
     },
     buffer::ChannelBuffer,
     process::{ActivationConfig, ProcessBlock, ProcessBlockError, ProcessConfig, ProcessMode},
@@ -191,7 +190,9 @@ where
         .map_err(ActivateError::InvalidAudioIo)?;
 
     let config = ActivationConfig::new(process, audio_io);
-    let processor = component.activate(&config).map_err(ActivateError::Product)?;
+    let processor = component
+        .activate(&config)
+        .map_err(ActivateError::Product)?;
 
     Ok(Activated { config, processor })
 }

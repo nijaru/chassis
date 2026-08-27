@@ -275,10 +275,9 @@ impl<'a, S> ChannelBuffer<'a, S> {
     #[must_use]
     pub fn frame_count(&self) -> usize {
         match self {
-            Self::InPlace { samples, .. } => samples.len(),
             Self::Separate { input_samples, .. } => input_samples.len(),
             Self::InputOnly { samples, .. } => samples.len(),
-            Self::OutputOnly { samples, .. } => samples.len(),
+            Self::InPlace { samples, .. } | Self::OutputOnly { samples, .. } => samples.len(),
         }
     }
 

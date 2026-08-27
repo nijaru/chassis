@@ -1,3 +1,8 @@
+//! Deterministic external conformance tests for the core runtime.
+//!
+//! These tests exercise `Component`, activation, and `Process` through the
+//! public API only, so adapter work later can reuse the same expectations.
+
 use std::{
     convert::Infallible,
     num::NonZeroU32,
@@ -90,8 +95,7 @@ impl Drop for ConformanceProcessor {
 }
 
 fn process_config(minimum: Option<u32>, maximum: u32) -> ProcessConfig {
-    let minimum = minimum
-        .map(|value| NonZeroU32::new(value).expect("test minimum is non-zero"));
+    let minimum = minimum.map(|value| NonZeroU32::new(value).expect("test minimum is non-zero"));
     let maximum = NonZeroU32::new(maximum).expect("test maximum is non-zero");
     ProcessConfig::new(48_000.0, minimum, maximum).expect("test process configuration is valid")
 }
@@ -174,10 +178,7 @@ fn explicit_runtime_processes_separate_buffers_and_owns_lifecycle() {
 #[test]
 fn exact_in_place_buffers_do_not_require_a_second_alias() {
     let metrics = Arc::new(Metrics::default());
-    let component = ConformanceEffect {
-        metrics,
-        gain: 0.5,
-    };
+    let component = ConformanceEffect { metrics, gain: 0.5 };
     let mut active = activate(
         &component,
         process_config(Some(1), 8),

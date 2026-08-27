@@ -160,13 +160,13 @@ impl<'buffers, 'samples, S> ProcessBlock<'buffers, 'samples, S> {
         mode: ProcessMode,
         buffers: &'buffers mut [ChannelBuffer<'samples, S>],
     ) -> Result<Self, ProcessBlockError> {
-        if let Some(minimum) = config.process().guaranteed_min_frames() {
-            if frame_count < minimum.get() {
-                return Err(ProcessBlockError::BelowGuaranteedMinimum {
-                    actual: frame_count,
-                    minimum: minimum.get(),
-                });
-            }
+        if let Some(minimum) = config.process().guaranteed_min_frames()
+            && frame_count < minimum.get()
+        {
+            return Err(ProcessBlockError::BelowGuaranteedMinimum {
+                actual: frame_count,
+                minimum: minimum.get(),
+            });
         }
 
         if frame_count > config.process().max_frames().get() {
@@ -298,8 +298,8 @@ mod tests {
 
     #[test]
     fn accepts_unknown_minimum() {
-        let config = ProcessConfig::new(48_000.0, None, maximum(2048))
-            .expect("test configuration is valid");
+        let config =
+            ProcessConfig::new(48_000.0, None, maximum(2048)).expect("test configuration is valid");
 
         assert!((config.sample_rate() - 48_000.0).abs() <= f64::EPSILON);
         assert_eq!(config.guaranteed_min_frames(), None);
@@ -308,8 +308,8 @@ mod tests {
 
     #[test]
     fn process_block_rejects_mismatched_channel_lengths() {
-        let process = ProcessConfig::new(48_000.0, None, maximum(8))
-            .expect("test configuration is valid");
+        let process =
+            ProcessConfig::new(48_000.0, None, maximum(8)).expect("test configuration is valid");
         let activation = ActivationConfig::new(process, DEFAULT_EFFECT_CONFIGURATION);
         let input = [0.0_f32; 3];
         let mut output = [0.0_f32; 3];
