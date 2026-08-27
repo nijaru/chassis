@@ -79,6 +79,8 @@ Keep AAX-specific dependencies/code/tooling isolated from format-independent cra
 
 Prefer crates.io releases for normal Rust dependencies. Git dependencies require an explicit reason and pinned revision because they weaken reproducibility/supply-chain review.
 
+`Cargo.lock` is committed. Chassis artifacts are plugin dylibs and, later, standalone executables where reproducible builds matter, and `cargo deny` audits the dependency graph from the lockfile. Keep it current with dependency changes.
+
 Do not add wildcard dependency versions. Avoid duplicate major/version trees when practical, but do not contort correctness or platform support merely to eliminate harmless duplication.
 
 ## Checks
