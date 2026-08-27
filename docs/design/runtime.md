@@ -1,6 +1,6 @@
 # Runtime Ownership Model
 
-Status: design direction; trait names/signatures are not frozen.
+Status: first explicit lifecycle slice implemented; public API still pre-alpha and not frozen.
 
 ## Goal
 
@@ -14,180 +14,156 @@ The framework may have several thread/capability domains, but each mutable guara
 Component definition
   immutable schema/metadata/capabilities/factories
 
-InstanceRuntime (framework-owned)
+InstanceRuntime (eventual framework-owned authority)
   lifecycle state machine
   canonical parameter/control state
   accepted inactive I/O configuration
   state generation/publication
   host-facing capability/notification coordination
-  optional task/snapshot generation ownership
 
 Processor
   exclusive mutable realtime DSP/runtime history while active
   activation-time resources/scratch
-  process-local event/parameter cursors
 
-MainThread (optional product-owned)
-  editor/product non-RT orchestration only
+Process<S>
+  sample-representation-specific process capability over borrowed ProcessBlock<S>
 
-Shared (optional product-defined projection)
-  deliberately synchronized observations or immutable handles
-
-Editor
-  main-thread UI capability
+MainThread / Shared / Editor
+  optional non-RT product capabilities/projections added only when required
 ```
 
-Names are conceptual. The key contract is authority, not a particular trait spelling.
+The names are less important than the authority split. A simple effect should require neither custom `MainThread` nor `Shared` state.
 
-A simple effect should require neither custom `MainThread` nor `Shared` state.
+## Implemented explicit slice
+
+`chassis-core::runtime` now provides the first executable manual API:
+
+- `Component` is the immutable product definition/factory;
+- `Component::audio_ports()` defaults to the standard effect schema and can be overridden;
+- `Component::activate()` creates one realtime `Processor` after structural I/O validation;
+- `Processor` owns reset/lifecycle semantics;
+- `Process<S>` is a separate capability for processing one sample representation;
+- `Activated<P>` holds the immutable activation configuration plus the exclusively owned processor;
+- `Activated::process()` constructs a borrowed `ProcessBlock`, validates callback-varying frame dimensions, then calls product DSP;
+- `Activated::deactivate(self)` consumes the active shell so processor destruction happens only after the caller has ended process/reset borrows.
+
+This split is deliberate. `Processor` is not parameterized by `f32`: a future processor can implement both `Process<f32>` and `Process<f64>` without duplicating lifecycle/DSP ownership.
+
+The format-independent `Processor` trait also does not globally require `Send`. Same-thread embedded deployment is a valid Chassis use case, and safe Rust already prevents a non-`Send` `Activated<P>` from being moved through ordinary thread-transfer APIs. A deployment boundary whose lifecycle actually transfers processor ownership across threads—CLAP is expected to be one—must require `P: Send` there. Exclusive processing does not imply `Sync`.
+
+The current conformance processor is deliberately `Send` and has a compile-time assertion for that property so it remains suitable for the first plugin-adapter proof without making plugin threading a universal core restriction.
+
+The current `Activated` type is **not** the final `InstanceRuntime`. It intentionally does not invent parameter/state synchronization, background execution, editor generations, or host callbacks before those contracts are proven.
 
 ## Component definition
 
-`Component` describes the product and creates runtime parts. It is not the live mutable plugin instance.
+`Component` is not the live mutable plugin instance. It describes/provides stable product schema and creates runtime parts.
 
-It provides/points to stable product identity, parameter/state schema, ports/I/O policy, event capabilities, and processor/editor factories.
+The current explicit slice only consumes audio-port schema and processor activation. Product identity, typed parameters/state, events, editor factories, and richer I/O policy remain separate design contracts to add as executable requirements reach this layer.
 
 Compatibility metadata should normally come from Chassis/Cargo metadata + the frozen identity manifest rather than duplicated associated constants.
 
-## Instance runtime authority
+## Activation and I/O
 
-A framework-owned per-instance runtime coordinates state that must remain coherent across host/control/process domains.
+Framework activation currently performs structural `AudioIoConfiguration` validation before product activation. That catches duplicate/unknown/missing stable ports and prevents malformed configuration from reaching product construction.
 
-It owns at least:
+The default `Component::audio_ports()` uses the standard effect descriptors, but **whole-layout policy is not frozen yet**. In particular, the current structural validator does not by itself mean that every layout representable by `ChannelLayout` is valid for every effect. A dedicated semantic I/O-policy layer remains an API-freeze gate.
 
-- current lifecycle phase/generation;
+Activation establishes the resource bounds needed by realtime processing:
+
+- sample rate;
+- optional guaranteed positive minimum block size;
+- non-zero maximum block size;
+- accepted audio I/O configuration;
+- product-owned precomputation/resources.
+
+Per-call scheduling mode is not activation state because VST3 can change realtime/prefetch mode without reactivation.
+
+## Processor ownership
+
+While active, `Processor` is exclusively owned by the processing domain. It owns mutable DSP history such as filters, delay lines, envelopes, oscillators, lookahead buffers, and preallocated scratch.
+
+Editor/state/control code never receives unrestricted mutable access to it.
+
+Thread-transfer capability is deployment-specific: an adapter that moves active processor ownership from its activation/control domain to another processing thread must require `Send` and prove its host lifecycle makes that transfer exclusive. Chassis core should not require `Send` merely for same-thread embedded or specialized runtimes that do not cross that boundary.
+
+`reset` preserves persistent/control state while resetting transient DSP history. Stateless processors may use the current default no-op implementation.
+
+`process` receives only borrowed realtime-safe views through `ProcessBlock<S>`.
+
+## Process block ownership
+
+`ProcessBlock` borrows safe `ChannelBuffer<S>` views and carries actual frame count plus `ProcessMode`.
+
+Its constructor is framework-private. Product code can inspect/process the borrowed block but cannot manufacture a fake framework block directly.
+
+Per-call construction validates only facts that can change per callback without introducing hidden unbounded work:
+
+- callback frame count against activation min/max guarantees;
+- every supplied safe channel slice has exactly that callback length.
+
+Stable endpoint/port translation should be resolved by runtime/adapter setup, not by rescanning all semantic endpoints with allocation or quadratic work in every audio callback.
+
+## Instance runtime authority still to implement
+
+The eventual framework-owned `InstanceRuntime` remains the authority for state that must stay coherent across host/control/process domains:
+
+- lifecycle phase/generation;
 - canonical base parameter values;
 - accepted inactive I/O configuration;
 - persistent-state publication/replacement generation;
 - host bridge capabilities and legal notification scheduling;
-- ownership of any framework communication resources associated with the instance.
+- ownership of framework communication resources associated with the instance.
 
-Do not create independent mutable copies of these guarantees in `MainThread`, editor bindings, `Shared`, and `Processor`.
+Do not create independent mutable copies of those guarantees in `MainThread`, editor bindings, `Shared`, and `Processor`.
 
 The concrete storage/synchronization strategy must fit the access pattern. The runtime concept does **not** imply one giant mutex/object shared across threads.
 
-## Processor ownership
-
-While active, `Processor` is exclusively owned by the processing domain.
-
-It owns mutable DSP state such as filters, delay lines, detector envelopes, oscillators, lookahead buffers, and preallocated scratch. Those values are not casually observable/mutable from editor/state/control code.
-
-Activation establishes all resources/dimensions required for realtime processing: sample rate, maximum frames, accepted I/O configuration, sample precision capability, and product-specific precomputation.
-
-`process` receives only realtime-safe borrowed capabilities/views.
-
-`reset` must satisfy the strictest valid host call context supported by adapters; do not assume reset is always an unrestricted non-RT operation.
-
 ## Deactivation and destruction
-
-The framework needs one explicit lifecycle state machine rather than independent “active/editor/task” booleans that can contradict each other.
 
 At deactivation:
 
-- no new process calls may borrow the active Processor;
+- no new process/reset borrow may exist;
 - in-flight callback ownership must have ended according to the backend contract;
-- processor-owned resources can be moved/destroyed only in a domain where their destructors are legal;
-- I/O/state may then be reconfigured for a future activation.
+- processor-owned resources may be destroyed only in a domain where their destructors are legal;
+- I/O/state can then be reconfigured for a future activation.
 
-Plugin/module unload requires stronger proof once background tasks/native callbacks exist. No callback, worker, timer, or deferred reclamation may retain executable/state references past the owner that joins/cancels/fences it.
+The current `Activated::deactivate(self)` is the smallest executable ownership proof. Plugin/module unload becomes stricter once background tasks, native callbacks, timers, editor resources, or deferred reclamation exist.
 
 Teardown should be idempotent at adapter boundaries where hosts may produce repeated/partial cleanup sequences.
 
-## MainThread
-
-`MainThread` is optional **product** non-realtime state/orchestration. It is not the canonical parameter/state owner.
-
-Possible uses:
-
-- constructing/controlling a product editor;
-- file/resource selection;
-- accepting a completed non-RT preparation into framework state;
-- product-specific host/control reactions.
-
-It communicates structural DSP changes through framework publication/reconfiguration mechanisms rather than mutating `Processor`.
-
-## Shared
-
-`Shared` is a projection/capability, not general shared mutability.
-
-Examples that may be appropriate:
-
-- atomic latest-value telemetry;
-- immutable prepared-data handle with a defined publication/reclamation owner;
-- bounded typed queue endpoints.
-
-Every shared primitive must specify who owns creation, mutation/publication, observation, replacement, and final destruction.
-
-Do not place a value in `Arc<Mutex<_>>` merely because several domains want it; first identify which domain is authoritative and whether the others need commands, snapshots, or observations.
-
 ## Parameters / state generations
 
-The `InstanceRuntime` owns canonical base parameter/persistent state.
+Canonical parameter/persistent state is **not implemented in the current runtime shell**.
 
-Processor automation/effective values are derived block views. A state load is prepared and validated off-thread, then published as one accepted generation. The processor adopts the generation only at a defined safe boundary.
+When added, framework instance state is authoritative; process automation/effective values are derived block views. A state load is prepared and validated off-thread, then published as one accepted generation. Stale completion cannot overwrite newer authority.
 
-If a newer state/edit arrives while older preparation is in flight, generation rules determine which result may publish. Stale completion cannot overwrite newer authority.
+State save while active must use an explicitly documented snapshot consistency model and never serialize arbitrary live `Processor` fields.
 
-State save while active must use the explicitly documented snapshot consistency model; it never calls arbitrary serialization on live `Processor` state.
+## Background work / shared state / editor
 
-## Control -> Processor updates
+These remain outside the base runtime until a real requirement proves them.
 
-Parameter automation is carried through the process-time parameter/event path.
+When added:
 
-Non-parameter structural data (IRs, kernels, wavetables, etc.) uses typed immutable/prepared publication if/when Chassis adds that service.
-
-A block-boundary adoption operation must have bounded realtime work and must not cause a large old object to destruct on the audio thread. Reclamation ownership is part of the design.
-
-## Background work
-
-Background execution is not a base-runtime prerequisite.
-
-When added, task ownership is tied to an instance/module generation and teardown contract. Cancellation does not mean “the task has stopped”; the owner must still ensure late completion cannot access/publish into freed or replaced state.
-
-Do not introduce a hidden process-global executor until dynamic-library unload and last-instance shutdown are designed/tested.
-
-Standalone/application deployments may receive execution services from their outer runtime; plugin hosts may provide workers where the host contract is sufficient.
-
-## Editor
-
-The editor receives typed parameter/control handles and explicitly published telemetry. It never gets `&mut Processor`.
-
-Closing/destroying an editor invalidates its callbacks/subscriptions through one owner. A host reopening an editor creates a valid new UI generation without requiring Processor recreation unless the adapter contract demands it.
-
-GUI toolkit adapters sit above this boundary; Chassis core does not require Iced/egui/custom rendering.
-
-## Lifecycle sketch
-
-```text
-construct immutable Component definition/schema
-        ↓
-create InstanceRuntime + optional product MainThread/Shared
-        ↓
-validate/accept inactive I/O + initial persistent state
-        ↓
-activate generation N
-  create Processor + bounded resources
-        ↓
-process/reset under exclusive Processor ownership
-        ↓
-stop/deactivate
-  callback borrows end; reclaim/destroy in legal domain
-        ↓
-reconfigure/state load/reactivate generation N+1
-        or
-close editor/tasks/callbacks and destroy instance/module safely
-```
-
-Exact trait construction order remains to be proven by the conformance runtime and Clack adapter. The owner/generation invariants should not change merely to match one backend's callback naming.
+- `Shared` is a projection/capability, not general shared mutability;
+- background tasks are tied to instance/module generations and teardown;
+- cancellation does not substitute for joining/fencing stale completion;
+- large replaced objects are reclaimed off the audio thread;
+- no hidden process-global executor exists until dylib unload/shutdown lifetime is designed;
+- editor callbacks/subscriptions are invalidated by one owner and never obtain `&mut Processor`.
 
 ## Failure rules
 
-- expected invalid host/state/configuration input returns a typed adapter/runtime failure before publication;
+- malformed structural I/O fails before product activation;
+- product activation errors are distinguished from framework validation errors;
+- callback frame violations fail before product DSP runs;
 - partial initialization cleans up only resources that were successfully acquired;
-- impossible validated internal state is asserted/diagnosed as a framework bug;
-- no panic unwinds through FFI;
-- process-time adapter failure has a format-specific safe containment path rather than continuing with invalid Rust references/state.
+- impossible validated internal state is a framework bug;
+- no panic may unwind through a future FFI boundary.
 
-## Design references
+## Validation status
 
-Clack's shared/main/audio domains and nice-plug's exclusive processing ownership are useful evidence that Rust can encode plugin thread domains. Chassis does not copy either runtime model wholesale; its higher-level invariant is one authoritative instance runtime plus an exclusively mutable realtime Processor and narrow projections/capabilities around them.
+`crates/chassis-core/tests/conformance.rs` exercises the explicit API externally with deterministic processing, separate buffers, exact in-place buffers, reset/deactivation ownership, malformed activation, callback-size rejection, zero-frame behavior where no positive minimum is promised, and a compile-time `Send` assertion for the processor used by the future plugin path.
+
+This is only the first conformance slice. It does not yet prove parameters/state/events, adapters, FFI, host behavior, allocation guards, or production readiness.

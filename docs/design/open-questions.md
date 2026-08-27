@@ -2,42 +2,64 @@
 
 This document records unresolved design choices that are intentionally **not** compatibility promises yet. Resolve them through the conformance runtime, adapter work, and representative products rather than by adding abstraction speculatively.
 
-## Blocks the first explicit runtime API
+## First explicit runtime slice — implemented, not frozen
 
 ### Component / Processor construction
 
-Need the smallest explicit trait/type surface that proves:
+The first manual API now exists:
 
-- immutable product schema/identity versus per-instance runtime state;
-- framework-owned canonical parameter/state authority;
-- exclusive active `Processor` ownership;
-- optional product `MainThread`/`Shared` without boilerplate;
-- activation/deactivation that can map faithfully to CLAP and later VST3/AU;
-- cleanup of partial/failed activation.
+- `Component` is the immutable definition/factory;
+- framework activation structurally validates I/O before calling product activation;
+- `Processor` exclusively owns active DSP/runtime history and reset;
+- sample processing is a separate `Process<S>` capability;
+- `Activated<P>` owns the processor + immutable activation config and consumes itself on deactivation.
 
-Do not add derives/macros until this manual API is used by the conformance component.
+This resolves the basic ownership shape but does **not** freeze trait spelling/signatures.
+
+Before promotion, still prove:
+
+- cleanup of failed/partial activation through real adapter sequences;
+- semantic whole-I/O policy beyond structural port presence;
+- how the eventual framework `InstanceRuntime` adds canonical parameter/state authority without turning into a giant shared object;
+- whether any additional lifecycle capability is genuinely required by CLAP/VST3/AU;
+- f32/f64 capability advertisement/dispatch using one processor architecture.
+
+Do not add derives/macros yet. The integration conformance effect uses this explicit API directly; the first CLAP adapter should be the next major ergonomic test.
 
 ### Safe process buffer view
 
-Need an implementation that can expose:
+The first implementation now exposes:
 
-- exact in-place channels with one mutable Rust reference;
-- disjoint input/output channels;
-- input-only/output-only ports;
-- multiple buses;
-- validated frame/channel bounds;
-- `f32` and eventual `f64` without duplicating product architecture.
+- exact in-place input/output with one mutable Rust slice;
+- disjoint input/output views;
+- input-only and output-only views;
+- semantic stable port/channel endpoints;
+- bounded explicit copy-to-output convenience for ordinary in-place DSP;
+- callback slice-length validation without unsafe code in `chassis-core`.
 
-Adapters must prove aliasing before constructing references. Benchmark any copy/conversion path before adding unsafe/ownership complexity to remove it.
+Remaining freeze gates:
+
+- adapter setup representation that resolves stable endpoints to host buffers without per-callback allocation/O(n²) lookup;
+- ergonomic higher-level port/bus views for stereo main, sidechain, multiple buses, and non-one-to-one routing;
+- target-specific null/inactive/zero-buffer legality;
+- f64 host dispatch/advertisement;
+- benchmark copy/conversion paths before adding ownership/unsafe complexity to remove them.
+
+Adapters must prove aliasing before constructing safe references.
 
 ### Process context
 
-Need the per-call type that carries at least:
+`ProcessBlock<S>` currently carries:
 
 - actual frame count;
 - `ProcessMode` (`Realtime`, `BufferedRealtime`, `Offline` where supplied);
+- borrowed safe channel views.
+
+Still to add only when the corresponding semantic layer is implemented:
+
 - block-start transport snapshot;
 - parameter trajectories/events;
+- note/MIDI/event views/sinks;
 - narrow realtime-safe output/host capabilities.
 
 Do not encode CLAP process status or VST3 classes directly into this type.
@@ -94,6 +116,18 @@ Keep Clack types confined to `chassis-clap`.
 Prove create/init/activate/start/process/stop/deactivate/destroy and invalid/partial sequences against the Chassis runtime state machine.
 
 Need explicit containment for adapter panics/invalid host input and no unwind across ABI.
+
+The current `Activated` shell is a semantic proof, not evidence that CLAP lifecycle mapping is already correct.
+
+### Buffer mapping
+
+The CLAP adapter must prove its host-pointer validation and endpoint resolution before constructing `ChannelBuffer` views:
+
+- exact alias versus disjoint ranges;
+- no overlapping output references;
+- active port/channel counts and frame bounds;
+- setup-time dense mapping with no hidden per-callback allocation;
+- invalid host data contained before safe Rust references exist.
 
 ### Event/parameter translation
 
@@ -152,6 +186,8 @@ Typed immutable control->DSP snapshot publication may be implemented separately 
 Core must remain compatible now, but instrument helpers wait for a real instrument/conformance extension.
 
 Before stable instrument claims, prove note identity, expression, MIDI fallback, multiple event/audio outputs, output-event capacity/rejection, and standalone behavior.
+
+The current input-only/output-only buffer forms are necessary groundwork, not an instrument-support claim.
 
 ## Surround / ambisonics / immersive
 

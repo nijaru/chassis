@@ -1,6 +1,6 @@
 # Authoring API and Convention Model
 
-Status: design target; syntax, trait names, and macros are illustrative until the explicit semantic core and first adapter prove them.
+Status: first explicit manual runtime slice implemented; syntax and higher-level conveniences remain pre-alpha.
 
 ## Goal
 
@@ -17,34 +17,48 @@ Convention removes mechanical work without hiding realtime timing, copies, alloc
 
 ## Explicit layer first
 
-Chassis should have one small explicit Rust API that owns the semantics. Optional derives/builders generate ordinary calls/impls against that API; they do not create a second runtime model.
+Chassis now has the first executable manual lifecycle/process layer in `chassis-core`:
+
+```text
+Component
+  immutable definition/factory
+  default effect audio-port schema
+  activate -> Processor
+
+Processor
+  exclusive active DSP/runtime-history owner
+  reset
+
+Process<S>
+  sample-representation-specific processing capability
+  process(ProcessBlock<S>)
+
+Activated<P>
+  immutable activation config + exclusive Processor
+  reset / process / consuming deactivate
+```
+
+This is intentionally smaller than the eventual ergonomic API. It proves ownership and buffer semantics before parameters/state, proc macros, GUI bindings, or adapters make the surface harder to change.
 
 Do not add proc macros until the conformance component and first CLAP adapter show which declarations are genuinely repetitive.
 
-## Desired ordinary effect
+## Current explicit effect
 
-Illustrative end-state:
+The current external API is approximately:
 
 ```rust,ignore
-#[derive(chassis::Parameters)]
-struct Params {
-    #[param(id = "input.gain", range = -24.0..=24.0, default = 0.0, unit = "dB")]
-    input_gain: f32,
-
-    #[param(id = "mix", range = 0.0..=1.0, default = 1.0)]
-    mix: f32,
-}
-
 struct MyEffect;
 
-impl chassis::Component for MyEffect {
-    type Parameters = Params;
+impl chassis_core::runtime::Component for MyEffect {
     type Processor = MyProcessor;
+    type ActivationError = MyActivateError;
+
+    // Omit audio_ports() to use the standard effect descriptors.
 
     fn activate(
         &self,
-        config: &chassis::ActivationConfig<'_>,
-    ) -> Result<MyProcessor, chassis::ActivateError> {
+        config: &chassis_core::process::ActivationConfig<'_>,
+    ) -> Result<Self::Processor, Self::ActivationError> {
         MyProcessor::new(config)
     }
 }
@@ -53,32 +67,83 @@ struct MyProcessor {
     // Product DSP/runtime history only.
 }
 
-impl chassis::Processor<Params> for MyProcessor {
-    fn process(&mut self, block: &mut chassis::ProcessBlock<'_, Params>) {
-        // Product DSP using block-local parameter trajectories and safe buffers.
+impl chassis_core::runtime::Processor for MyProcessor {
+    fn reset(&mut self) {
+        // Reset transient DSP history if needed.
+    }
+}
+
+impl chassis_core::runtime::Process<f32> for MyProcessor {
+    fn process(
+        &mut self,
+        block: &mut chassis_core::process::ProcessBlock<'_, '_, f32>,
+    ) {
+        for channel in block.buffers_mut() {
+            // Use exact in-place storage directly, or explicitly copy a
+            // separate input/output pair with make_in_place().
+            process(channel);
+        }
     }
 }
 ```
 
-Exact signatures are intentionally not frozen. The ergonomic invariant is that an ordinary effect does not need custom host-format traits, state codecs, port tables, `Shared`, or `MainThread` merely to process audio correctly.
+The framework calls `runtime::activate()` after structural audio-I/O validation and returns an `Activated<MyProcessor>`. Product code does not construct `ActivationConfig` or `ProcessBlock` directly.
+
+This spelling is not a compatibility promise. The useful constraints are the ownership split and absence of hidden realtime work.
+
+## Why `Processor` and `Process<S>` are separate
+
+Do not hard-code one host sample precision into processor ownership.
+
+A processor has one lifecycle/DSP-history object and may implement:
+
+```text
+Process<f32>
+Process<f64>
+```
+
+as supported. The current conformance effect proves only `f32`; optional host f64 advertisement/dispatch remains an adapter freeze gate.
+
+This is preferable to duplicating the whole processor architecture merely to support double precision.
 
 ## Default effect convention
 
-With no explicit audio-I/O declaration, an audio effect gets stable conventional ports:
+With no explicit audio-port declaration, `Component::audio_ports()` returns stable conventional descriptors:
 
 ```text
-audio.main.in   stereo required
-audio.main.out  stereo required
-audio.sidechain stereo optional/inactive
+audio.main.in   required input
+audio.main.out  required output
+audio.sidechain optional input
 ```
+
+The current default active configuration remains stereo main input/output with sidechain inactive.
+
+Important: the explicit runtime currently validates **structural port presence/identity**, not the final whole-layout policy. The default descriptors are not permission to accept every representable channel layout. A dedicated semantic I/O-policy layer must be proven before API freeze.
 
 Inactive optional ports add no process-time buffer work.
 
-Common deviations use semantic policies/builders such as mono, mono-to-stereo, matching arbitrary layouts, or explicit bus sets. Authors never translate those policies separately into CLAP/VST3/AU metadata.
+## Buffer ergonomics
 
-## Parameter declarations
+`ChannelBuffer<S>` exposes already-proven safe relationships:
 
-Compatibility-relevant choices remain explicit:
+- exact in-place input/output with one mutable slice;
+- disjoint input/output slices;
+- input-only;
+- output-only.
+
+Each side carries a stable port/channel endpoint.
+
+`make_in_place()` is an explicit convenience: exact in-place is zero-copy; separate input/output performs one bounded copy to output. Products with out-of-place algorithms can use `input()` and `output_mut()` directly.
+
+No process convenience allocates.
+
+Higher-level port/bus lookup helpers should be added only after representative DSP call sites show which views are actually useful. Avoid per-callback maps or other convenience structures that create hidden work.
+
+## Parameters are the next semantic layer, not fake fields on Processor
+
+The current runtime slice intentionally has no parameter API yet.
+
+When added, compatibility-relevant declarations remain explicit:
 
 - stable canonical string key;
 - value type/domain;
@@ -90,42 +155,9 @@ Compatibility-relevant choices remain explicit:
 
 Rust field names and display labels are not persistent identity.
 
-Nested/repeated groups compose stable key prefixes. Repeated instances should use stable named identities when reordering may occur; raw array index is acceptable only when reordering is explicitly a compatibility break.
+The processor's parameter view will be derived from framework-owned base state plus current process events; it will not become a second persistent store.
 
-## DSP parameter access
-
-The normal processing API must make sample-accurate correctness easy without forcing per-sample dynamic lookup when nothing changes.
-
-Conceptually:
-
-```rust,ignore
-let threshold = block.params().threshold();
-
-if let Some(value) = threshold.constant() {
-    process_block(value);
-} else {
-    for span in block.spans() {
-        process_span(span.frames(), span.params().threshold);
-    }
-}
-```
-
-The actual API may differ, but it should expose block-constant fast paths, timed sets/ramps, and raw ordered events where needed.
-
-The processor's parameter view is derived from the framework-owned base-state authority plus current process events; it is not a second persistent store.
-
-## Buffer ergonomics
-
-Chassis exposes safe relationships proved by the adapter:
-
-- exact in-place channel view;
-- disjoint input/output channel views;
-- input-only/output-only buses;
-- port/channel iteration for unusual routing.
-
-An explicit convenience can turn a separate input/output pair into a mutable output by performing one bounded copy. That is acceptable and visible behavior, not a hidden cost. Products that benefit from out-of-place DSP can avoid it.
-
-No process convenience allocates.
+Nested/repeated groups should compose stable key prefixes. Repeated instances should use stable named identities when reordering may occur; raw array index is acceptable only when reordering is explicitly a compatibility break.
 
 ## Main-thread / shared defaults
 
@@ -136,7 +168,7 @@ MainThread = ()
 Shared = ()
 ```
 
-Framework-owned canonical parameter/state/lifecycle machinery still exists internally; `()` only means the **product** has no additional state in those domains.
+Framework-owned canonical parameter/state/lifecycle machinery will still exist internally; `()` only means the **product** has no additional state in those domains.
 
 When custom shared state exists, it is a synchronized projection/snapshot with one named owner—not general shared mutability.
 
@@ -144,23 +176,13 @@ When custom shared state exists, it is a synchronized projection/snapshot with o
 
 Most user-visible state should be parameters. Extra persistent fields use stable keys and a deliberately supported Chassis value/codec contract.
 
-Illustrative direction:
-
-```rust,ignore
-#[derive(chassis::State)]
-struct ProductState {
-    #[state(id = "quality.mode")]
-    quality: QualityMode,
-}
-```
-
 `Serialize` on an arbitrary Rust struct is not by itself a long-term plugin-state contract.
 
 ## GUI convention
 
-A component can have no editor, a generic debug editor, or a product editor factory.
+A component can eventually have no editor, a generic debug editor, or a product editor factory.
 
-A GUI adapter should bind generated typed parameter handles that automatically provide current display/base value observation, begin/change/end gestures, host notification, formatting/parsing, and accessibility metadata where supported.
+A GUI adapter should bind typed parameter handles that provide current display/base value observation, begin/change/end gestures, host notification, formatting/parsing, and accessibility metadata where supported.
 
 Chassis owns editor lifecycle/host attachment; the product/toolkit owns appearance and interaction design.
 
@@ -176,7 +198,7 @@ no audio input
 stereo or multi-bus audio output
 ```
 
-Standalone supplies device/MIDI/window/runtime ownership around the same product implementation.
+The current `Component::audio_ports()` default is merely the effect convenience; instruments override it and future event capabilities without replacing `Processor`/`Process<S>`.
 
 ## Escape hatches
 
@@ -211,8 +233,8 @@ cargo chassis identity
 
 Build/release behavior belongs in tooling, not runtime proc macros.
 
-When implementing this CLI, apply the repository's Rust CLI guidance in addition to `rust-expert`; do not invent argument/config conventions ad hoc.
-
 ## Promotion rule
 
-Before introducing convenience macros, write the conformance component using the explicit API and count the real repetition. A macro earns its place only when it removes mechanical declarations without concealing timing, allocation, ownership, or compatibility behavior an author needs to debug.
+The integration conformance component now uses the explicit public API directly. Continue to grow that path before introducing derives/builders.
+
+A macro earns its place only when it removes repeated mechanical declarations without concealing timing, allocation, ownership, or compatibility behavior an author needs to debug.

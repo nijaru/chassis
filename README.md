@@ -72,8 +72,14 @@ crates/
   chassis-core/
     src/
       audio.rs      stable port keys, basic layouts/configuration validation
-      process.rs    activation resource bounds + per-call process-mode semantics
+      buffer.rs     safe exact-alias/disjoint/input-only/output-only channel views
+      process.rs    activation bounds + borrowed per-call ProcessBlock
+      runtime.rs    explicit Component/Processor/Process lifecycle shell
+    tests/
+      conformance.rs deterministic external-API lifecycle/buffer tests
 ```
+
+The first executable runtime slice deliberately stops before parameter/state authority, transport/events, background work, or format adapters. `Processor` owns reset/lifecycle semantics; sample processing is a separate `Process<S>` capability so an eventual f64 path does not require a second processor architecture.
 
 `chassis-core` is currently unpublished `0.0.0`, std-only, and has no third-party Rust dependencies. Its current code is an implementation spike and can change freely before publication.
 
@@ -83,7 +89,7 @@ Future crates such as `chassis-clap`, `chassis-gui`, `chassis-iced`, `chassis-te
 
 There is currently **no authoritative hosted CI**. Validation is local/tool-driven until hosted automation is intentionally restored.
 
-Baseline commands once a local Rust toolchain is available:
+Baseline commands on a supported development machine:
 
 ```sh
 cargo fmt --all -- --check
