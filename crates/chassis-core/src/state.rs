@@ -380,6 +380,11 @@ impl StateDocument {
             let key = decode_utf8(reader.take(key_len)?)
                 .map_err(StateDecodeError::InvalidKeyUtf8)?
                 .to_owned();
+            if key.is_empty() {
+                return Err(StateDecodeError::InvalidDocument(
+                    StateDocumentError::EmptyKey,
+                ));
+            }
             let payload = reader.take(payload_len)?;
             let value = decode_value(value_type, payload)?;
             entries.push(StateEntry::new(key, value));
@@ -639,7 +644,7 @@ pub enum StateEncodeError {
     EntryCountTooLarge {
         /// Actual entry count.
         actual: usize,
-        /// Configured maximum entry count.
+        /// Configured maximum count.
         maximum: u32,
     },
     /// Complete encoded document exceeded its configured bound.
@@ -1024,6 +1029,18 @@ mod tests {
             Err(StateDocumentError::DuplicateKey("gain".into()))
         );
         assert_eq!(document.entries().len(), 1);
+    }
+
+    #[test]
+    fn rejects_empty_keys_during_decode() {
+        let encoded = vec![
+            b'C', b'H', b'S', b'S', 1, 0, 1, 0, 2, 0, 0, 0, 1, 0, 0, 0, b'x', 0, 0, 0, 0, 1, 0,
+            0, 0, 1,
+        ];
+        assert_eq!(
+            StateDocument::decode(&encoded),
+            Err(StateDecodeError::InvalidDocument(StateDocumentError::EmptyKey))
+        );
     }
 
     #[test]
