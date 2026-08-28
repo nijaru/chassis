@@ -139,6 +139,8 @@ impl std::error::Error for InstanceRuntimeError {
 pub enum ActivateError<E> {
     /// The instance already owns an active processor.
     AlreadyActive,
+    /// The component schema no longer matches the instance schema.
+    ParameterSchemaMismatch,
     /// The proposed whole-component I/O configuration failed structural validation.
     InvalidAudioIo(AudioIoConfigurationError),
     /// The component's immutable parameter schema failed validation.
@@ -157,6 +159,9 @@ where
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::AlreadyActive => formatter.write_str("component instance is already active"),
+            Self::ParameterSchemaMismatch => {
+                formatter.write_str("component parameter schema does not match its instance runtime")
+            }
             Self::InvalidAudioIo(error) => write!(formatter, "invalid audio I/O: {error}"),
             Self::InvalidParameters(error) => write!(formatter, "invalid parameters: {error}"),
             Self::Product(error) => write!(formatter, "product activation failed: {error}"),
@@ -170,7 +175,7 @@ where
 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::AlreadyActive => None,
+            Self::AlreadyActive | Self::ParameterSchemaMismatch => None,
             Self::InvalidAudioIo(error) => Some(error),
             Self::InvalidParameters(error) => Some(error),
             Self::Product(error) => Some(error),
@@ -275,44 +280,53 @@ impl<P> ActiveRuntime<P> {
 
 /// Durable framework-owned runtime for one component instance.
 ///
-/// The runtime owns canonical base parameter state across activation cycles. An
-/// active processor and its accepted I/O configuration are optional resources
-/// inside that same instance. The accepted port list is copied once while
-/// inactive so dynamically negotiated layouts do not create self-referential
-/// lifetimes and no callback-time port allocation is required.
-pub struct InstanceRuntime<C>
+/// The runtime owns canonical base parameter state across activation cycles and
+/// optionally owns the active processor plus its accepted I/O configuration.
+/// The component definition itself remains outside this object and is borrowed
+/// only while activating, so deployment boundaries need to transfer only the
+/// concrete processor/runtime state rather than requiring `Component: Send`.
+///
+/// The accepted port list is copied once while inactive. Dynamically negotiated
+/// layouts therefore do not create self-referential lifetimes and require no
+/// callback-time port allocation.
+pub struct InstanceRuntime<P>
 where
-    C: Component,
+    P: Processor,
 {
-    component: C,
     parameters: ParameterStore,
-    active: Option<ActiveRuntime<C::Processor>>,
+    active: Option<ActiveRuntime<P>>,
 }
 
-impl<C> InstanceRuntime<C>
+impl<P> InstanceRuntime<P>
 where
-    C: Component,
+    P: Processor,
 {
-    /// Construct one inactive component instance with validated default base state.
+    /// Construct one inactive instance from a validated parameter schema.
     ///
     /// # Errors
     ///
-    /// Returns [`InstanceRuntimeError::InvalidParameters`] if the component's
-    /// immutable parameter schema is invalid.
-    pub fn new(component: C) -> Result<Self, InstanceRuntimeError> {
-        let parameters = ParameterStore::new(component.parameter_descriptors())
-            .map_err(InstanceRuntimeError::InvalidParameters)?;
+    /// Returns [`InstanceRuntimeError::InvalidParameters`] if the immutable
+    /// parameter schema is invalid.
+    pub fn new(descriptors: &[ParameterDescriptor]) -> Result<Self, InstanceRuntimeError> {
+        let parameters =
+            ParameterStore::new(descriptors).map_err(InstanceRuntimeError::InvalidParameters)?;
         Ok(Self {
-            component,
             parameters,
             active: None,
         })
     }
 
-    /// Return the immutable component definition owned by this instance.
-    #[must_use]
-    pub const fn component(&self) -> &C {
-        &self.component
+    /// Construct one inactive runtime from a component's immutable schema.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InstanceRuntimeError::InvalidParameters`] if the component's
+    /// parameter schema is invalid.
+    pub fn for_component<C>(component: &C) -> Result<Self, InstanceRuntimeError>
+    where
+        C: Component<Processor = P>,
+    {
+        Self::new(component.parameter_descriptors())
     }
 
     /// Return the durable current base/control parameter values.
@@ -350,24 +364,32 @@ where
     /// # Errors
     ///
     /// Returns [`ActivateError::AlreadyActive`] if already active,
-    /// [`ActivateError::InvalidAudioIo`] for malformed configuration, or
-    /// [`ActivateError::Product`] when product activation fails.
-    pub fn activate(
+    /// [`ActivateError::ParameterSchemaMismatch`] if the supplied component no
+    /// longer matches the instance schema, [`ActivateError::InvalidAudioIo`] for
+    /// malformed configuration, or [`ActivateError::Product`] when product
+    /// activation fails.
+    pub fn activate<C>(
         &mut self,
+        component: &C,
         process: ProcessConfig,
         audio_io: AudioIoConfiguration<'_>,
-    ) -> Result<(), ActivateError<C::ActivationError>> {
+    ) -> Result<(), ActivateError<C::ActivationError>>
+    where
+        C: Component<Processor = P>,
+    {
         if self.active.is_some() {
             return Err(ActivateError::AlreadyActive);
         }
+        if self.parameters.descriptors() != component.parameter_descriptors() {
+            return Err(ActivateError::ParameterSchemaMismatch);
+        }
         audio_io
-            .validate(self.component.audio_ports())
+            .validate(component.audio_ports())
             .map_err(ActivateError::InvalidAudioIo)?;
 
         let audio_ports = audio_io.ports().to_vec();
         let config = ActivationConfig::new(process, AudioIoConfiguration::new(&audio_ports));
-        let processor = self
-            .component
+        let processor = component
             .activate_with_parameters(&config, &self.parameters)
             .map_err(ActivateError::Product)?;
         self.active = Some(ActiveRuntime {
@@ -403,20 +425,23 @@ where
         buffers: &mut [ChannelBuffer<'_, S>],
     ) -> Result<(), InstanceProcessError>
     where
-        C::Processor: Process<S>,
+        P: Process<S>,
     {
-        let Self {
-            parameters, active, ..
-        } = self;
+        let Self { parameters, active } = self;
         let active = active.as_mut().ok_or(InstanceProcessError::NotActive)?;
-        let config = active.config();
+        let ActiveRuntime {
+            process,
+            audio_ports,
+            processor,
+        } = active;
+        let config = ActivationConfig::new(*process, AudioIoConfiguration::new(audio_ports));
         let mut block = ProcessBlock::new(&config, parameters, frame_count, context, buffers)
             .map_err(InstanceProcessError::InvalidBlock)?;
         parameters
             .validate_events(context.parameter_events())
             .map_err(ProcessBlockError::InvalidParameterEvents)
             .map_err(InstanceProcessError::InvalidBlock)?;
-        active.processor.process(&mut block);
+        processor.process(&mut block);
         Ok(())
     }
 
