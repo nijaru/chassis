@@ -17,7 +17,10 @@ use chassis_core::{
     automation::ParameterEvents,
     buffer::ChannelBuffer,
     parameters::{ParameterDescriptor, ParameterStore, ParameterValue},
-    process::{ActivationConfig, ProcessBlock, ProcessConfig, ProcessContext, ProcessMode, TransportSnapshot},
+    process::{
+        ActivationConfig, ProcessBlock, ProcessConfig, ProcessContext, ProcessMode,
+        TransportSnapshot,
+    },
     runtime::{Component, InstanceRuntime, InstanceStateError, Process, Processor},
     state::{StateDocument, StateEntry, StateValue},
 };
@@ -121,15 +124,16 @@ fn process_config() -> ProcessConfig {
 #[test]
 fn parameters_survive_deactivation_and_reactivation() {
     let metrics = Arc::new(Metrics::default());
-    let mut runtime = InstanceRuntime::new(Effect::new(Arc::clone(&metrics)))
-        .expect("instance schema is valid");
+    let component = Effect::new(Arc::clone(&metrics));
+    let mut runtime: InstanceRuntime<EffectProcessor> =
+        InstanceRuntime::for_component(&component).expect("instance schema is valid");
     runtime
         .parameters_mut()
         .set("gain", ParameterValue::Float(1.5))
         .expect("gain is valid");
 
     runtime
-        .activate(process_config(), DEFAULT_EFFECT_CONFIGURATION)
+        .activate(&component, process_config(), DEFAULT_EFFECT_CONFIGURATION)
         .expect("first activation succeeds");
     assert_eq!(
         f64::from_bits(metrics.activation_gain_bits.load(Ordering::Relaxed)),
@@ -142,7 +146,7 @@ fn parameters_survive_deactivation_and_reactivation() {
         Some(&ParameterValue::Float(1.5))
     );
     runtime
-        .activate(process_config(), DEFAULT_EFFECT_CONFIGURATION)
+        .activate(&component, process_config(), DEFAULT_EFFECT_CONFIGURATION)
         .expect("second activation succeeds");
     assert_eq!(
         f64::from_bits(metrics.activation_gain_bits.load(Ordering::Relaxed)),
@@ -157,7 +161,9 @@ fn parameters_survive_deactivation_and_reactivation() {
 #[test]
 fn activation_owns_a_dynamic_audio_configuration() {
     let metrics = Arc::new(Metrics::default());
-    let mut runtime = InstanceRuntime::new(Effect::new(metrics)).expect("instance schema is valid");
+    let component = Effect::new(metrics);
+    let mut runtime: InstanceRuntime<EffectProcessor> =
+        InstanceRuntime::for_component(&component).expect("instance schema is valid");
 
     {
         let ports = vec![
@@ -171,7 +177,11 @@ fn activation_owns_a_dynamic_audio_configuration() {
             },
         ];
         runtime
-            .activate(process_config(), AudioIoConfiguration::new(&ports))
+            .activate(
+                &component,
+                process_config(),
+                AudioIoConfiguration::new(&ports),
+            )
             .expect("dynamic configuration activates");
     }
 
@@ -184,7 +194,9 @@ fn activation_owns_a_dynamic_audio_configuration() {
 #[test]
 fn complete_state_replacement_is_transactional() {
     let metrics = Arc::new(Metrics::default());
-    let mut runtime = InstanceRuntime::new(Effect::new(metrics)).expect("instance schema is valid");
+    let component = Effect::new(metrics);
+    let mut runtime: InstanceRuntime<EffectProcessor> =
+        InstanceRuntime::for_component(&component).expect("instance schema is valid");
     runtime
         .parameters_mut()
         .set("gain", ParameterValue::Float(1.75))
@@ -222,13 +234,15 @@ fn complete_state_replacement_is_transactional() {
 #[test]
 fn process_uses_durable_base_state() {
     let metrics = Arc::new(Metrics::default());
-    let mut runtime = InstanceRuntime::new(Effect::new(metrics)).expect("instance schema is valid");
+    let component = Effect::new(metrics);
+    let mut runtime: InstanceRuntime<EffectProcessor> =
+        InstanceRuntime::for_component(&component).expect("instance schema is valid");
     runtime
         .parameters_mut()
         .set("gain", ParameterValue::Float(0.5))
         .expect("gain is valid");
     runtime
-        .activate(process_config(), DEFAULT_EFFECT_CONFIGURATION)
+        .activate(&component, process_config(), DEFAULT_EFFECT_CONFIGURATION)
         .expect("activation succeeds");
 
     let mut left = [1.0_f32, 0.5];
