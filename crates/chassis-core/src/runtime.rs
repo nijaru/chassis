@@ -1,18 +1,24 @@
 //! Explicit component/processor lifecycle contracts.
 //!
-//! This module is intentionally small. It proves the semantic ownership split
-//! while keeping parameter/state authority and process-time automation separate
-//! from future host translation, proc-macro, and format-adapter contracts.
+//! The framework-owned [`InstanceRuntime`] is the durable authority for one
+//! component instance's base parameter state and active lifecycle. The older
+//! [`Activated`] shell remains temporarily for adapter migration; it is an
+//! activation-local projection rather than the long-lived state authority.
 
 use core::fmt;
+use std::vec::Vec;
 
 use crate::{
     audio::{
-        AudioIoConfiguration, AudioIoConfigurationError, AudioPortDescriptor, DEFAULT_EFFECT_PORTS,
+        AudioIoConfiguration, AudioIoConfigurationError, AudioPortDescriptor, ConfiguredAudioPort,
+        DEFAULT_EFFECT_PORTS,
     },
     buffer::ChannelBuffer,
-    parameters::{ParameterDescriptor, ParameterStore, ParameterStoreError},
+    parameters::{
+        ParameterDescriptor, ParameterStateError, ParameterStore, ParameterStoreError,
+    },
     process::{ActivationConfig, ProcessBlock, ProcessBlockError, ProcessConfig, ProcessContext},
+    state::{StateDocument, StateLimits},
 };
 
 /// Immutable product definition/factory for one Chassis component type.
@@ -39,8 +45,8 @@ pub trait Component {
 
     /// Return the immutable parameter schema for this component instance.
     ///
-    /// The runtime clones this schema into the active instance before product
-    /// activation. The clone is immutable; only the instance's base values are
+    /// The instance runtime clones this schema once when the instance is
+    /// created. The clone is immutable; only the instance's base values are
     /// mutable. Components without parameters use the empty default schema.
     #[must_use]
     fn parameter_descriptors(&self) -> &[ParameterDescriptor] {
@@ -60,6 +66,25 @@ pub trait Component {
         &self,
         config: &ActivationConfig<'_>,
     ) -> Result<Self::Processor, Self::ActivationError>;
+
+    /// Create the realtime processor with the current validated base state.
+    ///
+    /// This is the durable-instance activation hook. The default delegates to
+    /// [`Self::activate`] so existing components that do not need state-aware
+    /// preparation remain simple. Components whose activation-time resources
+    /// depend on current base values may override this method.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same product-defined activation error as [`Self::activate`].
+    fn activate_with_parameters(
+        &self,
+        config: &ActivationConfig<'_>,
+        parameters: &ParameterStore,
+    ) -> Result<Self::Processor, Self::ActivationError> {
+        let _ = parameters;
+        self.activate(config)
+    }
 }
 
 /// Mutable realtime DSP/runtime-history owner while a component is active.
@@ -86,12 +111,40 @@ pub trait Process<S>: Processor {
     fn process(&mut self, block: &mut ProcessBlock<'_, '_, '_, '_, S>);
 }
 
+/// Failure while constructing a durable [`InstanceRuntime`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InstanceRuntimeError {
+    /// The component's immutable parameter schema failed validation.
+    InvalidParameters(ParameterStoreError),
+}
+
+impl fmt::Display for InstanceRuntimeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidParameters(error) => write!(formatter, "invalid parameters: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for InstanceRuntimeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InvalidParameters(error) => Some(error),
+        }
+    }
+}
+
 /// Framework activation failure before an active processor is published.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ActivateError<E> {
+    /// The instance already owns an active processor.
+    AlreadyActive,
     /// The proposed whole-component I/O configuration failed structural validation.
     InvalidAudioIo(AudioIoConfigurationError),
     /// The component's immutable parameter schema failed validation.
+    ///
+    /// This variant remains for the temporary [`activate`] convenience path.
+    /// [`InstanceRuntime::new`] validates the schema before activation instead.
     InvalidParameters(ParameterStoreError),
     /// Product activation failed after the framework configuration was validated.
     Product(E),
@@ -103,6 +156,7 @@ where
 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::AlreadyActive => formatter.write_str("component instance is already active"),
             Self::InvalidAudioIo(error) => write!(formatter, "invalid audio I/O: {error}"),
             Self::InvalidParameters(error) => write!(formatter, "invalid parameters: {error}"),
             Self::Product(error) => write!(formatter, "product activation failed: {error}"),
@@ -116,6 +170,7 @@ where
 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::AlreadyActive => None,
             Self::InvalidAudioIo(error) => Some(error),
             Self::InvalidParameters(error) => Some(error),
             Self::Product(error) => Some(error),
@@ -123,12 +178,338 @@ where
     }
 }
 
-/// Active processor, canonical base parameter state, and immutable activation configuration.
+/// Lifecycle operation attempted in the wrong instance phase.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstanceLifecycleError {
+    /// No active processor exists for the requested operation.
+    NotActive,
+}
+
+impl fmt::Display for InstanceLifecycleError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotActive => formatter.write_str("component instance is not active"),
+        }
+    }
+}
+
+impl std::error::Error for InstanceLifecycleError {}
+
+/// Processing failure through a durable [`InstanceRuntime`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InstanceProcessError {
+    /// No processor is active.
+    NotActive,
+    /// The process block violated the active configuration or parameter schema.
+    InvalidBlock(ProcessBlockError),
+}
+
+impl fmt::Display for InstanceProcessError {
+where
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotActive => formatter.write_str("component instance is not active"),
+            Self::InvalidBlock(error) => write!(formatter, "invalid process block: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for InstanceProcessError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::NotActive => None,
+            Self::InvalidBlock(error) => Some(error),
+        }
+    }
+}
+
+/// Failure while replacing the durable instance's framework-managed parameter state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InstanceStateError {
+    /// Rebuilding the already-validated parameter schema unexpectedly failed.
+    InvalidParameters(ParameterStoreError),
+    /// The semantic parameter state was invalid for this product/schema.
+    ParameterState(ParameterStateError),
+    /// A full state document omitted one or more framework-managed parameters.
+    IncompleteParameterState {
+        /// Number of parameters required by the current schema.
+        expected: usize,
+        /// Number of parameter entries supplied by the document.
+        actual: usize,
+    },
+}
+
+impl fmt::Display for InstanceStateError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidParameters(error) => write!(formatter, "invalid parameters: {error}"),
+            Self::ParameterState(error) => write!(formatter, "invalid parameter state: {error}"),
+            Self::IncompleteParameterState { expected, actual } => write!(
+                formatter,
+                "parameter state contains {actual} parameters but {expected} are required"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for InstanceStateError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InvalidParameters(error) => Some(error),
+            Self::ParameterState(error) => Some(error),
+            Self::IncompleteParameterState { .. } => None,
+        }
+    }
+}
+
+struct ActiveRuntime<P> {
+    process: ProcessConfig,
+    audio_ports: Vec<ConfiguredAudioPort>,
+    processor: P,
+}
+
+impl<P> ActiveRuntime<P> {
+    fn config(&self) -> ActivationConfig<'_> {
+        ActivationConfig::new(self.process, AudioIoConfiguration::new(&self.audio_ports))
+    }
+}
+
+/// Durable framework-owned runtime for one component instance.
 ///
-/// The parameter store is a control/non-realtime authority. Process-time
-/// automation is supplied as a validated borrowed context to each block; base
-/// state publication and cross-domain synchronization remain explicit follow-up
-/// contracts.
+/// The runtime owns canonical base parameter state across activation cycles. An
+/// active processor and its accepted I/O configuration are optional resources
+/// inside that same instance. The accepted port list is copied once while
+/// inactive so dynamically negotiated layouts do not create self-referential
+/// lifetimes and no callback-time port allocation is required.
+pub struct InstanceRuntime<C>
+where
+    C: Component,
+{
+    component: C,
+    parameters: ParameterStore,
+    active: Option<ActiveRuntime<C::Processor>>,
+}
+
+impl<C> InstanceRuntime<C>
+where
+    C: Component,
+{
+    /// Construct one inactive component instance with validated default base state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InstanceRuntimeError::InvalidParameters`] if the component's
+    /// immutable parameter schema is invalid.
+    pub fn new(component: C) -> Result<Self, InstanceRuntimeError> {
+        let parameters = ParameterStore::new(component.parameter_descriptors())
+            .map_err(InstanceRuntimeError::InvalidParameters)?;
+        Ok(Self {
+            component,
+            parameters,
+            active: None,
+        })
+    }
+
+    /// Return the immutable component definition owned by this instance.
+    #[must_use]
+    pub const fn component(&self) -> &C {
+        &self.component
+    }
+
+    /// Return the durable current base/control parameter values.
+    #[must_use]
+    pub const fn parameters(&self) -> &ParameterStore {
+        &self.parameters
+    }
+
+    /// Mutably access durable base/control values from the owning control context.
+    ///
+    /// Cross-thread adapters must synchronize before entering this single-owner
+    /// semantic store; this method itself does not make the runtime `Sync`.
+    pub fn parameters_mut(&mut self) -> &mut ParameterStore {
+        &mut self.parameters
+    }
+
+    /// Return whether the instance currently owns an active processor.
+    #[must_use]
+    pub const fn is_active(&self) -> bool {
+        self.active.is_some()
+    }
+
+    /// Return the current activation configuration when active.
+    #[must_use]
+    pub fn active_config(&self) -> Option<ActivationConfig<'_>> {
+        self.active.as_ref().map(ActiveRuntime::config)
+    }
+
+    /// Activate this instance after validating and owning its accepted I/O layout.
+    ///
+    /// The component receives the runtime's current base parameter state during
+    /// preparation, so state loaded before activation can affect precomputed DSP
+    /// resources without moving persistent authority into the processor.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ActivateError::AlreadyActive`] if already active,
+    /// [`ActivateError::InvalidAudioIo`] for malformed configuration, or
+    /// [`ActivateError::Product`] when product activation fails.
+    pub fn activate(
+        &mut self,
+        process: ProcessConfig,
+        audio_io: AudioIoConfiguration<'_>,
+    ) -> Result<(), ActivateError<C::ActivationError>> {
+        if self.active.is_some() {
+            return Err(ActivateError::AlreadyActive);
+        }
+        audio_io
+            .validate(self.component.audio_ports())
+            .map_err(ActivateError::InvalidAudioIo)?;
+
+        let audio_ports = audio_io.ports().to_vec();
+        let config = ActivationConfig::new(process, AudioIoConfiguration::new(&audio_ports));
+        let processor = self
+            .component
+            .activate_with_parameters(&config, &self.parameters)
+            .map_err(ActivateError::Product)?;
+        self.active = Some(ActiveRuntime {
+            process,
+            audio_ports,
+            processor,
+        });
+        Ok(())
+    }
+
+    /// Reset transient DSP history while preserving durable base state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InstanceLifecycleError::NotActive`] when inactive.
+    pub fn reset(&mut self) -> Result<(), InstanceLifecycleError> {
+        let active = self.active.as_mut().ok_or(InstanceLifecycleError::NotActive)?;
+        active.processor.reset();
+        Ok(())
+    }
+
+    /// Process one block through the active processor.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InstanceProcessError::NotActive`] when inactive or
+    /// [`InstanceProcessError::InvalidBlock`] before product DSP runs when the
+    /// callback violates the active process/parameter contract.
+    pub fn process<S>(
+        &mut self,
+        frame_count: u32,
+        context: ProcessContext<'_>,
+        buffers: &mut [ChannelBuffer<'_, S>],
+    ) -> Result<(), InstanceProcessError>
+    where
+        C::Processor: Process<S>,
+    {
+        let Self {
+            parameters, active, ..
+        } = self;
+        let active = active.as_mut().ok_or(InstanceProcessError::NotActive)?;
+        let config = active.config();
+        let mut block = ProcessBlock::new(&config, parameters, frame_count, context, buffers)
+            .map_err(InstanceProcessError::InvalidBlock)?;
+        parameters
+            .validate_events(context.parameter_events())
+            .map_err(ProcessBlockError::InvalidParameterEvents)
+            .map_err(InstanceProcessError::InvalidBlock)?;
+        active.processor.process(&mut block);
+        Ok(())
+    }
+
+    /// Deactivate this instance while preserving durable base/control state.
+    ///
+    /// The processor is destroyed in the caller's domain only after the caller
+    /// has ended all process/reset borrows. The owned inactive I/O configuration
+    /// is dropped with the active resources and can be replaced on reactivation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InstanceLifecycleError::NotActive`] when already inactive.
+    pub fn deactivate(&mut self) -> Result<(), InstanceLifecycleError> {
+        let active = self.active.take().ok_or(InstanceLifecycleError::NotActive)?;
+        drop(active.processor);
+        Ok(())
+    }
+
+    /// Build a semantic document containing all durable parameter base values.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParameterStateError`] if document construction fails.
+    pub fn parameter_state_document(
+        &self,
+        product_id: impl Into<String>,
+        product_schema: u32,
+    ) -> Result<StateDocument, ParameterStateError> {
+        self.parameters.state_document(product_id, product_schema)
+    }
+
+    /// Encode all durable parameter base values under explicit state bounds.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParameterStateError`] if semantic document construction or
+    /// encoding fails.
+    pub fn encode_parameter_state(
+        &self,
+        product_id: impl Into<String>,
+        product_schema: u32,
+        limits: StateLimits,
+    ) -> Result<Vec<u8>, ParameterStateError> {
+        self.parameters
+            .encode_state(product_id, product_schema, limits)
+    }
+
+    /// Replace durable parameter state transactionally from a complete document.
+    ///
+    /// A normal instance/project/preset load is a complete replacement. Custom
+    /// non-parameter entries are ignored here for future product-state handling,
+    /// but every framework-managed parameter must be present after migration.
+    /// The current runtime remains unchanged on failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InstanceStateError`] for identity/schema/value errors, unknown
+    /// parameter entries, or an incomplete parameter snapshot.
+    pub fn apply_parameter_state_for_product(
+        &mut self,
+        document: &StateDocument,
+        product_id: &str,
+        product_schema: u32,
+    ) -> Result<(), InstanceStateError> {
+        let descriptors = self.parameters.descriptors().to_vec();
+        let mut candidate = ParameterStore::new(&descriptors)
+            .map_err(InstanceStateError::InvalidParameters)?;
+        candidate
+            .apply_state_for_product(document, product_id, product_schema)
+            .map_err(InstanceStateError::ParameterState)?;
+
+        let actual = document
+            .entries()
+            .iter()
+            .filter(|entry| entry.key().starts_with("parameter/"))
+            .count();
+        let expected = descriptors.len();
+        if actual != expected {
+            return Err(InstanceStateError::IncompleteParameterState { expected, actual });
+        }
+
+        self.parameters = candidate;
+        Ok(())
+    }
+}
+
+/// Temporary activation-local processor shell retained while adapters migrate.
+///
+/// Unlike [`InstanceRuntime`], this type recreates its base store for every
+/// activation. It must therefore be treated as an active projection rather than
+/// the durable instance authority. New format-independent clients should prefer
+/// [`InstanceRuntime`].
 pub struct Activated<'a, P> {
     config: ActivationConfig<'a>,
     processor: P,
@@ -145,13 +526,13 @@ where
         self.config
     }
 
-    /// Return the current base/control parameter values.
+    /// Return the activation-local base parameter projection.
     #[must_use]
     pub const fn parameters(&self) -> &ParameterStore {
         &self.parameters
     }
 
-    /// Mutably access base/control values from the owning control context.
+    /// Mutably access the activation-local base projection.
     pub fn parameters_mut(&mut self) -> &mut ParameterStore {
         &mut self.parameters
     }
@@ -162,10 +543,6 @@ where
     }
 
     /// Process one block after validating dimensions, automation, and context.
-    ///
-    /// Stable endpoint/schema translation is intentionally not rescanned here;
-    /// adapters resolve that mapping outside the realtime hot path. Parameter
-    /// events are validated against the active schema before product DSP runs.
     ///
     /// # Errors
     ///
@@ -196,21 +573,14 @@ where
     }
 
     /// Consume the active lifecycle shell and destroy its processor in the caller's domain.
-    ///
-    /// Adapters must call this only after their backend contract guarantees that
-    /// no process/reset borrow remains in flight. Future runtimes with deferred
-    /// resources/tasks may replace this simple destruction path.
     pub fn deactivate(self) {
         let Self { processor, .. } = self;
         drop(processor);
     }
 }
 
-/// Validate a component's structural I/O schema and create an active processor.
-///
-/// Product-specific whole-I/O policy is not yet modeled beyond the structural
-/// schema rules in [`AudioIoConfiguration::validate`]. That remains an explicit
-/// pre-release freeze gate rather than an implicit boolean convention.
+/// Temporary convenience activation path retained while adapters migrate to
+/// [`InstanceRuntime`].
 ///
 /// # Errors
 ///
@@ -234,7 +604,7 @@ where
         .map_err(ActivateError::InvalidParameters)?;
     let config = ActivationConfig::new(process, audio_io);
     let processor = component
-        .activate(&config)
+        .activate_with_parameters(&config, &parameters)
         .map_err(ActivateError::Product)?;
 
     Ok(Activated {
