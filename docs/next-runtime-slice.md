@@ -1,78 +1,50 @@
-# Next Runtime Slice
+# Runtime / CLAP Execution Plan
 
-This is the implementation order after the scalar CLAP publication hardening on `fix/runtime-state-authority`. It is an execution plan, not a stable API promise.
+This is the current implementation order on `main`. It is an execution plan, not a stable API promise.
 
-## Gate 0 — validate the hardening branch
+## Current checkpoint — implemented, not yet compile-qualified
 
-Before merging or extending the branch:
+The following architecture work is now present in source:
+
+- CLAP scalar publication serializes writers with a generation CAS token;
+- realtime automation endpoint publication is rejected when its observed generation is stale;
+- non-realtime state save obtains one completed coherent scalar generation;
+- CLAP scalar state load requires a complete mapped parameter snapshot;
+- CHSS decoding rejects empty entry keys and preserves `StateDocument` invariants;
+- `InstanceRuntime<P>` owns durable core `ParameterStore` state across activation cycles;
+- the component definition remains outside `InstanceRuntime`, so deployment transfer bounds apply to `Processor`, not `Component`;
+- activation can observe current validated base parameters through `Component::activate_with_parameters`;
+- active runtime owns a copy of negotiated `ConfiguredAudioPort` values allocated outside the callback;
+- core runtime parameter state replacement is complete and transactional at the `InstanceRuntime` boundary;
+- the CLAP audio processor now uses `InstanceRuntime` rather than the activation-local `Activated` shell and synchronizes published host state into the runtime before processor activation.
+
+The CLAP cross-domain atomic parameter publication remains adapter-local. CLAP's audio-processor object exists only while active, so durable cross-activation host-visible state cannot simply live inside the audio-thread `InstanceRuntime`. Do not hide that host lifetime difference by moving the component or a mutex-protected processor into shared state.
+
+No source-level claim above is a validation claim yet.
+
+## Gate 1 — local Rust validation
+
+Run on the development machine before broadening the process API:
 
 ```text
 cargo fmt --all -- --check
-cargo test --workspace
-cargo clippy --workspace --all-features --all-targets -- -D warnings
+cargo test --workspace --locked
+cargo clippy --workspace --all-features --all-targets --locked -- -D warnings
 cargo deny check
 cargo machete
-cargo build --release -p chassis-clap-conformance
+cargo build --release -p chassis-clap-conformance --locked
 ```
 
-Then rebuild/package the `.clap` artifact and rerun native qualification with the newly exported params/state extensions:
+Hosted Actions was tried on `main`, but the job failed before any runner or step started, so it provided no Rust evidence and the temporary workflow was removed.
 
-- `clap-validator` normal suite and bounded fuzzing;
-- parameter enumeration/get/value conversion;
-- parameter automation through process and flush paths;
-- state save/load round trip while inactive;
-- active state save while automation is running;
-- state load racing a later process block;
-- repeated deactivate/reactivate preserving host-visible parameter state;
-- REAPER render/automation/state smoke tests;
-- Bitwig when available because it exercises relevant CLAP/reentrancy behavior.
-
-Do not claim the new scalar state/parameter slice is qualified until that artifact has actually passed these checks.
-
-## Slice 1 — durable `InstanceRuntime` authority
-
-Move persistent instance semantics out of `Activated`.
-
-Required ownership:
-
-```text
-Component definition
-        |
-        v
-InstanceRuntime
-  canonical ParameterStore
-  persistent state generation
-  inactive accepted I/O configuration
-  lifecycle generation
-        |
-        +---- control/state APIs
-        |
-        v
-Active runtime
-  Processor
-  owned activation config/resources
-  derived realtime base projection
-```
-
-Acceptance criteria:
-
-- canonical parameter values survive deactivate/reactivate without an adapter becoming a second semantic authority;
-- state loaded before activation is visible to processor activation/preparation;
-- `Activated`/its successor cannot be mistaken for the durable state owner;
-- a full state load publishes one complete accepted generation;
-- failed decode/migration/validation leaves the canonical generation unchanged;
-- stale realtime/asynchronous completion cannot overwrite a newer control/state generation;
-- audio-thread synchronization remains bounded and nonblocking;
-- large replacement/reclamation work cannot migrate onto the audio thread accidentally.
-
-Keep the current CLAP atomic bridge adapter-local while this ownership shape is implemented. If a generic atomic publication primitive is proposed for `chassis-core`, model its concurrent writer/reader behavior before promotion.
+Fix every compile/test/lint failure without weakening the ownership or realtime contracts. Once this gate is green, update the owning design documents from "implemented, unqualified" to the exact validated state.
 
 ## Slice 2 — dense runtime parameter identity
 
 Resolve stable keys once during schema/runtime setup:
 
 ```text
-ParameterKey (persistent) -> ParameterIndex (runtime dense)
+ParameterKey (persistent) -> ParameterIndex (schema-local dense)
 ```
 
 Use `ParameterIndex` in normalized process events, schema validation, and trajectory cursors.
@@ -80,58 +52,88 @@ Use `ParameterIndex` in normalized process events, schema validation, and trajec
 Acceptance criteria:
 
 - stable keys remain the only persistence/authoring identity;
-- runtime indices are deterministic only within one validated schema/runtime instance and are never serialized;
-- adapters resolve backend IDs -> runtime indices outside the hot path;
+- runtime indices are never serialized and have meaning only relative to one validated schema;
+- adapters resolve backend IDs to runtime indices outside the hot path;
 - process validation no longer binary-searches string keys for every event;
-- per-parameter trajectory evaluation does not repeatedly scan unrelated events when a bounded indexed representation can avoid it;
-- no callback-time allocation is introduced.
+- trajectory cursors compare dense indices rather than strings;
+- no callback-time allocation is introduced;
+- measure whether a second per-parameter event index is justified before adding one. Dense IDs alone are the first step; do not add elaborate indexing until event-count evidence warrants it.
 
-Benchmark the old and new event/cursor paths before adding more elaborate indexing structures.
+## Slice 3 — publication/generation generalization
 
-## Slice 3 — complete state and migrations in core
+The current CLAP scalar bridge is implementation evidence, not yet generic framework infrastructure.
 
-Replace the old patch-like `ParameterStore::apply_state_for_product` prototype as part of the runtime authority transition.
+Before extracting a shared core primitive:
 
-Required semantics:
+- model concurrent writer acquisition, coherent snapshots, stale-generation rejection, and ordering with Loom or equivalent;
+- define wraparound assumptions or remove dependence on them;
+- prove realtime paths never spin/wait on control writers;
+- define reclamation before supporting values that cannot fit directly in atomics;
+- preserve typed choice/string semantics rather than forcing every parameter through `f64` merely because CLAP scalar values do;
+- decide which state belongs to a deployment-independent core publication primitive and which remains format translation.
+
+The desired authority model is semantic, not necessarily one physical object shared by every host thread. A deployment may use synchronized projections when its lifecycle requires them, but there must still be one defined publication order and no independently mutable semantic copies.
+
+## Slice 4 — complete state + migrations
+
+`InstanceRuntime::apply_parameter_state_for_product` now provides complete transactional parameter replacement, while the lower-level `ParameterStore::apply_state_for_product` remains a patch-like semantic helper.
+
+Next state work:
 
 ```text
 bytes
  -> bounded decode
  -> product migration chain
- -> materialize complete current state
- -> validate all domains
+ -> materialize complete current semantic state
+ -> validate all parameter/custom domains
  -> publish one generation
 ```
 
 Acceptance criteria:
 
-- missing current parameters/required fields fail unless a migration explicitly supplies them;
-- custom state and parameter state publish together as one semantic generation when product custom fields land;
-- one fixture exists for an older schema migration;
-- corrupted/oversized/unknown/wrong-product state never partially mutates the instance;
-- deterministic golden fixtures cover the eventual v1 wire format before it freezes.
+- add an adjacent-version migration fixture;
+- failed migration/validation leaves current state unchanged;
+- parameter + future custom product fields publish as one generation;
+- keep deterministic golden fixtures for every released schema;
+- fuzz corruption/truncation/exhaustion;
+- make partial parameter patches a separately named operation if a real client needs them.
 
-Partial parameter patches, if needed, are a separate API and never implicit plugin-state behavior.
+Do not freeze CHSS v1 until migration and cross-format fixtures exist.
 
-## Slice 4 — owned negotiated I/O + sidechain/multibus
+## Slice 5 — general CLAP I/O
 
-Before general CLAP I/O support, remove the lifetime trap where a dynamic active configuration would have to borrow adapter-owned storage for the full active lifetime.
+The lifetime/ownership prerequisite is now in place: active runtime owns its negotiated configuration. Use that to broaden the adapter instead of adding callback-time owned vectors.
 
-Acceptance criteria:
+Order:
 
-- instance/active runtime owns accepted dynamic I/O configuration allocated while inactive;
-- product activation receives a borrowed view of runtime-owned configuration;
-- stable ports resolve to setup-time dense endpoints;
-- default stereo + optional stereo sidechain works through the general mechanism;
-- arbitrary multibus mapping does not allocate a `Vec<ChannelBuffer>` in every callback;
-- exact alias/disjoint/input-only/output-only safety remains explicit;
-- negative-space tests cover missing/disabled/asymmetric/unsupported layouts.
+1. default stereo main + optional stereo sidechain through the general mapping;
+2. arbitrary declared input/output ports and layouts;
+3. setup-time dense endpoint mapping;
+4. negative-space tests for disabled/missing/asymmetric/unsupported layouts;
+5. decide from adapter evidence whether the flat `ChannelBuffer` slice remains the right product-facing borrow shape.
 
-Use this adapter evidence to decide whether the current flat `ChannelBuffer` slice remains the right core borrowing shape.
+Required invariant: no `Vec<ChannelBuffer>` allocation in the process callback.
 
-## Slice 5 — CLAP capability expansion
+## Slice 6 — native CLAP qualification
 
-After the runtime/state/I/O contracts above are validated:
+Once the Rust gate is green and dense parameter identity/general I/O changes are coherent, rebuild/package the conformance `.clap` and qualify the *current* artifact:
+
+- `clap-validator` normal suite and bounded fuzzing;
+- parameter enumeration/get/value conversion;
+- parameter automation through process and flush paths;
+- state save/load round trip while inactive;
+- active state save while automation is running;
+- state load followed by processing;
+- repeated deactivate/reactivate preserving host-visible state;
+- lifecycle/repeated-instance stress;
+- REAPER render, automation, save/load and reopen smoke tests;
+- Bitwig when available because it exercises relevant CLAP/reentrancy behavior.
+
+Do not treat the older 19-pass validator artifact as evidence for the current parameter/state/runtime slice.
+
+## Slice 7 — CLAP capability expansion
+
+After current native semantics qualify:
 
 1. f64 advertisement/dispatch;
 2. render/offline mode;
@@ -140,22 +142,14 @@ After the runtime/state/I/O contracts above are validated:
 5. note/MIDI/event ports;
 6. latency/tail/status metadata as required by real clients.
 
-Each capability adds conformance and real-host evidence rather than relying on source-level support alone.
+Each capability needs conformance plus native-host evidence rather than source support alone.
 
-## Slice 6 — first real FX client
+## Slice 8 — first real FX client
 
-Once native CLAP semantics are stable enough, use a real effect to decide what becomes framework convenience rather than extending the conformance component speculatively.
+Use a real effect before growing generic conveniences much further. It should exercise many parameters, state, latency/offline behavior, explicit smoothing policy, and meter/telemetry publication without sharing mutable processor state.
 
-A first client should exercise:
-
-- many parameter updates and persistent state;
-- latency/offline behavior;
-- custom editor lifecycle later;
-- meters/telemetry without making the processor shared;
-- parameter smoothing as explicit product policy.
-
-Only repeated product needs graduate into Chassis helpers.
+Only repeated product needs graduate into framework helpers.
 
 ## After native CLAP
 
-Proceed to VST3/AU projection and editor integration only after the same conformance product has qualified native CLAP state, automation, lifecycle, and general I/O semantics. Cross-format differential tests then become the compatibility gate.
+Proceed to VST3/AU projection and editor integration after the same conformance product has qualified CLAP state, automation, lifecycle, and general I/O. Cross-format differential tests then become the compatibility gate.
