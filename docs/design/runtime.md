@@ -1,195 +1,206 @@
 # Runtime Ownership Model
 
-Status: first explicit lifecycle slice implemented; adapter-local cross-domain parameter publication is now hardened, but the persistent instance authority remains the next core runtime slice. Public API is still pre-alpha and not frozen.
+Status: durable single-owner `InstanceRuntime` and owned activation I/O are implemented in core and the CLAP audio path now activates through that runtime. The current source has not yet passed the post-refactor local Rust gate, and CLAP cross-domain scalar publication remains an adapter-local provisional mechanism. Public API is pre-alpha and not frozen.
 
 ## Goal
 
 Make ownership, mutation authority, replacement, and teardown difficult to get wrong while keeping ordinary plugin authors focused on product DSP.
 
-The framework may have several thread/capability domains, but each mutable guarantee has one owner.
+The framework may have several thread/capability domains, but each mutable semantic guarantee has one defined authority/publication order.
 
 ## Runtime roles
 
 ```text
 Component definition
   immutable schema/metadata/capabilities/factories
+  borrowed only while preparing activation
 
-InstanceRuntime (next framework-owned authority)
-  lifecycle state machine
-  canonical parameter/control state
-  accepted inactive I/O configuration
-  state generation/publication
-  host-facing capability/notification coordination
+InstanceRuntime<P>
+  durable ParameterStore for one core instance
+  active/inactive lifecycle
+  owned accepted active I/O configuration
+  optional active Processor
 
-Active runtime / Processor
-  activation-local realtime projection of accepted control state
+Processor
   exclusive mutable realtime DSP/runtime history while active
   activation-time resources/scratch
 
 Process<S>
   sample-representation-specific process capability over borrowed ProcessBlock<S>
 
-MainThread / Shared / Editor
-  optional non-RT product capabilities/projections added only when required
+Deployment publication bridge
+  only where a host requires cross-domain lifetime/synchronization
+  projects host/control state into InstanceRuntime before/during activation
 ```
 
-The names are less important than the authority split. A simple effect should require neither custom `MainThread` nor `Shared` product state.
-
-## Implemented explicit slice
-
-`chassis-core::runtime` now provides the first executable manual API:
-
-- `Component` is the immutable product definition/factory;
-- `Component::audio_ports()` defaults to the standard effect schema and can be overridden;
-- `Component::activate()` creates one realtime `Processor` after structural I/O validation;
-- `Processor` owns reset/lifecycle semantics;
-- `Process<S>` is a separate capability for processing one sample representation;
-- `Activated<P>` holds immutable activation configuration, an activation-local validated `ParameterStore`, and the exclusively owned processor;
-- `Activated::process()` validates context, activation event bounds, and callback-varying frame dimensions, then validates borrowed parameter events against the active schema before calling product DSP with a borrowed `ProcessBlock`;
-- `Activated::deactivate(self)` consumes the active shell so processor destruction happens only after the caller has ended process/reset borrows.
-
-This split is deliberate. `Processor` is not parameterized by `f32`: a future processor can implement both `Process<f32>` and `Process<f64>` without duplicating lifecycle/DSP ownership.
-
-The format-independent `Processor` trait also does not globally require `Send`. Same-thread embedded deployment is a valid Chassis use case, and safe Rust already prevents a non-`Send` `Activated<P>` from being moved through ordinary thread-transfer APIs. A deployment boundary whose lifecycle actually transfers processor ownership across threads—CLAP is expected to be one—must require `P: Send` there. Exclusive processing does not imply `Sync`.
-
-The current conformance processor is deliberately `Send` and has a compile-time assertion for that property so it remains suitable for the first plugin-adapter proof without making plugin threading a universal core restriction.
-
-The current `Activated` type is **not** the durable instance authority. Its parameter store is created at activation and destroyed with the active shell, so it must be treated as a validated realtime/control projection for the current proof rather than the canonical state that survives deactivate/reactivate. The CLAP scalar slice currently keeps a provisional synchronized projection outside core to preserve host-visible values across activations. The next core slice replaces that accidental ownership split with `InstanceRuntime`.
+A simple embedded/standalone effect can retain one `InstanceRuntime<P>` directly across activation cycles. A plugin format whose host object lifetimes split durable control state from the active audio object may require a synchronized publication layer; that layer must remain a projection with a defined publication order rather than an unrelated semantic authority.
 
 ## Component definition
 
-`Component` is not the live mutable plugin instance. It describes/provides stable product schema and creates runtime parts.
+`Component` is not the live mutable plugin instance. It describes/provides stable product schema and creates processors.
 
-The current explicit slice consumes audio-port schema, typed parameter schema, process context, and processor activation. Product identity, state publication, host event translation, editor factories, and richer I/O policy remain separate design contracts to add as executable requirements reach this layer.
+`Component::activate()` remains the simplest activation hook. `Component::activate_with_parameters()` additionally receives the runtime's current validated `ParameterStore` and defaults to `activate()`. This lets state loaded before activation influence preparation without moving persistent state ownership into `Processor`.
 
-Compatibility metadata should normally come from Chassis/Cargo metadata + the frozen identity manifest rather than duplicated associated constants.
+The component definition itself is deliberately **not** stored inside `InstanceRuntime<P>`. A deployment such as CLAP may move the active runtime/processor across threads while keeping the component definition on its main/control thread. The deployment therefore needs `P: Send` only when its lifecycle actually transfers `P`; it does not accidentally require `Component: Send`.
 
-## Activation and I/O
+## Instance runtime
 
-Framework activation currently performs structural `AudioIoConfiguration` validation before product activation. That catches duplicate/unknown/missing stable ports and prevents malformed configuration from reaching product construction.
+`InstanceRuntime<P>` now owns:
 
-The default `Component::audio_ports()` uses the standard effect descriptors, but **whole-layout policy is not frozen yet**. In particular, the current structural validator does not by itself mean that every layout representable by `ChannelLayout` is valid for every effect. A dedicated semantic I/O-policy layer remains an API-freeze gate.
+- the validated immutable parameter schema and durable base/control values through `ParameterStore`;
+- whether a processor is active;
+- the active process resource bounds;
+- an owned copy of the accepted `ConfiguredAudioPort` values;
+- the active processor while one exists.
 
-Activation establishes the resource bounds needed by realtime processing:
+Construction validates the parameter schema once. Activation borrows a compatible `Component<Processor = P>`, verifies that its parameter schema still matches the runtime schema, structurally validates proposed I/O, copies the accepted port configuration while non-realtime, and constructs the processor from the current base state.
+
+Deactivation destroys only active processor/resources. The runtime's parameter state remains alive for a later activation.
+
+The older `Activated<'a, P>` and free `activate()` path remain temporarily so existing code can migrate. They are explicitly activation-local and must not be treated as persistent state authority. The CLAP production path has moved to `InstanceRuntime`.
+
+## Activation and I/O ownership
+
+Activation establishes:
 
 - sample rate;
 - optional guaranteed positive minimum block size;
 - non-zero maximum block size;
+- maximum normalized parameter event count;
 - accepted audio I/O configuration;
 - product-owned precomputation/resources.
 
-Per-call scheduling mode is not activation state because VST3 can change realtime/prefetch mode without reactivation.
+`InstanceRuntime` copies accepted `ConfiguredAudioPort` values into active storage before processor construction. `ActivationConfig` is then only a borrowed view over runtime-owned storage.
 
-The fixed-stereo CLAP proof can retain the current `'static` default configuration. Before general sidechain/multibus negotiation lands, the accepted dynamic configuration must become runtime-owned rather than requiring `Activated<'a, P>` to borrow adapter-owned configuration storage for its entire lifetime. Setup-time ownership/allocation is acceptable; callback-time allocation is not.
+This removes the dynamic-I/O lifetime trap where an active runtime would otherwise have to borrow adapter-owned `Vec<ConfiguredAudioPort>` storage for its entire lifetime. Setup-time allocation is allowed; callback-time port-vector allocation is not.
 
-Processor activation must also eventually observe the accepted current parameter/state generation when activation-time preparation depends on control values. Recreating a processor from parameter defaults after a state load is not an acceptable production contract.
+Whole-layout policy is still not frozen. `AudioIoConfiguration::validate` proves structural facts such as known/unique/required ports, not whether every representable layout is semantically supported by a particular product.
 
 ## Processor ownership
 
-While active, `Processor` is exclusively owned by the processing domain. It owns mutable DSP history such as filters, delay lines, envelopes, oscillators, lookahead buffers, and preallocated scratch.
+While active, `Processor` is exclusively owned by the processing domain. It owns transient mutable DSP history such as filters, delay lines, envelopes, oscillators, lookahead buffers, and preallocated scratch.
 
 Editor/state/control code never receives unrestricted mutable access to it.
 
-Thread-transfer capability is deployment-specific: an adapter that moves active processor ownership from its activation/control domain to another processing thread must require `Send` and prove its host lifecycle makes that transfer exclusive. Chassis core should not require `Send` merely for same-thread embedded or specialized runtimes that do not cross that boundary.
+`reset` preserves durable/control state while resetting transient DSP history. Stateless processors may use the default no-op implementation.
 
-`reset` preserves persistent/control state while resetting transient DSP history. Stateless processors may use the current default no-op implementation.
-
-`process` receives only borrowed realtime-safe audio and process-context views through `ProcessBlock<S>`.
+A processor may inspect current base parameter state through `ProcessBlock::parameters()`. Products that derive realtime-safe resources from changing base values must keep those resources coherent with process-time changes. Heavy background preparation/replacement requires a later explicit generation/reclamation capability; `activate_with_parameters()` does not imply that active state changes automatically rebuild arbitrary processor internals.
 
 ## Process block ownership
 
-`ProcessBlock` borrows safe `ChannelBuffer<S>` views and carries actual frame count plus `ProcessContext`.
+`ProcessBlock` borrows safe `ChannelBuffer<S>` views, the current base `ParameterStore`, and `ProcessContext`.
 
 Its constructor is framework-private. Product code can inspect/process the borrowed block but cannot manufacture a fake framework block directly.
 
-`ProcessContext` carries the per-call mode, optional block-start transport snapshot,
-and a borrowed `ParameterEvents` view. Event slices are bounded and sample-sorted;
-`Activated::process()` validates context/bounds and dimensions before checking
-event values against the active schema. A float cursor evaluates linear
-trajectories lazily without per-sample materialization.
-
-Per-call construction validates only facts that can change per callback without introducing hidden unbounded work:
+Per-call validation covers facts that can change each callback:
 
 - callback frame count against activation min/max guarantees;
-- event context was validated for the same callback frame count;
-- every supplied safe channel slice has exactly that callback length.
+- event context frame count;
+- activation-owned event count bound;
+- every supplied channel slice length;
+- parameter event values against the current schema.
 
-Stable endpoint/port translation should be resolved by runtime/adapter setup, not by rescanning all semantic endpoints with allocation or quadratic work in every audio callback.
+Stable endpoint/port translation should be resolved during setup, not by rescanning semantic endpoints with allocation or unbounded work each callback.
 
-The current event prototype carries stable string keys because it proves semantics directly. Before the parameter/process API freezes or high-count automation is promoted, schema setup should resolve stable `ParameterKey` values to dense runtime `ParameterIndex` values. Persistent state and authoring continue to use stable keys; realtime event matching/cursors use the dense index and do not repeatedly compare strings or scan schema mappings.
+The current parameter event prototype still carries stable string keys. Before the process API freezes or high-count automation is promoted, schema/runtime setup should resolve `ParameterKey` values to dense `ParameterIndex` values. Persistent state/authoring continue to use stable keys; realtime matching/cursors use dense indices.
 
-## Instance runtime authority — next core slice
+## State replacement
 
-`InstanceRuntime` becomes the durable owner for state that must stay coherent across host/control/process domains:
+`InstanceRuntime::apply_parameter_state_for_product()` is the current full-state runtime boundary.
 
-- lifecycle phase/generation;
-- canonical base parameter values that survive deactivate/reactivate;
-- accepted inactive I/O configuration;
-- persistent-state publication/replacement generation;
-- host bridge capabilities and legal notification scheduling;
-- ownership of framework communication resources associated with the instance.
+It:
 
-The active processor receives a derived realtime projection of the accepted generation. That projection is not independently authoritative. Realtime automation may publish its resulting base endpoint back toward the instance authority, but that publication is conditional on the generation from which it was derived. If a newer control edit or state replacement has already published, stale realtime completion is discarded rather than overwriting newer state.
+1. rebuilds a temporary candidate from validated schema defaults;
+2. validates product identity/schema and every supplied parameter entry;
+3. rejects unknown parameters;
+4. requires exactly one entry for every framework-managed current parameter;
+5. swaps the candidate into the runtime only after all validation succeeds.
 
-A full state replacement is prepared and validated off the audio thread, then published as one generation. After migration to the current product schema, a full state document must materialize every framework-managed parameter/current persistent field. Missing fields require an explicit migration/default rule or cause rejection; partial parameter patches are a distinct operation and are not implicit plugin-state semantics.
+Failure leaves the current runtime state unchanged. The lower-level `ParameterStore::apply_state_for_product()` remains patch-like and should be treated as a semantic helper rather than the final plugin/project state-load contract.
 
-The current CLAP scalar projection implements this precedence locally: serialized writers prevent mixed snapshots, coherent state save waits for a completed generation off the audio thread, and stale realtime endpoint publication cannot overwrite a newer control/state generation. That mechanism remains adapter-local evidence, not shared core infrastructure. Before a subtle atomic publication primitive is generalized into `chassis-core`, model/property-test its ordering and progress behavior (for example with Loom).
+Future migration handling belongs before the complete-current-state check:
 
-Do not create independent mutable semantic authorities in `MainThread`, editor bindings, `Shared`, and `Processor`. The concrete storage/synchronization strategy must fit each deployment; `InstanceRuntime` does **not** imply one giant mutex/object shared across threads.
+```text
+bytes
+ -> bounded decode
+ -> migrate semantic product schema
+ -> materialize complete current state
+ -> validate
+ -> publish
+```
+
+## CLAP host lifetime
+
+CLAP separates durable shared/main-thread objects from the audio-processor object that exists only while activated. Therefore storing the only durable state inside the CLAP audio processor would lose it on deactivate and recreate the original bug.
+
+The current CLAP scalar bridge instead keeps a synchronized adapter-local publication object across those host domains. On each activation:
+
+1. create an `InstanceRuntime<P>` from the component schema;
+2. synchronize the durable published CLAP scalar state into the runtime;
+3. construct the processor through `InstanceRuntime::activate()` so preloaded state is visible to preparation;
+4. keep the runtime as the semantic audio-domain projection while active.
+
+During processing, host/control publication is synchronized into the runtime at bounded block boundaries. Automation endpoints publish back only if the generation they were derived from is still current.
+
+This bridge is deliberately not yet generalized into core. The current scalar implementation is useful evidence, but a deployment-independent publication primitive must handle typed parameter semantics, progress, ordering, and reclamation rather than simply standardizing the first CLAP `f64` representation.
+
+## Cross-domain generation requirements
+
+Any generalized publication mechanism must preserve these rules:
+
+1. control edits and accepted state replacements have a total publication order;
+2. an active process block observes one coherent base generation at its synchronization boundary;
+3. sample-accurate automation derives from that base plus host events;
+4. the resulting automation endpoint may publish only if the observed generation is still current;
+5. stale realtime/asynchronous completion never overwrites newer state;
+6. state save observes one completed generation and never serializes arbitrary live `Processor` fields;
+7. the audio thread never spins or waits for a control writer;
+8. replaced nontrivial resources are not accidentally reclaimed on the audio thread.
+
+The current CLAP scalar bridge implements writer serialization, coherent snapshots, and stale-generation rejection locally. Before promoting a subtle atomic primitive into `chassis-core`, model/property-test its ordering and progress behavior (for example with Loom).
 
 ## Deactivation and destruction
 
 At deactivation:
 
-- no new process/reset borrow may exist;
-- in-flight callback ownership must have ended according to the backend contract;
-- processor-owned resources may be destroyed only in a domain where their destructors are legal;
-- canonical parameter/state authority remains alive at the instance level;
-- I/O can then be reconfigured for a future activation.
+- no process/reset borrow may remain in flight according to the backend contract;
+- processor-owned resources are destroyed only in a legal domain;
+- durable base/control state remains alive at the instance or deployment-publication level;
+- active I/O storage is released and can be replaced by the next activation.
 
-The current `Activated::deactivate(self)` is the smallest executable processor-ownership proof. Plugin/module unload becomes stricter once background tasks, native callbacks, timers, editor resources, or deferred reclamation exist.
-
-Teardown should be idempotent at adapter boundaries where hosts may produce repeated/partial cleanup sequences.
-
-## Parameters / state generations
-
-Framework instance state is authoritative; process automation/effective values are derived block views.
-
-Required generation rules for the next runtime slice:
-
-1. a control edit or accepted state replacement publishes a new canonical generation;
-2. an active process block observes a coherent base generation at its defined synchronization boundary;
-3. sample-accurate automation is evaluated from that base plus host events;
-4. the resulting automation endpoint may update canonical base state only if it is still derived from the current generation;
-5. stale asynchronous/realtime completion never overwrites a newer generation;
-6. a state save observes one completed canonical generation and never serializes arbitrary live `Processor` fields.
-
-No audio-thread operation may wait for a control writer. If publication is temporarily unavailable or loses a generation race, the realtime path continues and a newer control/state generation wins.
+Plugin/module unload becomes stricter once background tasks, native callbacks, timers, editors, or deferred reclamation exist.
 
 ## Background work / shared state / editor
 
-These remain outside the base runtime until a real requirement proves them.
+These remain outside the base runtime until real clients prove them.
 
 When added:
 
-- `Shared` is a projection/capability, not general shared mutability;
-- background tasks are tied to instance/module generations and teardown;
-- cancellation does not substitute for joining/fencing stale completion;
+- shared/editor state exposes explicit projections/capabilities, not general mutable processor access;
+- background work is tied to instance/module generations and fenced at teardown;
+- cancellation does not substitute for preventing stale completion;
 - large replaced objects are reclaimed off the audio thread;
-- no hidden process-global executor exists until dylib unload/shutdown lifetime is designed;
-- editor callbacks/subscriptions are invalidated by one owner and never obtain `&mut Processor`.
+- no hidden process-global executor exists without a dylib unload/shutdown contract.
 
 ## Failure rules
 
 - malformed structural I/O fails before product activation;
-- product activation errors are distinguished from framework validation errors;
-- callback frame violations fail before product DSP runs;
-- partial initialization cleans up only resources that were successfully acquired;
-- impossible validated internal state is a framework bug;
-- no panic may unwind through a future FFI boundary.
+- mismatched component/runtime parameter schema fails before product activation;
+- product activation errors are distinct from framework validation errors;
+- callback dimension/event violations fail before product DSP runs;
+- state failure is transactional;
+- no panic may unwind through a format FFI boundary.
 
 ## Validation status
 
-`crates/chassis-core/tests/conformance.rs` exercises the explicit API externally with deterministic processing, separate buffers, exact in-place buffers, reset/deactivation ownership, malformed activation, callback-size rejection, zero-frame behavior where no positive minimum is promised, sample-accurate parameter set/linear trajectories, invalid event rejection before DSP, transport context, and a compile-time `Send` assertion for the future plugin path.
+New external `instance_runtime` conformance tests cover:
 
-The current CLAP scalar bridge additionally has adapter-level regression coverage for generation-checked realtime publication and complete parameter-state replacement. This is still pre-alpha evidence. It does not replace model testing for a future shared atomic primitive, native CLAP requalification of the updated artifact, broader host behavior, allocation instrumentation, or production readiness.
+- durable base parameters across deactivate/reactivate;
+- activation observing current base state;
+- owned dynamic audio configuration outliving caller storage;
+- complete transactional state replacement;
+- processing from durable base state.
+
+The CLAP adapter has been migrated to activate through `InstanceRuntime` and synchronize host-published state before processor creation.
+
+These changes are **implemented but not yet compile-qualified** in the current checkpoint. A temporary GitHub Actions workflow was attempted, but the job failed before a runner or any step started and therefore provided no Rust evidence. The next gate is local `fmt`/workspace tests/Clippy/deny/machete/release conformance build, followed by dense parameter-index work and then native CLAP qualification.
