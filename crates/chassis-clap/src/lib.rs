@@ -21,7 +21,7 @@ use chassis_core::{
     buffer::{ChannelBuffer, InputEndpoint, OutputEndpoint},
     parameters::ParameterStore,
     process::{ProcessConfig, ProcessContext, ProcessMode, TransportSnapshot},
-    runtime::{Activated, Component, Process as ChassisProcess, Processor, activate},
+    runtime::{Component, InstanceRuntime, Process as ChassisProcess, Processor},
     state::{StateDocument, StateLimits},
 };
 use clack_extensions::{
@@ -96,7 +96,12 @@ pub struct ChassisPlugin<C>(PhantomData<fn() -> C>);
 /// Single-plugin CLAP entry type for a Chassis stereo effect.
 pub type SingleComponentEntry<C> = SinglePluginEntry<ChassisPlugin<C>>;
 
-/// Thread-safe scalar parameter projection shared by CLAP domains.
+/// Thread-safe scalar parameter publication shared by CLAP domains.
+///
+/// This remains an adapter-local cross-domain bridge while the equivalent
+/// general framework publication primitive is model-tested. The audio-domain
+/// [`InstanceRuntime`] is rebuilt from this durable publication before every
+/// activation and remains the semantic runtime projection while active.
 pub struct ChassisShared {
     parameters: Arc<ClapParameterState>,
 }
@@ -109,9 +114,12 @@ pub struct ChassisMainThread<C> {
     shared: Arc<ClapParameterState>,
 }
 
-/// CLAP audio-thread wrapper around an activated Chassis processor.
-pub struct ChassisAudioProcessor<'a, P> {
-    active: Activated<'static, P>,
+/// CLAP audio-thread wrapper around an activated Chassis instance runtime.
+pub struct ChassisAudioProcessor<'a, P>
+where
+    P: Processor,
+{
+    runtime: InstanceRuntime<P>,
     shared: &'a ChassisShared,
     normalized_events: Vec<chassis_core::automation::ParameterEvent<'a>>,
     control_values: Vec<f64>,
@@ -338,12 +346,8 @@ where
             ));
         }
         let process = map_process_config(audio_config, C::CLAP_MAX_PARAMETER_EVENTS)?;
-        let active = activate(
-            &main_thread.component,
-            process,
-            DEFAULT_EFFECT_CONFIGURATION,
-        )
-        .map_err(|_| PluginError::Message("Chassis component activation failed"))?;
+        let runtime = InstanceRuntime::for_component(&main_thread.component)
+            .map_err(|_| PluginError::Message("Invalid Chassis instance runtime"))?;
 
         let maximum_events = usize::try_from(C::CLAP_MAX_PARAMETER_EVENTS)
             .map_err(|_| PluginError::Message("CLAP parameter event bound is not representable"))?;
@@ -358,13 +362,21 @@ where
         control_values.resize(shared.parameters.bindings().len(), 0.0);
 
         let mut processor = Self {
-            active,
+            runtime,
             shared,
             normalized_events,
             control_values,
         };
         processor.shared.parameters.request_sync();
         processor.sync_parameters()?;
+        processor
+            .runtime
+            .activate(
+                &main_thread.component,
+                process,
+                DEFAULT_EFFECT_CONFIGURATION,
+            )
+            .map_err(|_| PluginError::Message("Chassis component activation failed"))?;
         Ok(processor)
     }
 
@@ -423,7 +435,7 @@ where
         ];
 
         let context = ProcessContext::new(ProcessMode::Realtime, transport, parameter_events);
-        self.active
+        self.runtime
             .process(frame_count, context, &mut buffers)
             .map_err(|_| PluginError::Message("Invalid Chassis process block"))?;
         self.shared
@@ -435,12 +447,12 @@ where
         Ok(ProcessStatus::Continue)
     }
 
-    fn deactivate(self, _main_thread: &ChassisMainThread<C>) {
-        self.active.deactivate();
+    fn deactivate(mut self, _main_thread: &ChassisMainThread<C>) {
+        let _ = self.runtime.deactivate();
     }
 
     fn reset(&mut self) {
-        self.active.reset();
+        let _ = self.runtime.reset();
     }
 }
 
@@ -460,7 +472,7 @@ where
     fn sync_parameters(&mut self) -> Result<(), PluginError> {
         self.shared
             .parameters
-            .sync_into(self.active.parameters_mut(), &mut self.control_values)
+            .sync_into(self.runtime.parameters_mut(), &mut self.control_values)
             .map_err(sync_error)
     }
 }
