@@ -1,249 +1,173 @@
 # Parameters, Automation, and State
 
-Status: schema/store and borrowed process-automation prototype implemented; the CLAP scalar bridge now has generation-checked publication and complete state replacement, while the durable `InstanceRuntime` authority remains to implement. Public API and persistence wire format are not frozen.
+Status: typed parameter schema/store, borrowed process automation, durable core `InstanceRuntime` parameter ownership, complete runtime parameter-state replacement, and generation-checked CLAP scalar publication are implemented in source. The post-refactor Rust gate and current native CLAP qualification are still pending. Public API and persistence wire format are not frozen.
 
-## Goal
+## Identity and schema
 
-Most products should declare controls and persistent fields rather than implement host plumbing. Chassis must preserve sample-accurate automation/modulation while keeping one clear authority for persistent/base state.
+Persistent parameter identity is a stable human-readable `ParameterKey`. Rust names, declaration order, display labels, backend IDs, and future runtime indices are not persistence identity.
 
-## Immutable schema
+Supported semantic types are float, integer, boolean, and choice. Choice options also have stable identities.
 
-A component's parameter schema is immutable for the lifetime of an instantiated component unless a future explicit dynamic-parameter capability is added.
+Backend numeric IDs are format projections of canonical keys. Compatibility mappings must be deterministic/frozen before stable release.
 
-Each parameter has a stable human-readable key such as:
-
-```text
-input.gain
-compressor.threshold
-band.low.frequency
-output.ceiling
-```
-
-Rust field names, declaration order, display names, and backend IDs are not persistent identity.
-
-The conventional types are float, integer, boolean, and enum/choice. Enum variants also need stable identities; reordering Rust variants must not reinterpret presets.
-
-Backend numeric IDs are deterministic derived projections of canonical keys. Their mapping algorithm and collision behavior must be frozen and covered by golden fixtures before a stable adapter release. Explicit legacy/backend overrides remain an escape hatch.
-
-A separate dense runtime index is also appropriate once the process API graduates beyond the semantic prototype:
+The next process-path change is a dense schema-local identity:
 
 ```text
-stable ParameterKey -> validated schema-local ParameterIndex -> realtime event/process view
+ParameterKey (persistent) -> ParameterIndex (runtime only)
 ```
 
-The dense index is never persistent identity. It exists to remove repeated string/schema lookup from bounded realtime event handling and cursor evaluation.
+`ParameterIndex` is never serialized. Setup resolves keys/backend IDs once; realtime event validation and trajectory matching should use the dense value instead of repeated string lookup.
 
 ## Plain values
 
-Product semantics use meaningful plain values. Host-normalized values are adapter representations.
+Product semantics use meaningful plain values. Host-normalized values remain adapter representations.
 
-Common mappings may include linear, logarithmic/exponential, skew/power, stepped/discrete, and explicit custom monotonic mappings. Mapping code must have property tests for bounds, monotonicity, finite values, and useful round trips.
+Mappings such as linear, logarithmic, skewed, stepped, or custom monotonic mappings need explicit bounds/round-trip/property tests. Formatting/parsing/unit metadata should be reusable across host and editor surfaces.
 
-Formatting/parsing/unit metadata is shared by host UI, generic editors, and product bindings where target APIs support it.
+## Base-state ownership
 
-## One base-state authority
+`InstanceRuntime<P>` now owns the durable `ParameterStore` for a directly retained core instance. Its base values survive processor deactivate/reactivate cycles because the processor is only an optional active child.
 
-Chassis owns one framework `ParameterStore`-like authority per instance for the **current base/control values**.
+`Component::activate_with_parameters()` receives the current validated base values during processor preparation. The component definition itself stays outside the runtime so a deployment that transfers the active processor does not accidentally require `Component: Send`.
 
-Product `MainThread`, editor bindings, state serialization, and `Processor` do not maintain independently mutable semantic copies of those values.
+The older `Activated<P>` path remains temporarily for compatibility and is activation-local. New core clients and the CLAP audio path use `InstanceRuntime`.
 
-The current core `Activated` shell owns an activation-local `ParameterStore`; because that store is recreated/destroyed with activation, it is not sufficient as the durable instance authority. The current CLAP scalar adapter therefore has a provisional synchronized parameter projection that preserves host-visible values across activation. That bridge is useful implementation evidence, but the next `InstanceRuntime` slice must make the durable framework authority explicit and reduce adapter/shared state to a projection of it.
+A plugin host can impose lifetimes that split durable control state from the active audio object. CLAP does this: the audio-processor object exists only while active. The current adapter therefore keeps a synchronized scalar publication bridge across CLAP domains, synchronizes it into a fresh `InstanceRuntime` before activation, and keeps the runtime as the semantic audio-domain projection while active.
 
-The final storage/synchronization primitive is deliberately not frozen yet. It must satisfy:
+This is an explicit deployment projection, not permission for unrelated mutable authorities. Cross-domain updates require one defined publication order and precedence rule.
 
-- non-blocking delivery of host automation/control changes relevant to realtime processing;
-- non-RT observation/editing without exposing mutable `Processor` state;
-- typed validation at the authority boundary;
-- multi-parameter state loads published as one generation/transaction from the processor's point of view;
-- coherent state-save semantics while processing/automation may be active;
-- generation ordering that rejects stale completion rather than silently overwriting newer state.
-
-Do **not** implement this as unrelated atomics and then claim state serialization is an atomic snapshot. A cross-parameter snapshot needs an explicit writer/snapshot protocol. Any subtle atomic primitive promoted into shared core infrastructure requires model/property testing of its ordering/progress behavior before adoption.
-
-## Process-time values are derived views
+## Process-time views
 
 Processing distinguishes:
 
-1. **base state** — current persistent/control value in the framework authority;
-2. **automated trajectory** — block/sample-time values implied by host automation;
-3. **effective value** — trajectory after applicable modulation/product control semantics.
+1. base state — current persistent/control value;
+2. automated trajectory — host automation over the block;
+3. effective value — trajectory after modulation/product semantics.
 
-The processor currently receives a borrowed `ParameterEvents` view and can create lazy floating-point set/linear cursors derived from the active base projection plus normalized events. Those cursors are not a second persistent authority.
+`ParameterEvents` and trajectory cursors are derived block views, not persistent state.
 
-The current event prototype names parameters by stable string key to make semantic tests explicit. Before the process API freezes or high-count automation is promoted, adapters/runtime setup should resolve those keys to dense schema-local indices so the audio path does not repeatedly compare strings or rescan schema mappings.
+Current events still carry stable string keys. Dense `ParameterIndex` conversion is the next API/performance step. Start with dense IDs only; add more elaborate per-parameter event indexing only if measurements justify it.
 
-## Automation-to-base publication
+## Automation publication
 
-Host automation affects both the current process trajectory and, after the relevant event endpoint, the persistent/base value observed by later blocks and state/control APIs. Publication back to base state must preserve causality.
-
-The generation rule is:
+Automation endpoint publication follows this causality rule:
 
 ```text
-observe base generation G
-  -> process host automation for the block
-  -> derive final base endpoint
-  -> publish endpoint only if canonical generation is still G
+observe generation G
+ -> process block automation
+ -> derive final base endpoint
+ -> publish only if generation is still G
 ```
 
-If a control edit or state replacement publishes generation `G+1` before the realtime endpoint is committed, the stale realtime publication is discarded. Newer canonical state wins; the audio thread never waits to reclaim authority.
+If a newer control edit/state replacement has already published, stale realtime completion is discarded. The audio thread never waits for control ownership.
 
-The current CLAP scalar bridge implements that rule locally. Its writer token serializes control/state publications so a reader cannot accept a mixed cross-parameter snapshot, and realtime full-snapshot publication uses compare/exchange against the exact generation it observed. This behavior still requires native host qualification and model testing before the mechanism itself is generalized into core.
+The CLAP scalar bridge implements writer serialization, coherent snapshots, and exact-generation stale-write rejection locally. Before extracting a generic core synchronization primitive, model-test its ordering/progress behavior and design typed-value/reclamation semantics rather than standardizing CLAP's scalar `f64` representation.
 
-## Automation and modulation
-
-Base automation and modulation are separate semantics. Modulation must not overwrite the base value.
-
-Chassis preserves source trajectories:
-
-- an instantaneous change is a timed set;
-- VST3 point queues produce their specified piecewise-linear trajectory;
-- Audio Unit ramps remain linear spans with duration/end value;
-- CLAP core value events remain timestamped sets unless another supported extension provides richer semantics.
-
-Reconstructing the source trajectory is adapter/framework correctness, not parameter smoothing.
-
-Per-note/key/channel/port modulation must remain possible without redesigning canonical parameter identity, even if initial FX support is global only.
+Modulation remains separate and must not overwrite base state.
 
 ## Smoothing
 
-Smoothing is common enough for optional helpers but is product DSP behavior.
-
-Default: reproduce host control trajectory with **no extra Chassis smoothing** unless the product declares a smoothing policy.
-
-Useful helpers may include linear-time and exponential slew, but their interaction with explicit host ramps must be visible. Avoid silently double-smoothing a trajectory the host already specified.
-
-Products can consume raw trajectories/events and implement detector/control-rate behavior themselves.
+Smoothing is product DSP policy. Chassis should reproduce host trajectories without extra smoothing by default. Optional helpers may be added when real clients prove reusable behavior, but explicit host ramps must not be silently double-smoothed.
 
 ## Product-originated edits
 
-Editor/control changes use one standard gesture path conceptually equivalent to:
+Future editor/control changes use a gesture path equivalent to begin/set/end edit. Framework code validates base-state changes and host notification ordering without exposing unrestricted mutable `Processor` access.
 
-```text
-begin_edit(param)
-set_value(param, value)
-end_edit(param)
-```
-
-The framework validates and updates the base-state authority, notifies observers, and informs the host without feedback loops.
-
-Realtime-originated host notifications require a separately modeled bounded/capability-checked path. DSP cannot call arbitrary main-thread host APIs.
+Realtime-originated host notifications require an explicit bounded capability; DSP cannot invoke arbitrary main-thread APIs.
 
 ## Persistent state
 
-Persistent state is a Chassis/product semantic document shared across CLAP, VST3, AU, standalone, and embedded deployment.
-
-Logical contents:
+Persistent state is a format-independent semantic document:
 
 ```text
 State
 ├── Chassis envelope version
 ├── product schema version
-├── typed parameter base values by canonical key
+├── parameter base values by stable key
 └── typed/custom product persistent fields
 ```
 
-Runtime DSP history—delay lines, detector envelopes, oscillator phase, lookahead buffers, transient caches—is not persisted by convention.
+Transient DSP history is not persisted by convention.
 
-State encoding must be deterministic, bounded/defensive, portable, explicitly versioned, independent of Rust memory layout, and suitable for migrations. The separate `state-format.md` owns the wire-format prototype.
+State encoding is deterministic, bounded, portable, explicitly versioned, and independent of Rust layout. `state-format.md` owns the current wire-format prototype.
 
-A normal plugin/project/preset state load is a **complete replacement**, not an implicit patch against whatever values happened to be live previously. After migration to the current schema, the accepted state must materialize every framework-managed parameter and required persistent field. A newly introduced field may obtain a value from an explicit migration/default rule; otherwise missing required state is rejected. If partial parameter patches are useful later, model them as a distinct operation with distinct semantics.
+## Complete transactional load
 
-The current CLAP scalar state projection enforces complete parameter snapshots. The older core `ParameterStore::apply_state_for_product` prototype still has patch-like internal mechanics; replace that path as part of the `InstanceRuntime` authority transition rather than treating it as the final persistence contract.
+Normal plugin/project/preset state is a complete replacement, not an implicit patch.
 
-## Transactional load
+`InstanceRuntime::apply_parameter_state_for_product()` currently:
 
-State bytes are untrusted input.
+- builds a temporary candidate from schema defaults;
+- validates product identity/schema and every parameter value;
+- rejects unknown parameters;
+- requires every current framework-managed parameter to be represented;
+- swaps the candidate only after validation succeeds.
 
-Load path:
+Failure leaves current runtime state unchanged.
+
+The lower-level `ParameterStore::apply_state_for_product()` remains patch-like and is a lower-level semantic helper, not the final persistence boundary. If partial patches become useful, expose them as a separately named operation.
+
+The migration-aware load path is:
 
 ```text
 bytes
-  -> bounded decode into temporary document
-  -> migrate semantic schema
-  -> materialize complete current semantic state
-  -> validate current parameter/custom domains
-  -> build accepted state generation
-  -> publish canonical state
-  -> make Processor observe that generation at a defined safe boundary
+ -> bounded decode
+ -> migrate product schema
+ -> materialize complete current state
+ -> validate parameter/custom domains
+ -> publish one accepted generation
 ```
 
-Failure before publication leaves current state unchanged. Migration and decoding never run on the audio thread.
-
-The runtime must specify what happens if state replacement races with product edits, automation, or an older asynchronous preparation. Generation/ownership rules decide which result may publish; stale work cannot silently overwrite newer authority.
+Migration/decoding never run on the audio thread. Adjacent schema migrations should retain fixtures from every released version.
 
 ## State save while active
 
-Each adapter must document when save can occur relative to processing and Chassis must provide a matching snapshot contract.
+Each adapter must define state-save timing relative to processing. Required behavior:
 
-Required properties:
+- the audio thread never blocks;
+- arbitrary live processor internals are not serialized;
+- one completed semantic generation is saved, not a mixed snapshot;
+- save/load races have deterministic precedence;
+- native tests cover active automation/save where supported.
 
-- no blocking of the audio thread;
-- no arbitrary access to live `Processor` internals;
-- one completed canonical generation is serialized, never an undefined cross-generation mixture;
-- stable handling of a save racing a state load/replacement;
-- tests that exercise active automation/save where the host format permits it.
+The current CLAP scalar bridge lets the non-realtime save path wait for a coherent completed scalar generation while realtime paths remain bounded/nonblocking. This remains provisional adapter evidence.
 
-The current CLAP scalar bridge lets the non-realtime save path wait for a coherent completed parameter generation while realtime readers/writers remain bounded/nonblocking. That is provisional adapter evidence, not yet the final framework API.
+## Testing gates
 
-## Migrations
+Current source/test coverage includes:
 
-Product schema versions are monotonic migration versions, separate from marketing/package versions.
+- bounded/sorted automation event shape and domain validation;
+- sample-accurate set/linear cursor behavior;
+- durable core base state across deactivate/reactivate;
+- activation observing current base state;
+- owned dynamic activation I/O;
+- complete transactional runtime parameter replacement;
+- deterministic/bounded CHSS behavior and empty-key rejection;
+- CLAP stale-generation rejection and complete scalar state replacement.
 
-Adjacent sequential migrations are the conventional path:
+Still required before freezing this API:
 
-```text
-v1 -> v2 -> v3 -> current
-```
-
-Keep fixtures from every public schema. Loading a newer unknown schema fails safely by default unless a product deliberately defines a proven forward-compatibility policy.
-
-A migration is also where a newly required persistent field obtains an explicit historical default or transformation. The post-migration current document is complete before publication.
-
-## Presets
-
-A preset is named product state plus metadata. Chassis may provide common storage/serialization helpers later; browsers, tags, cloud sync, and product-specific UX remain outside core.
-
-## Testing requirements
-
-The current core conformance path covers bounded borrowed event validation,
-nondecreasing source order, sample-accurate set/linear cursor evaluation,
-parameter-domain rejection before product DSP, optional block-start transport
-values, and deterministic/bounded state codec behavior. The CLAP scalar bridge
-also has adapter-level tests for stale-generation rejection and complete
-parameter-state replacement.
-
-Still required before the parameter/state API can freeze:
-
-- canonical/derived ID uniqueness and frozen mapping fixtures;
-- dense runtime-index mapping invariants;
-- mapping bounds/monotonicity/round trips;
-- formatting/parsing where applicable;
-- step and linear automation trajectories across block boundaries;
-- modulation not mutating base state;
-- base-state publication after automation according to each adapter contract;
-- control/state/automation generation-race tests;
-- model testing for any shared atomic publication primitive;
-- gesture ordering and host echo suppression;
-- coherent active state-save semantics in native host tests;
-- transactional complete state load and generation replacement;
-- deterministic state bytes and migration fixtures;
-- corrupt/truncated/oversized state rejection;
+- local post-refactor fmt/test/Clippy/deny/machete/release-build gate;
+- dense `ParameterIndex` conversion and mapping tests;
+- automation/control/state race tests;
+- model testing for any generalized atomic publication primitive;
+- migration fixtures and corruption/exhaustion fuzzing;
+- gesture/echo semantics;
+- native active state-save tests;
 - cross-format state round trips.
 
-## Ergonomics
+## Authoring direction
 
-The eventual authoring API may use derives/macros, but only after the explicit semantic API works through the conformance component and first adapter.
-
-The normal flow should be:
+The eventual ergonomic flow is:
 
 ```text
-declare typed controls + stable keys + range/default/display/smoothing policy
+declare typed controls + stable identities + policy
         ↓
-InstanceRuntime owns canonical base state and stable schema
+InstanceRuntime / deployment publication owns base-state semantics
         ↓
-adapter/runtime projects bounded dense realtime views + host semantics
+setup resolves stable identities into bounded runtime projections
         ↓
 Processor consumes explicit realtime trajectories/views
 ```
 
-Convention removes plumbing; it does not hide ownership, timing, or compatibility.
+Macros/derives come only after these explicit contracts are proven.
