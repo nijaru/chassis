@@ -205,7 +205,6 @@ pub enum InstanceProcessError {
 }
 
 impl fmt::Display for InstanceProcessError {
-where
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NotActive => formatter.write_str("component instance is not active"),
