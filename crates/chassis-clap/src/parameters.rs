@@ -30,6 +30,7 @@ pub(crate) enum ParameterMappingError {
     ExtraId(String),
     InvalidId(String),
     DuplicateId(u32),
+    ParameterIndexUnrepresentable(usize),
     UnsupportedType {
         parameter: String,
         parameter_type: ParameterType,
@@ -53,6 +54,10 @@ impl fmt::Display for ParameterMappingError {
                 write!(formatter, "parameter {parameter} has an invalid CLAP ID")
             }
             Self::DuplicateId(id) => write!(formatter, "CLAP parameter ID {id} is duplicated"),
+            Self::ParameterIndexUnrepresentable(index) => write!(
+                formatter,
+                "CLAP parameter index {index} cannot fit the Chassis runtime index"
+            ),
             Self::UnsupportedType {
                 parameter,
                 parameter_type,
@@ -72,11 +77,16 @@ impl std::error::Error for ParameterMappingError {}
 
 #[derive(Debug, Clone)]
 pub(crate) struct ClapParameterBinding {
+    index: ParameterIndex,
     id: ClapId,
     descriptor: ParameterDescriptor,
 }
 
 impl ClapParameterBinding {
+    pub(crate) fn index(&self) -> ParameterIndex {
+        self.index
+    }
+
     pub(crate) fn id(&self) -> ClapId {
         self.id
     }
@@ -235,7 +245,11 @@ impl ClapParameterState {
         mappings: &[(&str, u32)],
     ) -> Result<Self, ParameterMappingError> {
         let mut bindings = Vec::with_capacity(descriptors.len());
-        for descriptor in descriptors {
+        for (index, descriptor) in descriptors.iter().enumerate() {
+            let parameter_index = ParameterIndex::new(
+                u32::try_from(index)
+                    .map_err(|_| ParameterMappingError::ParameterIndexUnrepresentable(index))?,
+            );
             let Some((_, raw_id)) = mappings
                 .iter()
                 .find(|(key, _)| *key == descriptor.key().as_str())
@@ -268,6 +282,7 @@ impl ClapParameterState {
                 }
             }
             bindings.push(ClapParameterBinding {
+                index: parameter_index,
                 id,
                 descriptor: descriptor.clone(),
             });
@@ -494,7 +509,7 @@ impl ClapParameterState {
                 return Err(ParameterSyncError::InvalidPublishedValue);
             };
             store
-                .set(binding.descriptor.key().as_str(), parameter)
+                .set_index(binding.index(), parameter)
                 .map_err(|_| ParameterSyncError::StoreRejected)?;
         }
         Ok(())
@@ -701,11 +716,10 @@ pub(crate) fn normalized_event(
     value: f64,
 ) -> Option<ParameterEvent<'static>> {
     let index = state.index_for_id(id)?;
-    let parameter = u32::try_from(index).ok().map(ParameterIndex::new)?;
     let binding = &state.bindings[index];
     Some(ParameterEvent::set(
         time,
-        parameter,
+        binding.index(),
         binding.event_value(value),
     ))
 }
@@ -788,6 +802,8 @@ mod tests {
         let state =
             ClapParameterState::new(&descriptors, &[("gain", 1), ("steps", 2), ("bypass", 3)])
                 .expect("parameter mapping is valid");
+        assert_eq!(state.bindings()[0].index(), ParameterIndex::new(0));
+        assert_eq!(state.bindings()[1].index(), ParameterIndex::new(1));
         let raw = [
             ParamValueEvent::new(0, ClapId::new(1), Pckn::match_all(), 0.25),
             ParamValueEvent::new(2, ClapId::new(2), Pckn::match_all(), 3.0),
