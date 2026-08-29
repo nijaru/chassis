@@ -7,7 +7,6 @@
 //! remain explicit follow-up work rather than being silently approximated.
 
 mod parameters;
-mod publication;
 
 use core::{fmt::Write as _, marker::PhantomData, num::NonZeroU32};
 use std::{
@@ -39,64 +38,83 @@ use clack_extensions::{
 use clack_plugin::{
     entry::{DefaultPluginFactory, SinglePluginEntry},
     events::{
-        Event, Events, event_types::TransportEvent, io::InputEvents, io::OutputEvents,
-        spaces::CoreEventSpace,
+        event_types::{TransportEvent, TransportFlags},
+        io::{InputEvents, OutputEvents},
     },
-    host::{HostAudioProcessorHandle, HostMainThreadHandle, HostSharedHandle},
-    plugin::{
-        Plugin, PluginAudioConfiguration, PluginAudioProcessor, PluginError, PluginMainThread,
-        PluginShared,
+    plugin::features::{AUDIO_EFFECT, STEREO},
+    prelude::{
+        Audio, ChannelPair, ClapId, Events, HostAudioProcessorHandle, HostMainThreadHandle,
+        HostSharedHandle, Plugin, PluginAudioConfiguration, PluginAudioProcessor, PluginDescriptor,
+        PluginError, PluginExtensions, PluginMainThread, PluginShared, Process as ClapProcess,
+        ProcessStatus,
     },
-    process::{Audio, ChannelPair, Process as ClapProcess, ProcessStatus},
     stream::{InputStream, OutputStream},
-    utils::ClapId,
+    utils::Cookie,
 };
-
-use crate::parameters::{
+use parameters::{
     ClapParameterState, ParameterMappingError, ParameterStateError, ParameterSyncError,
     normalized_events,
 };
 
-/// Product contract for the initial Chassis CLAP stereo-effect adapter.
+/// Re-export of Clack's CLAP entry macro for Chassis export crates.
+pub use clack_plugin::clack_export_entry;
+
+/// Temporary CLAP metadata contract for the first default-stereo adapter proof.
 ///
-/// Products supply stable CLAP identity plus an explicit mapping from Chassis
-/// parameter keys to stable CLAP numeric IDs. The adapter currently supports
-/// the default stereo main input/output configuration and scalar float,
-/// integer, and boolean parameters.
-pub trait ClapStereoEffect: Component {
-    /// Stable CLAP plugin identifier.
+/// Parameter IDs are explicit because a stable Chassis key cannot be silently
+/// hashed or assigned from declaration order without creating a persistence
+/// compatibility hazard.
+pub trait ClapStereoEffect: Component + Default + 'static {
+    /// Stable reverse-domain CLAP plugin identifier.
     const CLAP_ID: &'static str;
-    /// Product schema version used by Chassis parameter state.
-    const CLAP_STATE_SCHEMA: u32;
-    /// Product display name.
+
+    /// Human-readable CLAP plugin name.
     const CLAP_NAME: &'static str;
-    /// Product vendor name.
-    const CLAP_VENDOR: &'static str;
-    /// Product version string.
-    const CLAP_VERSION: &'static str;
-    /// Maximum normalized parameter events accepted per process block.
-    const CLAP_MAX_PARAMETER_EVENTS: u32;
 
-    /// Stable Chassis parameter-key to CLAP-ID mapping.
-    fn clap_parameter_ids() -> &'static [(&'static str, u32)];
+    /// Stable CLAP parameter IDs keyed by canonical Chassis parameter key.
+    ///
+    /// The mapping must contain exactly one entry for every descriptor returned
+    /// by [`Component::parameter_descriptors`]. The initial adapter supports
+    /// scalar float, integer, and boolean descriptors; choices are rejected
+    /// during plugin construction until their index/identity projection is
+    /// specified.
+    const CLAP_PARAMETER_IDS: &'static [(&'static str, u32)] = &[];
+
+    /// Maximum number of known CLAP parameter value events accepted per block.
+    ///
+    /// This is an explicit product/deployment bound. Zero is correct for a
+    /// component that has no parameter projection.
+    const CLAP_MAX_PARAMETER_EVENTS: u32 = 0;
+
+    /// Chassis parameter-state schema version projected through CLAP state.
+    const CLAP_STATE_SCHEMA: u32 = 1;
 }
 
-/// Shared CLAP instance state retained across processor activation cycles.
+/// Clack plugin marker that exports one [`ClapStereoEffect`] through Chassis.
+pub struct ChassisPlugin<C>(PhantomData<fn() -> C>);
+
+/// Single-plugin CLAP entry type for a Chassis stereo effect.
+pub type SingleComponentEntry<C> = SinglePluginEntry<ChassisPlugin<C>>;
+
+/// Thread-safe scalar parameter publication shared by CLAP domains.
+///
+/// This remains an adapter-local cross-domain bridge while the equivalent
+/// general framework publication primitive is model-tested. The audio-domain
+/// [`InstanceRuntime`] is rebuilt from this durable publication before every
+/// activation and remains the semantic runtime projection while active.
 pub struct ChassisShared {
-    parameters: ClapParameterState,
+    parameters: Arc<ClapParameterState>,
 }
 
-impl PluginShared for ChassisShared {}
+impl PluginShared<'_> for ChassisShared {}
 
-/// Main-thread CLAP object retaining the product definition.
+/// Main-thread owner of the format-independent Chassis component definition.
 pub struct ChassisMainThread<C> {
     component: C,
-    _host: PhantomData<HostMainThreadHandle<'static>>,
+    shared: Arc<ClapParameterState>,
 }
 
-impl<C> PluginMainThread<'_> for ChassisMainThread<C> where C: ClapStereoEffect {}
-
-/// Active CLAP audio processor backed by a Chassis [`InstanceRuntime`].
+/// CLAP audio-thread wrapper around an activated Chassis instance runtime.
 pub struct ChassisAudioProcessor<'a, P>
 where
     P: Processor,
@@ -107,82 +125,99 @@ where
     control_values: Vec<f64>,
 }
 
-impl<C> Plugin for C
+impl<C> Plugin for ChassisPlugin<C>
 where
-    C: ClapStereoEffect + Default + 'static,
-    C::Processor: ChassisProcess<f32> + Processor + Send + 'static,
-    C::ActivationError: core::fmt::Debug,
+    C: ClapStereoEffect,
+    C::Processor: ChassisProcess<f32> + Send + 'static,
 {
     type AudioProcessor<'a> = ChassisAudioProcessor<'a, C::Processor>;
     type Shared<'a> = ChassisShared;
     type MainThread<'a> = ChassisMainThread<C>;
 
-    fn declare_extensions(builder: &mut clack_plugin::plugin::PluginExtensions<Self>) {
-        builder
-            .register::<PluginAudioPorts>()
-            .register::<PluginParams>()
-            .register::<PluginState>();
+    fn declare_extensions(
+        builder: &mut PluginExtensions<Self>,
+        _shared: Option<&Self::Shared<'_>>,
+    ) {
+        builder.register::<PluginAudioPorts>();
+        builder.register::<PluginParams>();
+        builder.register::<PluginState>();
+    }
+}
+
+impl<C> DefaultPluginFactory for ChassisPlugin<C>
+where
+    C: ClapStereoEffect,
+    C::Processor: ChassisProcess<f32> + Send + 'static,
+{
+    fn get_descriptor() -> PluginDescriptor {
+        PluginDescriptor::new(C::CLAP_ID, C::CLAP_NAME).with_features([AUDIO_EFFECT, STEREO])
     }
 
-    fn create_shared<'a>(
-        _host: HostSharedHandle<'a>,
-    ) -> Result<Self::Shared<'a>, PluginError> {
+    fn new_shared(_host: HostSharedHandle) -> Result<ChassisShared, PluginError> {
         let component = C::default();
-        let parameters = ClapParameterState::new(
-            component.parameter_descriptors(),
-            C::clap_parameter_ids(),
-        )
-        .map_err(|error| parameter_mapping_error(&error))?;
-        Ok(ChassisShared { parameters })
+        ParameterStore::new(component.parameter_descriptors())
+            .map_err(|_| PluginError::Message("Invalid Chassis parameter schema"))?;
+        if !component.parameter_descriptors().is_empty() && C::CLAP_MAX_PARAMETER_EVENTS == 0 {
+            return Err(PluginError::Message(
+                "CLAP parameter projection requires a positive event bound",
+            ));
+        }
+        let parameters =
+            ClapParameterState::new(component.parameter_descriptors(), C::CLAP_PARAMETER_IDS)
+                .map_err(|error| parameter_mapping_error(&error))?;
+        Ok(ChassisShared {
+            parameters: Arc::new(parameters),
+        })
     }
 
-    fn create_main_thread<'a>(
+    fn new_main_thread<'a>(
         _host: HostMainThreadHandle<'a>,
-        _shared: &Self::Shared<'a>,
-    ) -> Result<Self::MainThread<'a>, PluginError> {
+        shared: &'a ChassisShared,
+    ) -> Result<ChassisMainThread<C>, PluginError> {
+        let component = C::default();
+        if !shared
+            .parameters
+            .matches_descriptors(component.parameter_descriptors())
+        {
+            return Err(PluginError::Message(
+                "CLAP component schema changed between shared and main-thread construction",
+            ));
+        }
         Ok(ChassisMainThread {
-            component: C::default(),
-            _host: PhantomData,
+            component,
+            shared: Arc::clone(&shared.parameters),
         })
     }
 }
+
+impl<C> PluginMainThread<'_, ChassisShared> for ChassisMainThread<C> where C: ClapStereoEffect {}
 
 impl<C> PluginAudioPortsImpl for ChassisMainThread<C>
 where
     C: ClapStereoEffect,
 {
-    fn count(&mut self, is_input: bool) -> u32 {
-        u32::from(if is_input {
-            C::default()
-                .audio_ports()
-                .iter()
-                .any(|port| port.key() == MAIN_INPUT)
-        } else {
-            C::default()
-                .audio_ports()
-                .iter()
-                .any(|port| port.key() == MAIN_OUTPUT)
-        })
+    fn count(&self, _is_input: bool) -> u32 {
+        1
     }
 
-    fn get(&mut self, index: u32, is_input: bool, writer: &mut AudioPortInfoWriter) {
+    fn get(&self, index: u32, is_input: bool, writer: &mut AudioPortInfoWriter) {
         if index != 0 {
             return;
         }
-        let id = ClapId::new(0);
-        let name = if is_input { "Main Input" } else { "Main Output" };
-        let flags = if is_input {
-            AudioPortFlags::IS_MAIN | AudioPortFlags::SUPPORTS_64BITS
+
+        let name: &[u8] = if is_input {
+            b"Main Input"
         } else {
-            AudioPortFlags::IS_MAIN | AudioPortFlags::SUPPORTS_64BITS
+            b"Main Output"
         };
+
         writer.set(&AudioPortInfo {
-            id,
+            id: ClapId::new(0),
             name,
             channel_count: 2,
-            flags,
+            flags: AudioPortFlags::IS_MAIN,
             port_type: Some(AudioPortType::STEREO),
-            in_place_pair: Some(id),
+            in_place_pair: Some(ClapId::new(0)),
         });
     }
 }
@@ -191,136 +226,79 @@ impl<C> PluginMainThreadParams for ChassisMainThread<C>
 where
     C: ClapStereoEffect,
 {
-    fn count(&mut self) -> u32 {
-        u32::try_from(C::default().parameter_descriptors().len()).unwrap_or(u32::MAX)
+    fn count(&self) -> u32 {
+        u32::try_from(self.shared.bindings().len()).unwrap_or(u32::MAX)
     }
 
-    fn get_info(&mut self, param_index: u32, writer: &mut ParamInfo) {
-        let Ok(index) = usize::try_from(param_index) else {
-            return;
-        };
-        let Some(binding) = C::default()
-            .parameter_descriptors()
-            .get(index)
-            .and_then(|descriptor| {
-                C::clap_parameter_ids()
-                    .iter()
-                    .find(|(key, _)| *key == descriptor.key().as_str())
-                    .and_then(|(_, id)| ClapId::from_raw(*id))
-                    .map(|id| (descriptor, id))
-            })
+    fn get_info(&self, param_index: u32, writer: &mut clack_extensions::params::ParamInfoWriter) {
+        let Some(binding) = usize::try_from(param_index)
+            .ok()
+            .and_then(|index| self.shared.bindings().get(index))
         else {
             return;
         };
-        let descriptor = binding.0;
-        let id = binding.1;
-        let state = match ClapParameterState::new(
-            C::default().parameter_descriptors(),
-            C::clap_parameter_ids(),
-        ) {
-            Ok(state) => state,
-            Err(_) => return,
-        };
-        let Some(binding) = state.bindings().get(index) else {
-            return;
-        };
-        let (min_value, max_value) = binding.plain_range();
-        writer.set(&clack_extensions::params::ParamInfo {
-            id,
+        let module = binding
+            .descriptor()
+            .key()
+            .as_str()
+            .rsplit_once('/')
+            .map_or(&[][..], |(module, _)| module.as_bytes());
+        let (minimum, maximum) = binding.plain_range();
+        writer.set(&ParamInfo {
+            id: binding.id(),
             flags: binding.flags(),
-            name: descriptor.name(),
-            module: "",
-            min_value,
-            max_value,
+            cookie: Cookie::empty(),
+            name: binding.descriptor().name().as_bytes(),
+            module,
+            min_value: minimum,
+            max_value: maximum,
             default_value: binding.default_plain(),
-            cookie: clack_extensions::params::ParamCookie::empty(),
         });
     }
 
-    fn get_value(&mut self, param_id: ClapId) -> Option<f64> {
-        let state = ClapParameterState::new(
-            C::default().parameter_descriptors(),
-            C::clap_parameter_ids(),
-        )
-        .ok()?;
-        state
+    fn get_value(&self, param_id: ClapId) -> Option<f64> {
+        let index = self
+            .shared
             .bindings()
             .iter()
-            .position(|binding| binding.id() == param_id)
-            .map(|index| self.shared_value(&state, index))
+            .position(|binding| binding.id() == param_id)?;
+        Some(self.shared.value(index))
     }
 
     fn value_to_text(
-        &mut self,
+        &self,
         param_id: ClapId,
         value: f64,
         writer: &mut ParamDisplayWriter,
     ) -> core::fmt::Result {
-        let state = ClapParameterState::new(
-            C::default().parameter_descriptors(),
-            C::clap_parameter_ids(),
-        )
-        .map_err(|_| core::fmt::Error)?;
-        let Some(binding) = state.bindings().iter().find(|binding| binding.id() == param_id) else {
+        let Some(binding) = self
+            .shared
+            .bindings()
+            .iter()
+            .find(|binding| binding.id() == param_id)
+        else {
             return Err(core::fmt::Error);
         };
-        match binding.descriptor().kind() {
-            chassis_core::parameters::ParameterKind::Float { .. } => write!(writer, "{value}"),
-            chassis_core::parameters::ParameterKind::Integer { .. } => {
-                let Some(chassis_core::parameters::ParameterValue::Integer(value)) =
-                    binding.parameter_value(value)
-                else {
-                    return Err(core::fmt::Error);
-                };
-                write!(writer, "{value}")
-            }
-            chassis_core::parameters::ParameterKind::Boolean { .. } => {
-                let Some(chassis_core::parameters::ParameterValue::Boolean(value)) =
-                    binding.parameter_value(value)
-                else {
-                    return Err(core::fmt::Error);
-                };
-                writer.write_str(if value { "On" } else { "Off" })
-            }
-            chassis_core::parameters::ParameterKind::Choice { .. } => Err(core::fmt::Error),
+        if binding.parameter_value(value).is_none() {
+            return Err(core::fmt::Error);
         }
+        write!(writer, "{value}")
     }
 
-    fn text_to_value(&mut self, param_id: ClapId, text: &str) -> Option<f64> {
-        let state = ClapParameterState::new(
-            C::default().parameter_descriptors(),
-            C::clap_parameter_ids(),
-        )
-        .ok()?;
-        let binding = state.bindings().iter().find(|binding| binding.id() == param_id)?;
-        match binding.descriptor().kind() {
-            chassis_core::parameters::ParameterKind::Float { .. } => text.parse().ok(),
-            chassis_core::parameters::ParameterKind::Integer { .. } => {
-                let value: i64 = text.parse().ok()?;
-                binding.parameter_value(value as f64)?;
-                Some(value as f64)
-            }
-            chassis_core::parameters::ParameterKind::Boolean { .. } => match text {
-                "On" | "on" | "1" => Some(1.0),
-                "Off" | "off" | "0" => Some(0.0),
-                _ => None,
-            },
-            chassis_core::parameters::ParameterKind::Choice { .. } => None,
-        }
+    fn text_to_value(&self, param_id: ClapId, text: &std::ffi::CStr) -> Option<f64> {
+        let index = self
+            .shared
+            .bindings()
+            .iter()
+            .position(|binding| binding.id() == param_id)?;
+        let value = text.to_str().ok()?.trim().parse().ok()?;
+        self.shared.bindings()[index]
+            .parameter_value(value)
+            .map(|_| value)
     }
 
-    fn flush(&mut self, input: &InputEvents, _output: &mut OutputEvents) {
-        self.shared.parameters.apply_input(input);
-    }
-}
-
-impl<C> ChassisMainThread<C>
-where
-    C: ClapStereoEffect,
-{
-    fn shared_value(&self, state: &ClapParameterState, index: usize) -> f64 {
-        let _ = state;
-        self.shared.parameters.value(index)
+    fn flush(&self, input: &InputEvents, _output: &mut OutputEvents) {
+        self.shared.apply_input(input);
     }
 }
 
@@ -331,7 +309,6 @@ where
     fn save(&self, output: &mut OutputStream) -> Result<(), PluginError> {
         let encoded = self
             .shared
-            .parameters
             .encode_state(C::CLAP_ID, C::CLAP_STATE_SCHEMA, StateLimits::default())
             .map_err(|error| state_error(&error))?;
         write_bounded_state(output, &encoded)
@@ -343,7 +320,6 @@ where
         let document =
             StateDocument::decode_with_limits(&encoded, limits).map_err(PluginError::from)?;
         self.shared
-            .parameters
             .apply_state(&document, C::CLAP_ID, C::CLAP_STATE_SCHEMA)
             .map_err(|error| state_error(&error))
     }
@@ -679,18 +655,23 @@ mod tests {
     }
 
     #[test]
-    fn maps_transport_flags_and_rejects_non_finite_tempo() {
-        let mapped = map_transport(Some(&transport(
-            TransportFlags::IS_PLAYING | TransportFlags::HAS_TEMPO,
-            124.0,
-        )))
-        .expect("transport maps");
-        assert_eq!(mapped.is_playing(), Some(true));
-        assert_eq!(mapped.is_recording(), Some(false));
-        assert_eq!(mapped.tempo_bpm(), Some(124.0));
-
-        assert!(
-            map_transport(Some(&transport(TransportFlags::HAS_TEMPO, f64::NAN))).is_err()
+    fn maps_optional_transport_and_rejects_invalid_tempo() {
+        assert_eq!(
+            map_transport(None).expect("missing transport is valid"),
+            TransportSnapshot::unknown()
         );
+
+        let event = transport(
+            TransportFlags::IS_PLAYING | TransportFlags::IS_RECORDING | TransportFlags::HAS_TEMPO,
+            120.0,
+        );
+        let mapped = map_transport(Some(&event)).expect("transport is valid");
+        assert_eq!(mapped.playing(), Some(true));
+        assert_eq!(mapped.recording(), Some(true));
+        assert_eq!(mapped.tempo_bpm(), Some(120.0));
+        assert_eq!(mapped.sample_position(), None);
+
+        let invalid = transport(TransportFlags::HAS_TEMPO, 0.0);
+        assert!(map_transport(Some(&invalid)).is_err());
     }
 }
