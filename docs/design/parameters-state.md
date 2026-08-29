@@ -1,6 +1,6 @@
 # Parameters, Automation, and State
 
-Status: typed parameter schema/store, dense schema-local process identity, borrowed process automation, durable core `InstanceRuntime` parameter ownership, complete runtime parameter-state replacement, and generation-checked CLAP scalar publication are implemented in source. The post-refactor Rust gate and current native CLAP qualification are still pending. Public API and persistence wire format are not frozen.
+Status: typed parameter schema/store, dense schema-local process identity, borrowed process automation, durable core `InstanceRuntime` parameter ownership, complete runtime parameter-state replacement, and generation-checked CLAP scalar publication are implemented in source. The runtime/dense checkpoint through `76eb6b3` passed the full local Rust gate. The follow-on dense-write/CLAP-binding cleanup is implemented after that checkpoint and awaits the next local gate. Native CLAP qualification is still pending. Public API and persistence wire format are not frozen.
 
 ## Identity and schema
 
@@ -16,7 +16,7 @@ Realtime/process identity is now a dense schema-local value:
 ParameterKey (persistent) -> ParameterIndex (runtime only)
 ```
 
-`ParameterStore::index()` resolves a stable key to the declaration-order dense index of one validated immutable schema. `ParameterIndex` is never serialized. Adapters resolve backend IDs to the same dense index before process validation; realtime event validation and trajectory matching no longer binary-search stable string keys.
+`ParameterStore::index()` resolves a stable key to the declaration-order dense index of one validated immutable schema. `ParameterStore::set_index()` validates and replaces an already-resolved base value directly by that dense index without another stable-key lookup. An out-of-range dense index is rejected explicitly. `ParameterIndex` is never serialized. Adapters resolve backend IDs to the same dense index before process validation; realtime event validation and trajectory matching no longer binary-search stable string keys.
 
 ## Plain values
 
@@ -46,7 +46,7 @@ Processing distinguishes:
 
 `ParameterEvents` and trajectory cursors are derived block views, not persistent state.
 
-Normalized events now carry `ParameterIndex`, not stable strings. `ParameterStore::validate_events()` performs direct descriptor lookup by dense index, and cursors compare the dense index while scanning the globally sample-sorted bounded event slice. The CLAP adapter maps each known CLAP ID to the binding's schema index during normalization and uses the same dense index when publishing automation endpoints back to its scalar bridge.
+Normalized events now carry `ParameterIndex`, not stable strings. `ParameterStore::validate_events()` performs direct descriptor lookup by dense index, and cursors compare the dense index while scanning the globally sample-sorted bounded event slice. The CLAP adapter stores each binding's declaration-order `ParameterIndex` during setup, maps known CLAP IDs directly to that stored index during normalization, and uses the same stored index when synchronizing published scalar base values into `InstanceRuntime`. The block-boundary projection therefore no longer re-resolves stable parameter keys.
 
 Dense IDs are intentionally the first step only. Do not add a second per-parameter event index or callback-time owned structure until measurements show the bounded global scan is material.
 
@@ -136,7 +136,7 @@ The current CLAP scalar bridge lets the non-realtime save path wait for a cohere
 
 ## Testing gates
 
-Current source/test coverage includes:
+Validated through `76eb6b3`:
 
 - bounded/sorted automation event shape and domain validation;
 - stable-key to dense `ParameterIndex` resolution and invalid-index rejection;
@@ -147,11 +147,13 @@ Current source/test coverage includes:
 - owned dynamic activation I/O;
 - complete transactional runtime parameter replacement;
 - deterministic/bounded CHSS behavior and empty-key rejection;
-- CLAP stale-generation rejection and complete scalar state replacement.
+- CLAP stale-generation rejection and complete scalar state replacement;
+- full local fmt/test/Clippy/deny/machete/release conformance gate.
+
+Current follow-on source additionally covers direct dense-index base-value replacement and setup-retained CLAP binding indices. That follow-on still requires the same local gate before it becomes a validated checkpoint.
 
 Still required before freezing this API:
 
-- local post-refactor fmt/test/Clippy/deny/machete/release-build gate;
 - automation/control/state race tests;
 - model testing for any generalized atomic publication primitive;
 - migration fixtures and corruption/exhaustion fuzzing;
