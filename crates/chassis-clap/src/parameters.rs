@@ -370,6 +370,7 @@ impl ClapParameterState {
         self.pending.store(true, Ordering::Release);
     }
 
+    #[cfg(test)]
     fn publish_value_control(&self, index: usize, value: f64) {
         loop {
             let expected = self.generation.load(Ordering::Acquire);
