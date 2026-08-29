@@ -90,6 +90,7 @@ struct EffectProcessor {
 impl Processor for EffectProcessor {}
 
 impl Process<f32> for EffectProcessor {
+    #[allow(clippy::cast_possible_truncation)]
     fn process(&mut self, block: &mut ProcessBlock<'_, '_, '_, '_, f32>) {
         let gain = match block.parameters().get("gain") {
             Some(ParameterValue::Float(value)) => *value as f32,
@@ -136,8 +137,8 @@ fn parameters_survive_deactivation_and_reactivation() {
         .activate(&component, process_config(), DEFAULT_EFFECT_CONFIGURATION)
         .expect("first activation succeeds");
     assert_eq!(
-        f64::from_bits(metrics.activation_gain_bits.load(Ordering::Relaxed)),
-        1.5
+        f64::from_bits(metrics.activation_gain_bits.load(Ordering::Relaxed)).to_bits(),
+        1.5_f64.to_bits()
     );
     runtime.deactivate().expect("first deactivation succeeds");
 
@@ -149,8 +150,8 @@ fn parameters_survive_deactivation_and_reactivation() {
         .activate(&component, process_config(), DEFAULT_EFFECT_CONFIGURATION)
         .expect("second activation succeeds");
     assert_eq!(
-        f64::from_bits(metrics.activation_gain_bits.load(Ordering::Relaxed)),
-        1.5
+        f64::from_bits(metrics.activation_gain_bits.load(Ordering::Relaxed)).to_bits(),
+        1.5_f64.to_bits()
     );
     runtime.deactivate().expect("second deactivation succeeds");
 
