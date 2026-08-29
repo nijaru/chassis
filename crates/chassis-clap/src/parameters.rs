@@ -1,10 +1,4 @@
-use std::{
-    fmt,
-    hint::spin_loop,
-    string::String,
-    sync::atomic::{AtomicBool, AtomicU64, Ordering},
-    vec::Vec,
-};
+use std::{fmt, string::String, vec::Vec};
 
 use chassis_core::{
     automation::{ParameterEvent, ParameterEventChange, ParameterEventValue},
@@ -21,8 +15,11 @@ use clack_plugin::{
     utils::ClapId,
 };
 
+mod publication;
+
+use publication::{PublicationError, ScalarPublication};
+
 const EXACT_INTEGER_LIMIT: f64 = 9_007_199_254_740_992.0;
-const SNAPSHOT_RETRIES: u32 = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ParameterMappingError {
@@ -234,9 +231,7 @@ pub(crate) struct ClapParameterState {
     bindings: Vec<ClapParameterBinding>,
     id_lookup: Vec<usize>,
     key_lookup: Vec<usize>,
-    values: Vec<AtomicU64>,
-    generation: AtomicU64,
-    pending: AtomicBool,
+    publication: ScalarPublication,
 }
 
 impl ClapParameterState {
@@ -321,18 +316,16 @@ impl ClapParameterState {
                 .key()
                 .cmp(bindings[*right].descriptor.key())
         });
-        let values = bindings
+        let initial_values: Vec<_> = bindings
             .iter()
-            .map(|binding| AtomicU64::new(binding.default_plain().to_bits()))
+            .map(ClapParameterBinding::default_plain)
             .collect();
 
         Ok(Self {
             bindings,
             id_lookup,
             key_lookup,
-            values,
-            generation: AtomicU64::new(0),
-            pending: AtomicBool::new(false),
+            publication: ScalarPublication::new(&initial_values),
         })
     }
 
@@ -363,76 +356,7 @@ impl ClapParameterState {
     }
 
     pub(crate) fn value(&self, index: usize) -> f64 {
-        f64::from_bits(self.values[index].load(Ordering::Acquire))
-    }
-
-    fn try_begin_write(&self, expected: u64) -> bool {
-        expected.is_multiple_of(2)
-            && self
-                .generation
-                .compare_exchange(
-                    expected,
-                    expected.wrapping_add(1),
-                    Ordering::AcqRel,
-                    Ordering::Acquire,
-                )
-                .is_ok()
-    }
-
-    fn finish_write(&self, expected: u64) {
-        self.generation
-            .store(expected.wrapping_add(2), Ordering::Release);
-        self.pending.store(true, Ordering::Release);
-    }
-
-    #[cfg(test)]
-    fn publish_value_control(&self, index: usize, value: f64) {
-        loop {
-            let expected = self.generation.load(Ordering::Acquire);
-            if !self.try_begin_write(expected) {
-                spin_loop();
-                continue;
-            }
-            self.values[index].store(value.to_bits(), Ordering::Release);
-            self.finish_write(expected);
-            return;
-        }
-    }
-
-    fn try_publish_value(&self, index: usize, value: f64) -> bool {
-        let expected = self.generation.load(Ordering::Acquire);
-        if !self.try_begin_write(expected) {
-            return false;
-        }
-        self.values[index].store(value.to_bits(), Ordering::Release);
-        self.finish_write(expected);
-        true
-    }
-
-    fn publish_values_control(&self, values: &[f64]) {
-        loop {
-            let expected = self.generation.load(Ordering::Acquire);
-            if !self.try_begin_write(expected) {
-                spin_loop();
-                continue;
-            }
-            for (slot, value) in self.values.iter().zip(values) {
-                slot.store(value.to_bits(), Ordering::Release);
-            }
-            self.finish_write(expected);
-            return;
-        }
-    }
-
-    fn try_publish_values_from(&self, expected: u64, values: &[f64]) -> bool {
-        if values.len() != self.values.len() || !self.try_begin_write(expected) {
-            return false;
-        }
-        for (slot, value) in self.values.iter().zip(values) {
-            slot.store(value.to_bits(), Ordering::Release);
-        }
-        self.finish_write(expected);
-        true
+        self.publication.value(index)
     }
 
     pub(crate) fn apply_input(&self, input: &InputEvents<'_>) {
@@ -448,7 +372,7 @@ impl ClapParameterState {
     }
 
     pub(crate) fn request_sync(&self) {
-        self.pending.store(true, Ordering::Release);
+        self.publication.request_sync();
     }
 
     #[cfg(test)]
@@ -456,15 +380,14 @@ impl ClapParameterState {
         let Some((index, value)) = self.validated_plain_value(id, value) else {
             return false;
         };
-        self.publish_value_control(index, value);
-        true
+        self.publication.publish_value_control(index, value).is_ok()
     }
 
     fn try_apply_plain_value(&self, id: ClapId, value: f64) -> bool {
         let Some((index, value)) = self.validated_plain_value(id, value) else {
             return false;
         };
-        self.try_publish_value(index, value)
+        self.publication.try_publish_value(index, value)
     }
 
     fn validated_plain_value(&self, id: ClapId, value: f64) -> Option<(usize, f64)> {
@@ -484,14 +407,14 @@ impl ClapParameterState {
         store: &mut ParameterStore,
         scratch: &mut [f64],
     ) -> Result<(), ParameterSyncError> {
-        if scratch.len() != self.values.len() {
+        if scratch.len() != self.publication.len() {
             return Err(ParameterSyncError::InvalidPublishedValue);
         }
-        if !self.pending.swap(false, Ordering::AcqRel) {
+        if !self.publication.take_pending() {
             return Ok(());
         }
-        if self.try_snapshot_into(scratch).is_none() {
-            self.pending.store(true, Ordering::Release);
+        if self.publication.try_snapshot_into(scratch).is_none() {
+            self.publication.request_sync();
             return Ok(());
         }
         if self
@@ -500,12 +423,12 @@ impl ClapParameterState {
             .zip(scratch.iter().copied())
             .any(|(binding, value)| binding.parameter_value(value).is_none())
         {
-            self.pending.store(true, Ordering::Release);
+            self.publication.request_sync();
             return Err(ParameterSyncError::InvalidPublishedValue);
         }
         for (binding, value) in self.bindings.iter().zip(scratch.iter().copied()) {
             let Some(parameter) = binding.parameter_value(value) else {
-                self.pending.store(true, Ordering::Release);
+                self.publication.request_sync();
                 return Err(ParameterSyncError::InvalidPublishedValue);
             };
             store
@@ -523,10 +446,10 @@ impl ClapParameterState {
         if events.is_empty() {
             return Ok(());
         }
-        if scratch.len() != self.values.len() {
+        if scratch.len() != self.publication.len() {
             return Err(ParameterSyncError::InvalidPublishedValue);
         }
-        let Some(generation) = self.try_snapshot_into(scratch) else {
+        let Some(generation) = self.publication.try_snapshot_into(scratch) else {
             return Ok(());
         };
         for event in events {
@@ -543,38 +466,10 @@ impl ClapParameterState {
             };
             scratch[index] = value;
         }
-        let _ = self.try_publish_values_from(generation, scratch);
+        let _ = self
+            .publication
+            .try_publish_values_from(generation, scratch);
         Ok(())
-    }
-
-    fn try_snapshot_into(&self, output: &mut [f64]) -> Option<u64> {
-        if output.len() != self.values.len() {
-            return None;
-        }
-        for _ in 0..SNAPSHOT_RETRIES {
-            let start = self.generation.load(Ordering::Acquire);
-            if !start.is_multiple_of(2) {
-                spin_loop();
-                continue;
-            }
-            for (slot, value) in self.values.iter().zip(output.iter_mut()) {
-                *value = f64::from_bits(slot.load(Ordering::Acquire));
-            }
-            let end = self.generation.load(Ordering::Acquire);
-            if start == end && end.is_multiple_of(2) {
-                return Some(end);
-            }
-        }
-        None
-    }
-
-    fn snapshot_control_into(&self, output: &mut [f64]) -> u64 {
-        loop {
-            if let Some(generation) = self.try_snapshot_into(output) {
-                return generation;
-            }
-            spin_loop();
-        }
     }
 
     pub(crate) fn encode_state(
@@ -583,8 +478,10 @@ impl ClapParameterState {
         product_schema: u32,
         limits: StateLimits,
     ) -> Result<Vec<u8>, ParameterStateError> {
-        let mut values = vec![0.0; self.values.len()];
-        self.snapshot_control_into(&mut values);
+        let mut values = vec![0.0; self.publication.len()];
+        self.publication
+            .snapshot_control_into(&mut values)
+            .map_err(ParameterStateError::Publication)?;
         let mut document = StateDocument::new(product_id, product_schema)
             .map_err(ParameterStateError::Document)?;
         for (binding, value) in self.bindings.iter().zip(values) {
@@ -640,8 +537,9 @@ impl ClapParameterState {
                 actual: parameter_entries,
             });
         }
-        self.publish_values_control(&candidate);
-        Ok(())
+        self.publication
+            .publish_values_control(&candidate)
+            .map_err(ParameterStateError::Publication)
     }
 }
 
@@ -672,6 +570,7 @@ impl std::error::Error for ParameterSyncError {}
 pub(crate) enum ParameterStateError {
     Document(StateDocumentError),
     Encode(StateEncodeError),
+    Publication(PublicationError),
     ProductIdentityMismatch,
     ProductSchemaMismatch,
     UnknownParameter(String),
@@ -687,6 +586,12 @@ impl fmt::Display for ParameterStateError {
             }
             Self::Encode(error) => {
                 write!(formatter, "parameter state could not be encoded: {error}")
+            }
+            Self::Publication(PublicationError::GenerationExhausted) => {
+                formatter.write_str("parameter publication generation is exhausted")
+            }
+            Self::Publication(PublicationError::InvalidValueCount) => {
+                formatter.write_str("parameter publication has the wrong value count")
             }
             Self::ProductIdentityMismatch => {
                 formatter.write_str("parameter state has the wrong product identity")
@@ -886,12 +791,15 @@ mod tests {
                 .expect("parameter mapping is valid");
         let mut scratch = vec![0.0; 3];
         let generation = state
+            .publication
             .try_snapshot_into(&mut scratch)
             .expect("initial snapshot is coherent");
 
         assert!(state.apply_plain_value(ClapId::new(2), 4.0));
         scratch[0] = 0.25;
-        assert!(!state.try_publish_values_from(generation, &scratch));
+        assert!(!state
+            .publication
+            .try_publish_values_from(generation, &scratch));
         assert!((state.value(0) - 0.5).abs() <= f64::EPSILON);
         assert!((state.value(1) - 4.0).abs() <= f64::EPSILON);
     }
