@@ -1056,12 +1056,12 @@ impl ParameterStore {
                 ParameterEventChange::Set(value) => value,
                 ParameterEventChange::Linear { value } => ParameterEventValue::Float(value),
             };
-            descriptor
-                .validate_event_value(&value)
-                .map_err(|error| ParameterAutomationError::InvalidValue {
+            descriptor.validate_event_value(&value).map_err(|error| {
+                ParameterAutomationError::InvalidValue {
                     index: event_index,
                     error,
-                })?;
+                }
+            })?;
         }
         Ok(())
     }
