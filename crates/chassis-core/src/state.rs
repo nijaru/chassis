@@ -1034,12 +1034,14 @@ mod tests {
     #[test]
     fn rejects_empty_keys_during_decode() {
         let encoded = vec![
-            b'C', b'H', b'S', b'S', 1, 0, 1, 0, 2, 0, 0, 0, 1, 0, 0, 0, b'x', 0, 0, 0, 0, 1, 0,
-            0, 0, 1,
+            b'C', b'H', b'S', b'S', 1, 0, 1, 0, 2, 0, 0, 0, 1, 0, 0, 0, b'x', 0, 0, 0, 0, 1, 0, 0,
+            0, 1,
         ];
         assert_eq!(
             StateDocument::decode(&encoded),
-            Err(StateDecodeError::InvalidDocument(StateDocumentError::EmptyKey))
+            Err(StateDecodeError::InvalidDocument(
+                StateDocumentError::EmptyKey
+            ))
         );
     }
 
