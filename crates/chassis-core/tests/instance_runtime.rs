@@ -262,5 +262,8 @@ fn process_uses_durable_base_state() {
     runtime
         .process(2, context, &mut buffers)
         .expect("process succeeds");
-    assert_eq!(left, [0.5, 0.25]);
+    assert_eq!(
+        left.map(f32::to_bits),
+        [0.5_f32.to_bits(), 0.25_f32.to_bits()]
+    );
 }
