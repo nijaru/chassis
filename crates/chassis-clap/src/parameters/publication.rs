@@ -53,12 +53,7 @@ impl ScalarPublication {
         }
         let completed = expected + 2;
         self.generation
-            .compare_exchange(
-                expected,
-                expected + 1,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            )
+            .compare_exchange(expected, expected + 1, Ordering::AcqRel, Ordering::Acquire)
             .ok()?;
         Some(completed)
     }

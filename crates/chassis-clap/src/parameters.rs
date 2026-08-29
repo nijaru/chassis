@@ -617,7 +617,9 @@ impl std::error::Error for ParameterStateError {}
 
 fn publication_state_error(error: PublicationError) -> ParameterStateError {
     match error {
-        PublicationError::GenerationExhausted => ParameterStateError::PublicationGenerationExhausted,
+        PublicationError::GenerationExhausted => {
+            ParameterStateError::PublicationGenerationExhausted
+        }
         PublicationError::InvalidValueCount => ParameterStateError::InvalidPublicationValueCount,
     }
 }
@@ -805,9 +807,11 @@ mod tests {
 
         assert!(state.apply_plain_value(ClapId::new(2), 4.0));
         scratch[0] = 0.25;
-        assert!(!state
-            .publication
-            .try_publish_values_from(generation, &scratch));
+        assert!(
+            !state
+                .publication
+                .try_publish_values_from(generation, &scratch)
+        );
         assert!((state.value(0) - 0.5).abs() <= f64::EPSILON);
         assert!((state.value(1) - 4.0).abs() <= f64::EPSILON);
     }
