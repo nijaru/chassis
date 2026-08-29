@@ -819,6 +819,8 @@ pub enum ParameterStoreError {
     },
     /// No descriptor matched the requested key.
     UnknownParameter(String),
+    /// Dense index did not identify a descriptor in this schema.
+    UnknownParameterIndex(ParameterIndex),
     /// Proposed value failed descriptor validation.
     InvalidValue {
         /// Requested parameter key.
@@ -847,6 +849,9 @@ impl fmt::Display for ParameterStoreError {
                 "parameter {parameter} has {actual} choices but {maximum} are allowed"
             ),
             Self::UnknownParameter(key) => write!(formatter, "unknown parameter {key}"),
+            Self::UnknownParameterIndex(index) => {
+                write!(formatter, "unknown parameter index {}", index.get())
+            }
             Self::InvalidValue { parameter, error } => write!(
                 formatter,
                 "invalid value for parameter {parameter}: {error}"
@@ -994,6 +999,37 @@ impl ParameterStore {
                 error,
             })?;
         self.values[index] = value;
+        Ok(())
+    }
+
+    /// Replace one value using its dense schema-local runtime index.
+    ///
+    /// The index must originate from this store's immutable schema. The
+    /// successful path performs no stable-key lookup.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParameterStoreError::UnknownParameterIndex`] when the index is
+    /// outside this schema, or [`ParameterStoreError::InvalidValue`] when the
+    /// value fails descriptor validation.
+    pub fn set_index(
+        &mut self,
+        index: ParameterIndex,
+        value: ParameterValue,
+    ) -> Result<(), ParameterStoreError> {
+        let position = usize::try_from(index.get())
+            .map_err(|_| ParameterStoreError::UnknownParameterIndex(index))?;
+        let descriptor = self
+            .descriptors
+            .get(position)
+            .ok_or(ParameterStoreError::UnknownParameterIndex(index))?;
+        descriptor
+            .validate_value(&value)
+            .map_err(|error| ParameterStoreError::InvalidValue {
+                parameter: descriptor.key().as_str().to_owned(),
+                error,
+            })?;
+        self.values[position] = value;
         Ok(())
     }
 
@@ -1322,11 +1358,12 @@ mod tests {
     fn store_starts_at_defaults_and_resolves_dense_indices() {
         let definitions = descriptors();
         let mut store = ParameterStore::new(&definitions).expect("schema is valid");
-        assert_eq!(store.index("input.gain"), Some(ParameterIndex::new(0)));
+        let gain = store.index("input.gain").expect("gain index exists");
+        assert_eq!(gain, ParameterIndex::new(0));
         assert_eq!(store.index("mode"), Some(ParameterIndex::new(3)));
         assert_eq!(store.index("missing"), None);
         assert_eq!(
-            store.get_index(ParameterIndex::new(0)),
+            store.get_index(gain),
             Some(&ParameterValue::Float(0.0))
         );
         assert_eq!(store.get_index(ParameterIndex::new(99)), None);
@@ -1341,6 +1378,16 @@ mod tests {
             .set("input.gain", ParameterValue::Float(0.5))
             .expect("value is in range");
         assert_eq!(store.get("input.gain"), Some(&ParameterValue::Float(0.5)));
+        store
+            .set_index(gain, ParameterValue::Float(-0.25))
+            .expect("dense value is in range");
+        assert_eq!(store.get_index(gain), Some(&ParameterValue::Float(-0.25)));
+        assert_eq!(
+            store.set_index(ParameterIndex::new(99), ParameterValue::Boolean(true)),
+            Err(ParameterStoreError::UnknownParameterIndex(
+                ParameterIndex::new(99)
+            ))
+        );
         let error = store.set("input.gain", ParameterValue::Float(2.0));
         assert_eq!(
             error,
@@ -1349,7 +1396,7 @@ mod tests {
                 error: ParameterValueError::FloatOutOfRange,
             })
         );
-        assert_eq!(store.get("input.gain"), Some(&ParameterValue::Float(0.5)));
+        assert_eq!(store.get("input.gain"), Some(&ParameterValue::Float(-0.25)));
         assert!(matches!(
             store.set("input.gain", ParameterValue::Boolean(true)),
             Err(ParameterStoreError::InvalidValue {
