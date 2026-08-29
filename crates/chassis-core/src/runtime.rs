@@ -14,9 +14,7 @@ use crate::{
         DEFAULT_EFFECT_PORTS,
     },
     buffer::ChannelBuffer,
-    parameters::{
-        ParameterDescriptor, ParameterStateError, ParameterStore, ParameterStoreError,
-    },
+    parameters::{ParameterDescriptor, ParameterStateError, ParameterStore, ParameterStoreError},
     process::{ActivationConfig, ProcessBlock, ProcessBlockError, ProcessConfig, ProcessContext},
     state::{StateDocument, StateLimits},
 };
@@ -159,9 +157,8 @@ where
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::AlreadyActive => formatter.write_str("component instance is already active"),
-            Self::ParameterSchemaMismatch => {
-                formatter.write_str("component parameter schema does not match its instance runtime")
-            }
+            Self::ParameterSchemaMismatch => formatter
+                .write_str("component parameter schema does not match its instance runtime"),
             Self::InvalidAudioIo(error) => write!(formatter, "invalid audio I/O: {error}"),
             Self::InvalidParameters(error) => write!(formatter, "invalid parameters: {error}"),
             Self::Product(error) => write!(formatter, "product activation failed: {error}"),
@@ -406,7 +403,10 @@ where
     ///
     /// Returns [`InstanceLifecycleError::NotActive`] when inactive.
     pub fn reset(&mut self) -> Result<(), InstanceLifecycleError> {
-        let active = self.active.as_mut().ok_or(InstanceLifecycleError::NotActive)?;
+        let active = self
+            .active
+            .as_mut()
+            .ok_or(InstanceLifecycleError::NotActive)?;
         active.processor.reset();
         Ok(())
     }
@@ -455,7 +455,10 @@ where
     ///
     /// Returns [`InstanceLifecycleError::NotActive`] when already inactive.
     pub fn deactivate(&mut self) -> Result<(), InstanceLifecycleError> {
-        let active = self.active.take().ok_or(InstanceLifecycleError::NotActive)?;
+        let active = self
+            .active
+            .take()
+            .ok_or(InstanceLifecycleError::NotActive)?;
         drop(active.processor);
         Ok(())
     }
@@ -507,8 +510,8 @@ where
         product_schema: u32,
     ) -> Result<(), InstanceStateError> {
         let descriptors = self.parameters.descriptors().to_vec();
-        let mut candidate = ParameterStore::new(&descriptors)
-            .map_err(InstanceStateError::InvalidParameters)?;
+        let mut candidate =
+            ParameterStore::new(&descriptors).map_err(InstanceStateError::InvalidParameters)?;
         candidate
             .apply_state_for_product(document, product_id, product_schema)
             .map_err(InstanceStateError::ParameterState)?;
