@@ -1,6 +1,6 @@
 # Parameters, Automation, and State
 
-Status: typed parameter schema/store, dense schema-local process identity, borrowed process automation, durable core `InstanceRuntime` parameter ownership, complete runtime parameter-state replacement, and generation-checked CLAP scalar publication are implemented in source. The runtime/dense checkpoint through `76eb6b3` passed the full local Rust gate. The follow-on dense-write/CLAP-binding cleanup is implemented after that checkpoint and awaits the next local gate. Native CLAP qualification is still pending. Public API and persistence wire format are not frozen.
+Status: typed parameter schema/store, dense schema-local process identity, borrowed process automation, durable core `InstanceRuntime` parameter ownership, complete runtime parameter-state replacement, dense CLAP projection, and generation-checked CLAP scalar publication are implemented. The checkpoint through `73d7012` passed the full local Rust gate. A parameter-local publication-protocol qualification follow-on is implemented after that checkpoint and awaits requalification. Native CLAP qualification is still pending. Public API and persistence wire format are not frozen.
 
 ## Identity and schema
 
@@ -63,7 +63,15 @@ observe generation G
 
 If a newer control edit/state replacement has already published, stale realtime completion is discarded. The audio thread never waits for control ownership.
 
-The CLAP scalar bridge implements writer serialization, coherent snapshots, and exact-generation stale-write rejection locally. Before extracting a generic core synchronization primitive, model-test its ordering/progress behavior and design typed-value/reclamation semantics rather than standardizing CLAP's scalar `f64` representation.
+The CLAP scalar publication algorithm is now isolated under the CLAP parameter module as a concrete private `f64` helper. The isolation exists to test the actual adapter mechanism without implying that scalar CLAP representation is a framework abstraction.
+
+The helper uses an even completed generation and an odd in-progress writer token. Writer acquisition is a compare/exchange on the observed completed generation; successful writers publish all scalar slots and then release the next completed generation. Realtime publication attempts acquire at most once. Realtime snapshots use a fixed retry count. Control/state paths may wait for an in-flight writer because they are not realtime paths.
+
+Generation wraparound is no longer part of the correctness assumption. `u64::MAX - 1` is the final stable generation. The last legal write reaches that value; later realtime writes fail and later control/state replacements return an explicit exhaustion error. Coherent state save can still read the final stable generation. This prevents a decades-old generation token from becoming current again through integer ABA wraparound.
+
+Current algorithmic tests exhaustively enumerate the sequentially-consistent step interleavings for same-generation writer contention and for one writer racing a two-value snapshot. Concrete tests also cover stale-generation rejection, bounded realtime failure while another writer owns the token, invalid value counts, and terminal generation exhaustion.
+
+Those tests are not a C11 weak-memory proof. Before extracting any publication primitive into `chassis-core`, run the acquire/release implementation through Loom or an equivalent weak-memory permutation tool and include the pending/synchronization handoff in that model. A generic primitive also needs typed non-scalar value semantics and a reclamation strategy; passing the scalar model alone is not sufficient reason to generalize it.
 
 Modulation remains separate and must not overwrite base state.
 
@@ -132,16 +140,18 @@ Each adapter must define state-save timing relative to processing. Required beha
 - save/load races have deterministic precedence;
 - native tests cover active automation/save where supported.
 
-The current CLAP scalar bridge lets the non-realtime save path wait for a coherent completed scalar generation while realtime paths remain bounded/nonblocking. This remains provisional adapter evidence.
+The current CLAP scalar bridge lets the non-realtime save path wait for a coherent completed scalar generation while realtime paths remain bounded/nonblocking. At terminal generation exhaustion, save remains valid while new replacement publication is rejected. This remains provisional adapter evidence.
 
 ## Testing gates
 
-Validated through `76eb6b3`:
+Validated through `73d7012`:
 
 - bounded/sorted automation event shape and domain validation;
 - stable-key to dense `ParameterIndex` resolution and invalid-index rejection;
+- direct dense-index base-value replacement and invalid dense-write rejection;
 - dense-index sample-accurate set/linear cursor behavior;
-- CLAP ID to dense-index normalization and dense automation endpoint publication;
+- CLAP ID to setup-retained dense-index normalization and dense automation endpoint publication;
+- dense CLAP scalar synchronization into `InstanceRuntime` without stable-key re-resolution;
 - durable core base state across deactivate/reactivate;
 - activation observing current base state;
 - owned dynamic activation I/O;
@@ -150,16 +160,17 @@ Validated through `76eb6b3`:
 - CLAP stale-generation rejection and complete scalar state replacement;
 - full local fmt/test/Clippy/deny/machete/release conformance gate.
 
-Current follow-on source additionally covers direct dense-index base-value replacement and setup-retained CLAP binding indices. That follow-on still requires the same local gate before it becomes a validated checkpoint.
+Current follow-on source additionally isolates and tests the scalar publication protocol, removes generation wraparound, and adds exhaustive sequentially-consistent interleaving models. That follow-on still requires the same local gate before it becomes a validated checkpoint.
 
 Still required before freezing this API:
 
-- automation/control/state race tests;
-- model testing for any generalized atomic publication primitive;
+- Loom/equivalent weak-memory testing for the actual acquire/release publication protocol before any core extraction;
+- pending/synchronization handoff race coverage;
 - migration fixtures and corruption/exhaustion fuzzing;
 - gesture/echo semantics;
 - native active state-save tests;
-- cross-format state round trips.
+- cross-format state round trips;
+- typed-value/reclamation evidence before generalized publication infrastructure.
 
 ## Authoring direction
 
