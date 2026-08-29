@@ -8,19 +8,19 @@ const SNAPSHOT_RETRIES: usize = 8;
 const LAST_STABLE_GENERATION: u64 = u64::MAX - 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PublicationError {
+pub(super) enum PublicationError {
     GenerationExhausted,
     InvalidValueCount,
 }
 
-pub(crate) struct ScalarPublication {
+pub(super) struct ScalarPublication {
     values: Vec<AtomicU64>,
     generation: AtomicU64,
     pending: AtomicBool,
 }
 
 impl ScalarPublication {
-    pub(crate) fn new(initial_values: &[f64]) -> Self {
+    pub(super) fn new(initial_values: &[f64]) -> Self {
         Self {
             values: initial_values
                 .iter()
@@ -31,19 +31,19 @@ impl ScalarPublication {
         }
     }
 
-    pub(crate) fn value_count(&self) -> usize {
+    pub(super) fn len(&self) -> usize {
         self.values.len()
     }
 
-    pub(crate) fn value(&self, index: usize) -> f64 {
+    pub(super) fn value(&self, index: usize) -> f64 {
         f64::from_bits(self.values[index].load(Ordering::Acquire))
     }
 
-    pub(crate) fn request_sync(&self) {
+    pub(super) fn request_sync(&self) {
         self.pending.store(true, Ordering::Release);
     }
 
-    pub(crate) fn take_pending(&self) -> bool {
+    pub(super) fn take_pending(&self) -> bool {
         self.pending.swap(false, Ordering::AcqRel)
     }
 
@@ -71,7 +71,7 @@ impl ScalarPublication {
     }
 
     #[cfg(test)]
-    pub(crate) fn publish_value_control(
+    pub(super) fn publish_value_control(
         &self,
         index: usize,
         value: f64,
@@ -91,7 +91,7 @@ impl ScalarPublication {
         }
     }
 
-    pub(crate) fn try_publish_value(&self, index: usize, value: f64) -> bool {
+    pub(super) fn try_publish_value(&self, index: usize, value: f64) -> bool {
         let expected = self.generation.load(Ordering::Acquire);
         let Some(completed) = self.try_begin_write(expected) else {
             return false;
@@ -101,7 +101,7 @@ impl ScalarPublication {
         true
     }
 
-    pub(crate) fn publish_values_control(&self, values: &[f64]) -> Result<(), PublicationError> {
+    pub(super) fn publish_values_control(&self, values: &[f64]) -> Result<(), PublicationError> {
         if values.len() != self.values.len() {
             return Err(PublicationError::InvalidValueCount);
         }
@@ -122,7 +122,7 @@ impl ScalarPublication {
         }
     }
 
-    pub(crate) fn try_publish_values_from(&self, expected: u64, values: &[f64]) -> bool {
+    pub(super) fn try_publish_values_from(&self, expected: u64, values: &[f64]) -> bool {
         if values.len() != self.values.len() {
             return false;
         }
@@ -136,7 +136,7 @@ impl ScalarPublication {
         true
     }
 
-    pub(crate) fn try_snapshot_into(&self, output: &mut [f64]) -> Option<u64> {
+    pub(super) fn try_snapshot_into(&self, output: &mut [f64]) -> Option<u64> {
         if output.len() != self.values.len() {
             return None;
         }
@@ -157,7 +157,7 @@ impl ScalarPublication {
         None
     }
 
-    pub(crate) fn snapshot_control_into(
+    pub(super) fn snapshot_control_into(
         &self,
         output: &mut [f64],
     ) -> Result<u64, PublicationError> {
@@ -234,8 +234,14 @@ mod tests {
         }
 
         fn assert_serialized(self) {
-            assert_eq!(self.acquired.into_iter().filter(|acquired| *acquired).count(), 1);
-            assert_eq!(self.owner, None);
+            assert_eq!(
+                self.acquired
+                    .into_iter()
+                    .filter(|acquired| *acquired)
+                    .count(),
+                1
+            );
+            assert!(self.owner.is_none());
             assert_eq!(self.generation, 2);
         }
     }
