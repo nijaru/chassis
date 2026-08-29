@@ -481,7 +481,7 @@ impl ClapParameterState {
         let mut values = vec![0.0; self.publication.len()];
         self.publication
             .snapshot_control_into(&mut values)
-            .map_err(ParameterStateError::Publication)?;
+            .map_err(publication_state_error)?;
         let mut document = StateDocument::new(product_id, product_schema)
             .map_err(ParameterStateError::Document)?;
         for (binding, value) in self.bindings.iter().zip(values) {
@@ -539,7 +539,7 @@ impl ClapParameterState {
         }
         self.publication
             .publish_values_control(&candidate)
-            .map_err(ParameterStateError::Publication)
+            .map_err(publication_state_error)
     }
 }
 
@@ -570,7 +570,8 @@ impl std::error::Error for ParameterSyncError {}
 pub(crate) enum ParameterStateError {
     Document(StateDocumentError),
     Encode(StateEncodeError),
-    Publication(PublicationError),
+    PublicationGenerationExhausted,
+    InvalidPublicationValueCount,
     ProductIdentityMismatch,
     ProductSchemaMismatch,
     UnknownParameter(String),
@@ -587,10 +588,10 @@ impl fmt::Display for ParameterStateError {
             Self::Encode(error) => {
                 write!(formatter, "parameter state could not be encoded: {error}")
             }
-            Self::Publication(PublicationError::GenerationExhausted) => {
+            Self::PublicationGenerationExhausted => {
                 formatter.write_str("parameter publication generation is exhausted")
             }
-            Self::Publication(PublicationError::InvalidValueCount) => {
+            Self::InvalidPublicationValueCount => {
                 formatter.write_str("parameter publication has the wrong value count")
             }
             Self::ProductIdentityMismatch => {
@@ -613,6 +614,13 @@ impl fmt::Display for ParameterStateError {
 }
 
 impl std::error::Error for ParameterStateError {}
+
+fn publication_state_error(error: PublicationError) -> ParameterStateError {
+    match error {
+        PublicationError::GenerationExhausted => ParameterStateError::PublicationGenerationExhausted,
+        PublicationError::InvalidValueCount => ParameterStateError::InvalidPublicationValueCount,
+    }
+}
 
 pub(crate) fn normalized_event(
     state: &ClapParameterState,
