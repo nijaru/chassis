@@ -1,3 +1,4 @@
+# Temporary PR trigger; no validation semantics differ from main.
 name: Rust CI
 
 on:
