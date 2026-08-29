@@ -2,9 +2,9 @@
 
 This is the current implementation order on `main`. It is an execution plan, not a stable API promise.
 
-## Validated checkpoint — `76eb6b3`
+## Validated checkpoint — `73d7012`
 
-The following architecture work passed the full local Rust gate at `76eb6b3`:
+The runtime, state, dense-parameter, and dense-projection work through `73d7012` passed the full local Rust gate:
 
 - CLAP scalar publication serializes writers with a generation CAS token;
 - realtime automation endpoint publication is rejected when its observed generation is stale;
@@ -19,7 +19,10 @@ The following architecture work passed the full local Rust gate at `76eb6b3`:
 - the CLAP audio processor uses `InstanceRuntime` and synchronizes published host state into the runtime before processor activation;
 - `ParameterIndex` is the schema-local dense realtime identity while `ParameterKey` remains persistent/authoring identity;
 - normalized CLAP parameter events map host IDs to dense indices before process validation;
-- process event validation and trajectory cursors use dense indices rather than stable string lookup.
+- process event validation and trajectory cursors use dense indices rather than stable string lookup;
+- `ParameterStore::set_index()` validates and replaces base values directly by schema-local `ParameterIndex`;
+- each CLAP parameter binding retains its declaration-order `ParameterIndex` at setup;
+- CLAP ID normalization and scalar projection synchronization reuse that stored dense index instead of re-resolving stable keys.
 
 Validation passed:
 
@@ -34,40 +37,45 @@ cargo build --release -p chassis-clap-conformance --locked
 
 `cargo deny` emitted only the existing unmatched-license-allowance warnings.
 
-The CLAP cross-domain atomic parameter publication remains adapter-local. CLAP's audio-processor object exists only while active, so durable cross-activation host-visible state cannot simply live inside the audio-thread `InstanceRuntime`. Do not hide that host lifetime difference by moving the component or a mutex-protected processor into shared state.
+The CLAP cross-domain parameter publication remains adapter-local. CLAP's audio-processor object exists only while active, so durable cross-activation host-visible state cannot simply live inside the audio-thread `InstanceRuntime`. Do not hide that host lifetime difference by moving the component or a mutex-protected processor into shared state.
 
 Dense IDs deliberately do not add a second per-parameter event index yet. The bounded globally sorted event scan remains until measurements justify another structure.
 
-## Current follow-on — dense projection cleanup
+## Current follow-on — publication protocol qualification
 
-The next small cleanup is now implemented after `76eb6b3`:
+The existing scalar publication algorithm is now isolated as a private helper under the CLAP parameter module. This is a testability boundary, not framework infrastructure: it still stores CLAP-compatible scalar `f64` values and is not exported from the adapter.
 
-- `ParameterStore::set_index()` validates and replaces base values directly by schema-local `ParameterIndex`;
-- out-of-range dense writes return an explicit `UnknownParameterIndex` error;
-- each CLAP parameter binding retains its declaration-order `ParameterIndex` at setup;
-- CLAP ID normalization reuses the stored binding index instead of converting the binding position per event;
-- CLAP scalar projection synchronization writes by dense index instead of binary-searching stable parameter keys.
+Current source after `73d7012` additionally:
 
-This is intentionally a completion of the dense-identity cut, not a new abstraction layer. Stable keys remain authoritative for persistence/authoring/state, and `ParameterIndex` remains meaningful only relative to one immutable schema.
+- removes generation-counter wraparound as a correctness assumption;
+- reserves `u64::MAX - 1` as the final stable generation and refuses further writes once reached, so an ancient generation can never become current again through ABA wraparound;
+- lets coherent state save continue at the terminal generation while later state replacement fails explicitly rather than spinning or wrapping;
+- keeps realtime writer acquisition one-shot/nonblocking;
+- keeps realtime snapshot work bounded to a fixed retry count;
+- keeps control/state publication allowed to wait for a short in-flight writer;
+- exhaustively enumerates sequentially-consistent same-generation writer interleavings and proves only one writer acquires;
+- exhaustively enumerates the reader/writer steps of a two-value snapshot and rejects every accepted mixed snapshot;
+- tests concrete stale-generation rejection, bounded realtime failure while a writer owns the token, invalid value counts, and terminal generation exhaustion.
 
-Re-run the same full local Rust gate before treating this follow-on as validated. Hosted GitHub Actions is configured for Rust 1.98, but recent runs have failed before any runner step starts and therefore provide no compiler/test evidence.
+This follow-on still needs the full local Rust gate. The abstract interleaving model is useful algorithmic evidence, but it is **not** a substitute for weak-memory permutation testing of the acquire/release implementation.
 
-## Slice 2 — publication/generation generalization
+## Slice 2 — finish publication protocol qualification
 
-The current CLAP scalar bridge is implementation evidence, not yet generic framework infrastructure.
+Before considering any extraction from CLAP:
 
-Before extracting a shared core primitive:
+1. qualify the current refactor with the standard local gate;
+2. model the acquire/release protocol under Loom or an equivalent C11 weak-memory permutation tool;
+3. cover writer acquisition, coherent multi-value snapshots, stale-generation rejection, and the pending/synchronization handoff;
+4. confirm realtime operations have no retry loop whose termination depends on another thread;
+5. keep terminal generation exhaustion in the model so wraparound cannot reintroduce ABA;
+6. define reclamation before supporting values/resources that cannot fit directly in atomics;
+7. preserve typed choice/string semantics rather than forcing every parameter through `f64` merely because CLAP scalar values do.
 
-- model concurrent writer acquisition, coherent snapshots, stale-generation rejection, and ordering with Loom or equivalent;
-- define wraparound assumptions or remove dependence on them;
-- prove realtime paths never spin/wait on control writers;
-- define reclamation before supporting values that cannot fit directly in atomics;
-- preserve typed choice/string semantics rather than forcing every parameter through `f64` merely because CLAP scalar values do;
-- decide which state belongs to a deployment-independent core publication primitive and which remains format translation.
+Loom 0.7.2 is the current upstream release as of this checkpoint. Adding it should be a deliberate dev/test dependency with the resulting `Cargo.lock` update reviewed and committed; do not hand-edit the lockfile.
 
-The desired authority model is semantic, not necessarily one physical object shared by every host thread. A deployment may use synchronized projections when its lifecycle requires them, but there must still be one defined publication order and no independently mutable semantic copies.
+A passing model does **not** imply that this helper belongs in `chassis-core`. Keep it adapter-local unless another deployment or real client demonstrates the same publication contract independently. A future deployment-independent primitive needs a semantic typed-value contract and a reclamation story, not merely a generalized version of CLAP's first scalar bridge.
 
-Do not promote the current CAS bridge into `chassis-core` merely because the CLAP scalar case works. Model the protocol first.
+The desired authority model remains semantic rather than requiring one physical object shared by every host thread. A deployment may use synchronized projections when its lifecycle requires them, but there must still be one defined publication order and no independently mutable semantic copies.
 
 ## Slice 3 — complete state + migrations
 
