@@ -1362,10 +1362,7 @@ mod tests {
         assert_eq!(gain, ParameterIndex::new(0));
         assert_eq!(store.index("mode"), Some(ParameterIndex::new(3)));
         assert_eq!(store.index("missing"), None);
-        assert_eq!(
-            store.get_index(gain),
-            Some(&ParameterValue::Float(0.0))
-        );
+        assert_eq!(store.get_index(gain), Some(&ParameterValue::Float(0.0)));
         assert_eq!(store.get_index(ParameterIndex::new(99)), None);
         assert_eq!(
             store.get("mode"),
