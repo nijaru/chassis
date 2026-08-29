@@ -435,6 +435,7 @@ impl ClapParameterState {
         self.pending.store(true, Ordering::Release);
     }
 
+    #[cfg(test)]
     pub(crate) fn apply_plain_value(&self, id: ClapId, value: f64) -> bool {
         let Some((index, value)) = self.validated_plain_value(id, value) else {
             return false;
