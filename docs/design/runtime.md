@@ -1,6 +1,6 @@
 # Runtime Ownership Model
 
-Status: durable single-owner `InstanceRuntime`, owned activation I/O, and dense schema-local realtime parameter identity are implemented in core; the CLAP audio path activates through that runtime and normalizes backend parameter IDs to dense indices before process validation. The current source has not yet passed the post-refactor local Rust gate, and CLAP cross-domain scalar publication remains an adapter-local provisional mechanism. Public API is pre-alpha and not frozen.
+Status: durable single-owner `InstanceRuntime`, owned activation I/O, and dense schema-local realtime parameter identity are implemented in core; the CLAP audio path activates through that runtime and normalizes backend parameter IDs to dense indices before process validation. The runtime/dense checkpoint through `76eb6b3` passed the full local Rust gate. A follow-on dense-index write/projection cleanup is implemented after that checkpoint and awaits requalification. CLAP cross-domain scalar publication remains an adapter-local provisional mechanism. Public API is pre-alpha and not frozen.
 
 ## Goal
 
@@ -102,7 +102,7 @@ Per-call validation covers facts that can change each callback:
 
 Stable endpoint/port translation should be resolved during setup, not by rescanning semantic endpoints with allocation or unbounded work each callback.
 
-Normalized process parameter events now carry schema-local `ParameterIndex` values. `ParameterStore` resolves stable `ParameterKey` values to declaration-order dense indices during setup/control work, adapters map backend IDs to those indices before product DSP, and process validation/cursors use direct dense lookup/comparison. Persistent state and authoring continue to use stable keys; runtime indices are never serialized. The cursor still scans the globally sample-sorted bounded event slice, so a second per-parameter event index should be added only if measurement shows that scan is material.
+Normalized process parameter events now carry schema-local `ParameterIndex` values. `ParameterStore` resolves stable `ParameterKey` values to declaration-order dense indices during setup/control work, adapters map backend IDs to those indices before product DSP, and process validation/cursors use direct dense lookup/comparison. `ParameterStore::set_index()` also lets an already-resolved runtime projection update a validated base value directly without another stable-key lookup. Persistent state and authoring continue to use stable keys; runtime indices are never serialized. The cursor still scans the globally sample-sorted bounded event slice, so a second per-parameter event index should be added only if measurement shows that scan is material.
 
 ## State replacement
 
@@ -139,6 +139,8 @@ The current CLAP scalar bridge instead keeps a synchronized adapter-local public
 2. synchronize the durable published CLAP scalar state into the runtime;
 3. construct the processor through `InstanceRuntime::activate()` so preloaded state is visible to preparation;
 4. keep the runtime as the semantic audio-domain projection while active.
+
+During CLAP parameter setup, each binding retains its schema-local `ParameterIndex` alongside its backend `ClapId` and stable descriptor. Host-ID normalization reuses that stored index, and block-boundary scalar synchronization writes into `InstanceRuntime` through `ParameterStore::set_index()` rather than re-resolving stable keys. Stable keys remain in the state/authoring path.
 
 During processing, host/control publication is synchronized into the runtime at bounded block boundaries. Automation endpoints publish back only if the generation they were derived from is still current.
 
@@ -193,7 +195,9 @@ When added:
 
 ## Validation status
 
-External conformance tests cover:
+The full local Rust gate passed for checkpoint `76eb6b3`, including formatting, workspace tests, Clippy with `-D warnings`, cargo-deny, cargo-machete, and the release `chassis-clap-conformance` build.
+
+That validated checkpoint covers:
 
 - durable base parameters across deactivate/reactivate;
 - activation observing current base state;
@@ -202,8 +206,9 @@ External conformance tests cover:
 - processing from durable base state;
 - stable-key to dense-index resolution;
 - dense-index process validation and sample-accurate trajectories;
-- rejection of out-of-schema runtime indices before product DSP.
+- rejection of out-of-schema runtime indices before product DSP;
+- CLAP activation through `InstanceRuntime` and dense CLAP-ID normalization/publication.
 
-The CLAP adapter has been migrated to activate through `InstanceRuntime`, synchronize host-published state before processor creation, and normalize CLAP parameter IDs to dense `ParameterIndex` values before process validation/publication.
+The current follow-on adds direct dense base-state replacement and setup-retained CLAP binding indices so projection synchronization no longer performs stable-key lookup. Those changes are implemented but not yet locally requalified.
 
-These changes are **implemented but not yet compile-qualified** in the current checkpoint. A temporary GitHub Actions workflow was attempted, but the job failed before a runner or any step started and therefore provided no Rust evidence. The next gate is local `fmt`/workspace tests/Clippy/deny/machete/release conformance build. After that, publication/generation model testing, state migration fixtures, general CLAP I/O, and native CLAP qualification are the next architecture/correctness slices.
+GitHub Actions is configured for Rust 1.98 validation, but recent hosted runs have failed before any runner step starts and therefore provide no Rust evidence. The next authoritative gate remains the local fmt/workspace tests/Clippy/deny/machete/release conformance build. After the follow-on is green, publication/generation model testing, state migration fixtures, general CLAP I/O, and native CLAP qualification are the next architecture/correctness slices.
