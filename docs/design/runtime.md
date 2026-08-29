@@ -1,6 +1,6 @@
 # Runtime Ownership Model
 
-Status: durable single-owner `InstanceRuntime`, owned activation I/O, and dense schema-local realtime parameter identity are implemented in core; the CLAP audio path activates through that runtime and normalizes backend parameter IDs to dense indices before process validation. The runtime/dense checkpoint through `76eb6b3` passed the full local Rust gate. A follow-on dense-index write/projection cleanup is implemented after that checkpoint and awaits requalification. CLAP cross-domain scalar publication remains an adapter-local provisional mechanism. Public API is pre-alpha and not frozen.
+Status: durable single-owner `InstanceRuntime`, owned activation I/O, dense schema-local realtime parameter identity, and dense CLAP parameter projection are implemented. The checkpoint through `73d7012` passed the full local Rust gate. A CLAP-local publication-protocol qualification follow-on is implemented after that checkpoint and awaits requalification. CLAP cross-domain scalar publication remains an adapter-local provisional mechanism rather than core infrastructure. Public API is pre-alpha and not frozen.
 
 ## Goal
 
@@ -144,7 +144,9 @@ During CLAP parameter setup, each binding retains its schema-local `ParameterInd
 
 During processing, host/control publication is synchronized into the runtime at bounded block boundaries. Automation endpoints publish back only if the generation they were derived from is still current.
 
-This bridge is deliberately not yet generalized into core. The current scalar implementation is useful evidence, but a deployment-independent publication primitive must handle typed parameter semantics, progress, ordering, and reclamation rather than simply standardizing the first CLAP `f64` representation.
+The scalar publication algorithm is now isolated as a private submodule of the CLAP parameter implementation. This is a testability boundary only. It still stores adapter-specific scalar `f64` values and is deliberately not exposed as a reusable Chassis primitive.
+
+This bridge is not yet generalized into core. A deployment-independent publication primitive must handle typed parameter semantics, progress, ordering, and reclamation rather than standardizing the first CLAP scalar representation. Another deployment or real client should independently demonstrate the same semantic contract before extraction is considered.
 
 ## Cross-domain generation requirements
 
@@ -159,7 +161,13 @@ Any generalized publication mechanism must preserve these rules:
 7. the audio thread never spins or waits for a control writer;
 8. replaced nontrivial resources are not accidentally reclaimed on the audio thread.
 
-The current CLAP scalar bridge implements writer serialization, coherent snapshots, and stale-generation rejection locally. Before promoting a subtle atomic primitive into `chassis-core`, model/property-test its ordering and progress behavior (for example with Loom).
+The current CLAP helper represents completed generations as even values and an in-progress writer token as the intervening odd value. A writer acquires the exact observed completed generation with compare/exchange, updates the scalar slots, and publishes the next completed generation with release ordering. Realtime writers make one acquisition attempt; realtime snapshots make a fixed number of attempts. Control/state paths may wait for an in-flight writer because they are not realtime paths.
+
+Generation wraparound is no longer a correctness assumption. `u64::MAX - 1` is the final stable generation. The last legal publication may reach it, after which realtime publication fails and control/state replacement returns explicit generation exhaustion. Coherent reads remain valid at the final generation. This removes the integer-ABA path where a sufficiently old generation token could otherwise become current again after wraparound.
+
+The adapter-local tests now exhaustively enumerate sequentially-consistent same-generation writer interleavings and the reader/writer steps of a two-value coherent snapshot. Concrete tests also cover stale-generation rejection, bounded realtime failure while another writer owns the token, wrong value counts, and terminal generation exhaustion.
+
+Those tests are algorithmic evidence, not a weak-memory proof of the acquire/release implementation. Before any core extraction, the actual protocol—including writer acquisition, coherent snapshots, stale-generation rejection, and the pending/synchronization handoff—must be exercised under Loom or an equivalent C11 weak-memory permutation model. Typed non-scalar values and reclamation remain separate prerequisites.
 
 ## Deactivation and destruction
 
@@ -195,7 +203,7 @@ When added:
 
 ## Validation status
 
-The full local Rust gate passed for checkpoint `76eb6b3`, including formatting, workspace tests, Clippy with `-D warnings`, cargo-deny, cargo-machete, and the release `chassis-clap-conformance` build.
+The full local Rust gate passed for checkpoint `73d7012`, including formatting, workspace tests, Clippy with `-D warnings`, cargo-deny, cargo-machete, and the release `chassis-clap-conformance` build.
 
 That validated checkpoint covers:
 
@@ -205,10 +213,13 @@ That validated checkpoint covers:
 - complete transactional state replacement;
 - processing from durable base state;
 - stable-key to dense-index resolution;
+- direct dense-index base-state replacement and out-of-range rejection;
 - dense-index process validation and sample-accurate trajectories;
 - rejection of out-of-schema runtime indices before product DSP;
-- CLAP activation through `InstanceRuntime` and dense CLAP-ID normalization/publication.
+- CLAP activation through `InstanceRuntime`;
+- setup-retained dense CLAP parameter bindings;
+- dense CLAP-ID normalization, automation endpoint publication, and runtime projection without stable-key re-resolution.
 
-The current follow-on adds direct dense base-state replacement and setup-retained CLAP binding indices so projection synchronization no longer performs stable-key lookup. Those changes are implemented but not yet locally requalified.
+The current follow-on isolates the CLAP scalar publication protocol, makes generation exhaustion terminal instead of wrapping, and adds exhaustive sequentially-consistent interleaving tests plus concrete progress/staleness tests. Those changes are implemented but have not yet passed the local Rust gate.
 
-GitHub Actions is configured for Rust 1.98 validation, but recent hosted runs have failed before any runner step starts and therefore provide no Rust evidence. The next authoritative gate remains the local fmt/workspace tests/Clippy/deny/machete/release conformance build. After the follow-on is green, publication/generation model testing, state migration fixtures, general CLAP I/O, and native CLAP qualification are the next architecture/correctness slices.
+GitHub Actions has not provided usable compiler evidence in recent runs because jobs failed before runner steps began. The authoritative next gate is the local fmt/workspace tests/Clippy/deny/machete/release conformance build. After that passes, weak-memory modeling of this exact adapter-local protocol is the next publication task; state migration fixtures, general CLAP I/O, and native CLAP qualification follow.
