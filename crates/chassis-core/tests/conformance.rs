@@ -239,11 +239,7 @@ fn parameter_automation_is_sample_accurate_through_runtime() {
         .expect("gain index exists");
 
     let raw_events = [
-        chassis_core::automation::ParameterEvent::set(
-            1,
-            gain,
-            ParameterEventValue::Float(0.5),
-        ),
+        chassis_core::automation::ParameterEvent::set(1, gain, ParameterEventValue::Float(0.5)),
         chassis_core::automation::ParameterEvent::linear(3, gain, 0.0),
     ];
     let events = ParameterEvents::new(&raw_events, 4, 8).expect("events are valid");
