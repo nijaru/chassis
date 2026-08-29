@@ -31,7 +31,7 @@ impl ScalarPublication {
         }
     }
 
-    pub(crate) fn len(&self) -> usize {
+    pub(crate) fn value_count(&self) -> usize {
         self.values.len()
     }
 
@@ -177,6 +177,86 @@ impl ScalarPublication {
 mod tests {
     use super::*;
 
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Writer {
+        First,
+        Second,
+    }
+
+    impl Writer {
+        const fn index(self) -> usize {
+            match self {
+                Self::First => 0,
+                Self::Second => 1,
+            }
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    struct WriterModel {
+        generation: u8,
+        owner: Option<Writer>,
+        acquired: [bool; 2],
+        steps: [usize; 2],
+    }
+
+    impl WriterModel {
+        const fn new() -> Self {
+            Self {
+                generation: 0,
+                owner: None,
+                acquired: [false; 2],
+                steps: [0; 2],
+            }
+        }
+
+        fn step(&mut self, writer: Writer) {
+            let index = writer.index();
+            match self.steps[index] {
+                0 => {
+                    if self.generation == 0 {
+                        assert!(self.owner.is_none());
+                        self.generation = 1;
+                        self.owner = Some(writer);
+                        self.acquired[index] = true;
+                    }
+                }
+                1 => {
+                    if self.acquired[index] {
+                        assert_eq!(self.owner, Some(writer));
+                        self.generation = 2;
+                        self.owner = None;
+                    }
+                }
+                _ => unreachable!("model writer has two steps"),
+            }
+            self.steps[index] += 1;
+        }
+
+        fn assert_serialized(self) {
+            assert_eq!(self.acquired.into_iter().filter(|acquired| *acquired).count(), 1);
+            assert_eq!(self.owner, None);
+            assert_eq!(self.generation, 2);
+        }
+    }
+
+    fn enumerate_writer_interleavings(first_left: usize, second_left: usize, model: WriterModel) {
+        if first_left == 0 && second_left == 0 {
+            model.assert_serialized();
+            return;
+        }
+        if first_left != 0 {
+            let mut next = model;
+            next.step(Writer::First);
+            enumerate_writer_interleavings(first_left - 1, second_left, next);
+        }
+        if second_left != 0 {
+            let mut next = model;
+            next.step(Writer::Second);
+            enumerate_writer_interleavings(first_left, second_left - 1, next);
+        }
+    }
+
     #[derive(Clone, Copy)]
     enum Actor {
         Reader,
@@ -244,7 +324,7 @@ mod tests {
         }
     }
 
-    fn enumerate_interleavings(
+    fn enumerate_snapshot_interleavings(
         readers_left: usize,
         writers_left: usize,
         model: SnapshotModel,
@@ -256,18 +336,23 @@ mod tests {
         if readers_left != 0 {
             let mut next = model;
             next.step(Actor::Reader);
-            enumerate_interleavings(readers_left - 1, writers_left, next);
+            enumerate_snapshot_interleavings(readers_left - 1, writers_left, next);
         }
         if writers_left != 0 {
             let mut next = model;
             next.step(Actor::Writer);
-            enumerate_interleavings(readers_left, writers_left - 1, next);
+            enumerate_snapshot_interleavings(readers_left, writers_left - 1, next);
         }
     }
 
     #[test]
+    fn abstract_same_generation_writers_are_serialized() {
+        enumerate_writer_interleavings(2, 2, WriterModel::new());
+    }
+
+    #[test]
     fn abstract_snapshot_interleavings_never_accept_mixed_values() {
-        enumerate_interleavings(4, 4, SnapshotModel::new());
+        enumerate_snapshot_interleavings(4, 4, SnapshotModel::new());
     }
 
     #[test]
@@ -295,7 +380,7 @@ mod tests {
         let mut snapshot = [0.0];
 
         assert!(!publication.try_publish_value(0, 0.25));
-        assert_eq!(publication.try_snapshot_into(&mut snapshot), None);
+        assert!(publication.try_snapshot_into(&mut snapshot).is_none());
     }
 
     #[test]
