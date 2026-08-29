@@ -9,7 +9,8 @@ use std::{
 use chassis_core::{
     automation::{ParameterEvent, ParameterEventChange, ParameterEventValue},
     parameters::{
-        ParameterDescriptor, ParameterKind, ParameterStore, ParameterType, ParameterValue,
+        ParameterDescriptor, ParameterIndex, ParameterKind, ParameterStore, ParameterType,
+        ParameterValue,
     },
     state::{
         StateDocument, StateDocumentError, StateEncodeError, StateEntry, StateLimits, StateValue,
@@ -512,13 +513,15 @@ impl ClapParameterState {
             return Ok(());
         };
         for event in events {
-            let Some(index) = self.index_for_key(event.parameter()) else {
+            let index = usize::try_from(event.parameter().get())
+                .map_err(|_| ParameterSyncError::InvalidPublishedValue)?;
+            let Some(binding) = self.bindings.get(index) else {
                 return Err(ParameterSyncError::InvalidPublishedValue);
             };
             let ParameterEventChange::Set(value) = event.change() else {
                 return Err(ParameterSyncError::InvalidPublishedValue);
             };
-            let Some(value) = self.bindings[index].event_plain_value(value) else {
+            let Some(value) = binding.event_plain_value(value) else {
                 return Err(ParameterSyncError::InvalidPublishedValue);
             };
             scratch[index] = value;
@@ -694,20 +697,21 @@ pub(crate) fn normalized_event(
     id: ClapId,
     time: u32,
     value: f64,
-) -> Option<ParameterEvent<'_>> {
+) -> Option<ParameterEvent<'static>> {
     let index = state.index_for_id(id)?;
+    let parameter = u32::try_from(index).ok().map(ParameterIndex::new)?;
     let binding = &state.bindings[index];
     Some(ParameterEvent::set(
         time,
-        binding.descriptor.key().as_str(),
+        parameter,
         binding.event_value(value),
     ))
 }
 
-pub(crate) fn normalized_events<'a>(
-    state: &'a ClapParameterState,
+pub(crate) fn normalized_events(
+    state: &ClapParameterState,
     input: &InputEvents<'_>,
-    output: &mut Vec<ParameterEvent<'a>>,
+    output: &mut Vec<ParameterEvent<'static>>,
 ) -> Result<(), &'static str> {
     output.clear();
     for event in input {
@@ -777,7 +781,7 @@ mod tests {
     }
 
     #[test]
-    fn input_events_normalize_without_copying_parameter_keys() {
+    fn input_events_normalize_to_dense_parameter_indices() {
         let descriptors = descriptors();
         let state =
             ClapParameterState::new(&descriptors, &[("gain", 1), ("steps", 2), ("bypass", 3)])
@@ -794,7 +798,11 @@ mod tests {
         assert_eq!(events.len(), 2);
         assert_eq!(
             events.iter().next().expect("first event").parameter(),
-            "gain"
+            ParameterIndex::new(0)
+        );
+        assert_eq!(
+            events.iter().nth(1).expect("second event").parameter(),
+            ParameterIndex::new(1)
         );
         assert_eq!(
             events.iter().nth(1).expect("second event").change(),
@@ -840,9 +848,9 @@ mod tests {
             ClapParameterState::new(&descriptors, &[("gain", 1), ("steps", 2), ("bypass", 3)])
                 .expect("parameter mapping is valid");
         let events = [
-            ParameterEvent::set(0, "gain", ParameterEventValue::Float(0.25)),
-            ParameterEvent::set(2, "gain", ParameterEventValue::Float(0.75)),
-            ParameterEvent::set(3, "steps", ParameterEventValue::Integer(-2)),
+            ParameterEvent::set(0, ParameterIndex::new(0), ParameterEventValue::Float(0.25)),
+            ParameterEvent::set(2, ParameterIndex::new(0), ParameterEventValue::Float(0.75)),
+            ParameterEvent::set(3, ParameterIndex::new(1), ParameterEventValue::Integer(-2)),
         ];
         let mut scratch = vec![0.0; 3];
         state

@@ -8,6 +8,8 @@
 
 use core::fmt;
 
+use crate::parameters::ParameterIndex;
+
 /// A process-time parameter value borrowed from backend/event storage.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ParameterEventValue<'a> {
@@ -38,17 +40,25 @@ pub enum ParameterEventChange<'a> {
 }
 
 /// One borrowed, sample-positioned parameter change.
+///
+/// Realtime events use a schema-local [`ParameterIndex`] rather than a stable
+/// string key. Adapters/runtime setup resolve persistent [`ParameterKey`](crate::parameters::ParameterKey)
+/// identities to dense indices before entering the process path.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ParameterEvent<'a> {
     offset: u32,
-    parameter: &'a str,
+    parameter: ParameterIndex,
     change: ParameterEventChange<'a>,
 }
 
 impl<'a> ParameterEvent<'a> {
     /// Construct an instantaneous parameter set.
     #[must_use]
-    pub const fn set(offset: u32, parameter: &'a str, value: ParameterEventValue<'a>) -> Self {
+    pub const fn set(
+        offset: u32,
+        parameter: ParameterIndex,
+        value: ParameterEventValue<'a>,
+    ) -> Self {
         Self {
             offset,
             parameter,
@@ -58,7 +68,7 @@ impl<'a> ParameterEvent<'a> {
 
     /// Construct a linear endpoint for one floating-point parameter.
     #[must_use]
-    pub const fn linear(offset: u32, parameter: &'a str, value: f64) -> Self {
+    pub const fn linear(offset: u32, parameter: ParameterIndex, value: f64) -> Self {
         Self {
             offset,
             parameter,
@@ -72,9 +82,9 @@ impl<'a> ParameterEvent<'a> {
         self.offset
     }
 
-    /// Return the stable parameter key.
+    /// Return the schema-local dense parameter identity.
     #[must_use]
-    pub const fn parameter(self) -> &'a str {
+    pub const fn parameter(self) -> ParameterIndex {
         self.parameter
     }
 
@@ -87,9 +97,9 @@ impl<'a> ParameterEvent<'a> {
 
 /// Validated borrowed parameter events for one process block.
 ///
-/// Construction checks the event count, identifier/value shape, finite
-/// floating-point values, and nondecreasing sample offsets. It does not copy
-/// event storage or validate a key against a component schema; the active
+/// Construction checks the event count, value shape, finite floating-point
+/// values, and nondecreasing sample offsets. It does not copy event storage or
+/// validate an index against a component schema; the active
 /// [`ParameterStore`](crate::parameters::ParameterStore) performs that second
 /// boundary check before product DSP runs.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -106,8 +116,8 @@ impl<'a> ParameterEvents<'a> {
     ///
     /// # Errors
     ///
-    /// Returns [`ParameterEventsError`] when the event slice exceeds its
-    /// bound, contains malformed values/identifiers, or is not sample-sorted.
+    /// Returns [`ParameterEventsError`] when the event slice exceeds its bound,
+    /// contains malformed values, or is not sample-sorted.
     pub fn new(
         events: &'a [ParameterEvent<'a>],
         frame_count: u32,
@@ -124,9 +134,6 @@ impl<'a> ParameterEvents<'a> {
 
         let mut previous_offset = None;
         for (index, event) in events.iter().enumerate() {
-            if !valid_identifier(event.parameter) {
-                return Err(ParameterEventsError::InvalidParameterKey { index });
-            }
             if event.offset >= frame_count {
                 return Err(ParameterEventsError::OffsetOutOfRange {
                     index,
@@ -153,7 +160,7 @@ impl<'a> ParameterEvents<'a> {
                     }
                 }
                 ParameterEventChange::Set(ParameterEventValue::Choice(value)) => {
-                    if !valid_identifier(value) {
+                    if !valid_choice_identifier(value) {
                         return Err(ParameterEventsError::InvalidChoice { index });
                     }
                 }
@@ -201,8 +208,11 @@ impl<'a> ParameterEvents<'a> {
         self.events.iter()
     }
 
-    /// Iterate only events targeting one stable parameter key.
-    pub fn for_parameter(self, parameter: &str) -> impl Iterator<Item = &'a ParameterEvent<'a>> {
+    /// Iterate only events targeting one dense parameter index.
+    pub fn for_parameter(
+        self,
+        parameter: ParameterIndex,
+    ) -> impl Iterator<Item = &'a ParameterEvent<'a>> {
         self.events
             .iter()
             .filter(move |event| event.parameter == parameter)
@@ -215,17 +225,13 @@ impl<'a> ParameterEvents<'a> {
     ///
     /// # Errors
     ///
-    /// Returns [`ParameterCursorError::InvalidParameterKey`] for an invalid
-    /// key or [`ParameterCursorError::NonFiniteInitial`] for a non-finite base
+    /// Returns [`ParameterCursorError::NonFiniteInitial`] for a non-finite base
     /// value.
-    pub fn float_cursor<'parameter>(
+    pub fn float_cursor(
         self,
-        parameter: &'parameter str,
+        parameter: ParameterIndex,
         initial: f64,
-    ) -> Result<FloatParameterCursor<'a, 'parameter>, ParameterCursorError> {
-        if !valid_identifier(parameter) {
-            return Err(ParameterCursorError::InvalidParameterKey);
-        }
+    ) -> Result<FloatParameterCursor<'a>, ParameterCursorError> {
         if !initial.is_finite() {
             return Err(ParameterCursorError::NonFiniteInitial);
         }
@@ -245,17 +251,17 @@ impl<'a> ParameterEvents<'a> {
 ///
 /// The cursor performs no allocation. It consumes only events for its target
 /// while preserving the source order of equal-offset events.
-pub struct FloatParameterCursor<'events, 'parameter> {
+pub struct FloatParameterCursor<'events> {
     events: &'events [ParameterEvent<'events>],
     frame_count: u32,
-    parameter: &'parameter str,
+    parameter: ParameterIndex,
     next_event: usize,
     point_offset: u32,
     point_value: f64,
     last_query_offset: Option<u32>,
 }
 
-impl<'events> FloatParameterCursor<'events, '_> {
+impl FloatParameterCursor<'_> {
     /// Evaluate the trajectory at one sample offset.
     ///
     /// Values are constant between points unless the next point is linear,
@@ -328,7 +334,7 @@ impl<'events> FloatParameterCursor<'events, '_> {
     fn apply_point(
         &mut self,
         index: usize,
-        event: &ParameterEvent<'events>,
+        event: &ParameterEvent<'_>,
     ) -> Result<(), ParameterCursorError> {
         let value = match event.change {
             ParameterEventChange::Set(ParameterEventValue::Float(value))
@@ -343,7 +349,7 @@ impl<'events> FloatParameterCursor<'events, '_> {
     }
 }
 
-fn valid_identifier(value: &str) -> bool {
+fn valid_choice_identifier(value: &str) -> bool {
     !value.is_empty()
         && !value.chars().any(char::is_whitespace)
         && !value.chars().any(char::is_control)
@@ -360,11 +366,6 @@ pub enum ParameterEventsError {
         actual: usize,
         /// Accepted maximum.
         maximum: u32,
-    },
-    /// An event used an empty/whitespace/control-character parameter key.
-    InvalidParameterKey {
-        /// Zero-based event index.
-        index: usize,
     },
     /// An event used an offset outside the current block.
     OffsetOutOfRange {
@@ -408,12 +409,6 @@ impl fmt::Display for ParameterEventsError {
                     "parameter event slice has {actual} entries but {maximum} are allowed"
                 )
             }
-            Self::InvalidParameterKey { index } => {
-                write!(
-                    formatter,
-                    "parameter event {index} has an invalid parameter key"
-                )
-            }
             Self::OffsetOutOfRange {
                 index,
                 offset,
@@ -448,8 +443,6 @@ impl std::error::Error for ParameterEventsError {}
 /// Failure while evaluating a floating-point trajectory cursor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParameterCursorError {
-    /// Cursor target key was invalid.
-    InvalidParameterKey,
     /// Cursor base value was not finite.
     NonFiniteInitial,
     /// Query offset was outside the validated block.
@@ -476,7 +469,6 @@ pub enum ParameterCursorError {
 impl fmt::Display for ParameterCursorError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidParameterKey => formatter.write_str("parameter cursor key is invalid"),
             Self::NonFiniteInitial => formatter.write_str("parameter cursor base is not finite"),
             Self::OffsetOutOfRange {
                 offset,
@@ -502,11 +494,14 @@ impl std::error::Error for ParameterCursorError {}
 mod tests {
     use super::*;
 
+    const GAIN: ParameterIndex = ParameterIndex::new(0);
+    const OTHER: ParameterIndex = ParameterIndex::new(1);
+
     #[test]
     fn validates_bounded_sorted_events() {
         let events = [
-            ParameterEvent::set(0, "gain", ParameterEventValue::Float(0.5)),
-            ParameterEvent::linear(2, "gain", 1.0),
+            ParameterEvent::set(0, GAIN, ParameterEventValue::Float(0.5)),
+            ParameterEvent::linear(2, GAIN, 1.0),
         ];
         let validated = ParameterEvents::new(&events, 4, 2).expect("events are valid");
         assert_eq!(validated.len(), 2);
@@ -521,8 +516,8 @@ mod tests {
         );
 
         let equal_offset = [
-            ParameterEvent::set(1, "gain", ParameterEventValue::Float(0.25)),
-            ParameterEvent::set(1, "gain", ParameterEventValue::Float(0.75)),
+            ParameterEvent::set(1, GAIN, ParameterEventValue::Float(0.25)),
+            ParameterEvent::set(1, GAIN, ParameterEventValue::Float(0.75)),
         ];
         let equal_offset =
             ParameterEvents::new(&equal_offset, 4, 2).expect("equal offsets retain source order");
@@ -540,25 +535,25 @@ mod tests {
     #[test]
     fn rejects_malformed_event_order_and_values() {
         let reversed = [
-            ParameterEvent::set(2, "gain", ParameterEventValue::Float(0.5)),
-            ParameterEvent::set(1, "gain", ParameterEventValue::Float(0.25)),
+            ParameterEvent::set(2, GAIN, ParameterEventValue::Float(0.5)),
+            ParameterEvent::set(1, GAIN, ParameterEventValue::Float(0.25)),
         ];
         assert!(matches!(
             ParameterEvents::new(&reversed, 4, 2),
             Err(ParameterEventsError::NonMonotonicOffsets { .. })
         ));
 
-        let invalid = [ParameterEvent::set(
+        let invalid_choice = [ParameterEvent::set(
             0,
-            "bad key",
+            GAIN,
             ParameterEventValue::Choice("bad choice"),
         )];
         assert_eq!(
-            ParameterEvents::new(&invalid, 4, 1),
-            Err(ParameterEventsError::InvalidParameterKey { index: 0 })
+            ParameterEvents::new(&invalid_choice, 4, 1),
+            Err(ParameterEventsError::InvalidChoice { index: 0 })
         );
 
-        let non_finite = [ParameterEvent::linear(0, "gain", f64::NAN)];
+        let non_finite = [ParameterEvent::linear(0, GAIN, f64::NAN)];
         assert_eq!(
             ParameterEvents::new(&non_finite, 4, 1),
             Err(ParameterEventsError::NonFiniteValue { index: 0 })
@@ -568,13 +563,13 @@ mod tests {
     #[test]
     fn cursor_evaluates_sets_and_linear_segments_without_copying() {
         let events = [
-            ParameterEvent::set(1, "gain", ParameterEventValue::Float(0.5)),
-            ParameterEvent::set(2, "other", ParameterEventValue::Boolean(true)),
-            ParameterEvent::linear(3, "gain", 0.0),
+            ParameterEvent::set(1, GAIN, ParameterEventValue::Float(0.5)),
+            ParameterEvent::set(2, OTHER, ParameterEventValue::Boolean(true)),
+            ParameterEvent::linear(3, GAIN, 0.0),
         ];
         let events = ParameterEvents::new(&events, 4, 3).expect("events are valid");
         let mut cursor = events
-            .float_cursor("gain", 1.0)
+            .float_cursor(GAIN, 1.0)
             .expect("cursor base is valid");
 
         assert_eq!(cursor.value_at(0), Ok(1.0));
@@ -593,12 +588,12 @@ mod tests {
     #[test]
     fn cursor_interpolates_extreme_finite_endpoints_without_nan() {
         let events = [
-            ParameterEvent::set(0, "gain", ParameterEventValue::Float(-f64::MAX)),
-            ParameterEvent::linear(2, "gain", f64::MAX),
+            ParameterEvent::set(0, GAIN, ParameterEventValue::Float(-f64::MAX)),
+            ParameterEvent::linear(2, GAIN, f64::MAX),
         ];
         let events = ParameterEvents::new(&events, 3, 2).expect("events are finite");
         let mut cursor = events
-            .float_cursor("gain", 0.0)
+            .float_cursor(GAIN, 0.0)
             .expect("cursor base is valid");
 
         assert_eq!(cursor.value_at(0), Ok(-f64::MAX));

@@ -1,6 +1,6 @@
 # Runtime Ownership Model
 
-Status: durable single-owner `InstanceRuntime` and owned activation I/O are implemented in core and the CLAP audio path now activates through that runtime. The current source has not yet passed the post-refactor local Rust gate, and CLAP cross-domain scalar publication remains an adapter-local provisional mechanism. Public API is pre-alpha and not frozen.
+Status: durable single-owner `InstanceRuntime`, owned activation I/O, and dense schema-local realtime parameter identity are implemented in core; the CLAP audio path activates through that runtime and normalizes backend parameter IDs to dense indices before process validation. The current source has not yet passed the post-refactor local Rust gate, and CLAP cross-domain scalar publication remains an adapter-local provisional mechanism. Public API is pre-alpha and not frozen.
 
 ## Goal
 
@@ -102,7 +102,7 @@ Per-call validation covers facts that can change each callback:
 
 Stable endpoint/port translation should be resolved during setup, not by rescanning semantic endpoints with allocation or unbounded work each callback.
 
-The current parameter event prototype still carries stable string keys. Before the process API freezes or high-count automation is promoted, schema/runtime setup should resolve `ParameterKey` values to dense `ParameterIndex` values. Persistent state/authoring continue to use stable keys; realtime matching/cursors use dense indices.
+Normalized process parameter events now carry schema-local `ParameterIndex` values. `ParameterStore` resolves stable `ParameterKey` values to declaration-order dense indices during setup/control work, adapters map backend IDs to those indices before product DSP, and process validation/cursors use direct dense lookup/comparison. Persistent state and authoring continue to use stable keys; runtime indices are never serialized. The cursor still scans the globally sample-sorted bounded event slice, so a second per-parameter event index should be added only if measurement shows that scan is material.
 
 ## State replacement
 
@@ -193,14 +193,17 @@ When added:
 
 ## Validation status
 
-New external `instance_runtime` conformance tests cover:
+External conformance tests cover:
 
 - durable base parameters across deactivate/reactivate;
 - activation observing current base state;
 - owned dynamic audio configuration outliving caller storage;
 - complete transactional state replacement;
-- processing from durable base state.
+- processing from durable base state;
+- stable-key to dense-index resolution;
+- dense-index process validation and sample-accurate trajectories;
+- rejection of out-of-schema runtime indices before product DSP.
 
-The CLAP adapter has been migrated to activate through `InstanceRuntime` and synchronize host-published state before processor creation.
+The CLAP adapter has been migrated to activate through `InstanceRuntime`, synchronize host-published state before processor creation, and normalize CLAP parameter IDs to dense `ParameterIndex` values before process validation/publication.
 
-These changes are **implemented but not yet compile-qualified** in the current checkpoint. A temporary GitHub Actions workflow was attempted, but the job failed before a runner or any step started and therefore provided no Rust evidence. The next gate is local `fmt`/workspace tests/Clippy/deny/machete/release conformance build, followed by dense parameter-index work and then native CLAP qualification.
+These changes are **implemented but not yet compile-qualified** in the current checkpoint. A temporary GitHub Actions workflow was attempted, but the job failed before a runner or any step started and therefore provided no Rust evidence. The next gate is local `fmt`/workspace tests/Clippy/deny/machete/release conformance build. After that, publication/generation model testing, state migration fixtures, general CLAP I/O, and native CLAP qualification are the next architecture/correctness slices.

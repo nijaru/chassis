@@ -16,15 +16,20 @@ The following architecture work is now present in source:
 - activation can observe current validated base parameters through `Component::activate_with_parameters`;
 - active runtime owns a copy of negotiated `ConfiguredAudioPort` values allocated outside the callback;
 - core runtime parameter state replacement is complete and transactional at the `InstanceRuntime` boundary;
-- the CLAP audio processor now uses `InstanceRuntime` rather than the activation-local `Activated` shell and synchronizes published host state into the runtime before processor activation.
+- the CLAP audio processor uses `InstanceRuntime` and synchronizes published host state into the runtime before processor activation;
+- `ParameterIndex` is the schema-local dense realtime identity while `ParameterKey` remains persistent/authoring identity;
+- normalized CLAP parameter events map host IDs to dense indices before process validation;
+- process event validation and trajectory cursors use dense indices rather than stable string lookup.
 
 The CLAP cross-domain atomic parameter publication remains adapter-local. CLAP's audio-processor object exists only while active, so durable cross-activation host-visible state cannot simply live inside the audio-thread `InstanceRuntime`. Do not hide that host lifetime difference by moving the component or a mutex-protected processor into shared state.
+
+Dense IDs deliberately do not add a second per-parameter event index yet. The bounded globally sorted event scan remains until measurements justify another structure.
 
 No source-level claim above is a validation claim yet.
 
 ## Gate 1 — local Rust validation
 
-Run on the development machine before broadening the process API:
+Run on the development machine before broadening the process API further:
 
 ```text
 cargo fmt --all -- --check
@@ -39,27 +44,7 @@ Hosted Actions was tried on `main`, but the job failed before any runner or step
 
 Fix every compile/test/lint failure without weakening the ownership or realtime contracts. Once this gate is green, update the owning design documents from "implemented, unqualified" to the exact validated state.
 
-## Slice 2 — dense runtime parameter identity
-
-Resolve stable keys once during schema/runtime setup:
-
-```text
-ParameterKey (persistent) -> ParameterIndex (schema-local dense)
-```
-
-Use `ParameterIndex` in normalized process events, schema validation, and trajectory cursors.
-
-Acceptance criteria:
-
-- stable keys remain the only persistence/authoring identity;
-- runtime indices are never serialized and have meaning only relative to one validated schema;
-- adapters resolve backend IDs to runtime indices outside the hot path;
-- process validation no longer binary-searches string keys for every event;
-- trajectory cursors compare dense indices rather than strings;
-- no callback-time allocation is introduced;
-- measure whether a second per-parameter event index is justified before adding one. Dense IDs alone are the first step; do not add elaborate indexing until event-count evidence warrants it.
-
-## Slice 3 — publication/generation generalization
+## Slice 2 — publication/generation generalization
 
 The current CLAP scalar bridge is implementation evidence, not yet generic framework infrastructure.
 
@@ -74,9 +59,9 @@ Before extracting a shared core primitive:
 
 The desired authority model is semantic, not necessarily one physical object shared by every host thread. A deployment may use synchronized projections when its lifecycle requires them, but there must still be one defined publication order and no independently mutable semantic copies.
 
-## Slice 4 — complete state + migrations
+## Slice 3 — complete state + migrations
 
-`InstanceRuntime::apply_parameter_state_for_product` now provides complete transactional parameter replacement, while the lower-level `ParameterStore::apply_state_for_product` remains a patch-like semantic helper.
+`InstanceRuntime::apply_parameter_state_for_product` provides complete transactional parameter replacement, while the lower-level `ParameterStore::apply_state_for_product` remains a patch-like semantic helper.
 
 Next state work:
 
@@ -100,9 +85,9 @@ Acceptance criteria:
 
 Do not freeze CHSS v1 until migration and cross-format fixtures exist.
 
-## Slice 5 — general CLAP I/O
+## Slice 4 — general CLAP I/O
 
-The lifetime/ownership prerequisite is now in place: active runtime owns its negotiated configuration. Use that to broaden the adapter instead of adding callback-time owned vectors.
+The lifetime/ownership prerequisite is in place: active runtime owns its negotiated configuration. Use that to broaden the adapter instead of adding callback-time owned vectors.
 
 Order:
 
@@ -114,9 +99,9 @@ Order:
 
 Required invariant: no `Vec<ChannelBuffer>` allocation in the process callback.
 
-## Slice 6 — native CLAP qualification
+## Slice 5 — native CLAP qualification
 
-Once the Rust gate is green and dense parameter identity/general I/O changes are coherent, rebuild/package the conformance `.clap` and qualify the *current* artifact:
+Once the Rust gate is green and the current runtime/parameter/I/O changes are coherent, rebuild/package the conformance `.clap` and qualify the *current* artifact:
 
 - `clap-validator` normal suite and bounded fuzzing;
 - parameter enumeration/get/value conversion;
@@ -131,7 +116,7 @@ Once the Rust gate is green and dense parameter identity/general I/O changes are
 
 Do not treat the older 19-pass validator artifact as evidence for the current parameter/state/runtime slice.
 
-## Slice 7 — CLAP capability expansion
+## Slice 6 — CLAP capability expansion
 
 After current native semantics qualify:
 
@@ -144,7 +129,7 @@ After current native semantics qualify:
 
 Each capability needs conformance plus native-host evidence rather than source support alone.
 
-## Slice 8 — first real FX client
+## Slice 7 — first real FX client
 
 Use a real effect before growing generic conveniences much further. It should exercise many parameters, state, latency/offline behavior, explicit smoothing policy, and meter/telemetry publication without sharing mutable processor state.
 

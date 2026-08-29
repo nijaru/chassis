@@ -1,22 +1,22 @@
 # Parameters, Automation, and State
 
-Status: typed parameter schema/store, borrowed process automation, durable core `InstanceRuntime` parameter ownership, complete runtime parameter-state replacement, and generation-checked CLAP scalar publication are implemented in source. The post-refactor Rust gate and current native CLAP qualification are still pending. Public API and persistence wire format are not frozen.
+Status: typed parameter schema/store, dense schema-local process identity, borrowed process automation, durable core `InstanceRuntime` parameter ownership, complete runtime parameter-state replacement, and generation-checked CLAP scalar publication are implemented in source. The post-refactor Rust gate and current native CLAP qualification are still pending. Public API and persistence wire format are not frozen.
 
 ## Identity and schema
 
-Persistent parameter identity is a stable human-readable `ParameterKey`. Rust names, declaration order, display labels, backend IDs, and future runtime indices are not persistence identity.
+Persistent parameter identity is a stable human-readable `ParameterKey`. Rust names, declaration order, display labels, backend IDs, and runtime indices are not persistence identity.
 
 Supported semantic types are float, integer, boolean, and choice. Choice options also have stable identities.
 
 Backend numeric IDs are format projections of canonical keys. Compatibility mappings must be deterministic/frozen before stable release.
 
-The next process-path change is a dense schema-local identity:
+Realtime/process identity is now a dense schema-local value:
 
 ```text
 ParameterKey (persistent) -> ParameterIndex (runtime only)
 ```
 
-`ParameterIndex` is never serialized. Setup resolves keys/backend IDs once; realtime event validation and trajectory matching should use the dense value instead of repeated string lookup.
+`ParameterStore::index()` resolves a stable key to the declaration-order dense index of one validated immutable schema. `ParameterIndex` is never serialized. Adapters resolve backend IDs to the same dense index before process validation; realtime event validation and trajectory matching no longer binary-search stable string keys.
 
 ## Plain values
 
@@ -46,7 +46,9 @@ Processing distinguishes:
 
 `ParameterEvents` and trajectory cursors are derived block views, not persistent state.
 
-Current events still carry stable string keys. Dense `ParameterIndex` conversion is the next API/performance step. Start with dense IDs only; add more elaborate per-parameter event indexing only if measurements justify it.
+Normalized events now carry `ParameterIndex`, not stable strings. `ParameterStore::validate_events()` performs direct descriptor lookup by dense index, and cursors compare the dense index while scanning the globally sample-sorted bounded event slice. The CLAP adapter maps each known CLAP ID to the binding's schema index during normalization and uses the same dense index when publishing automation endpoints back to its scalar bridge.
+
+Dense IDs are intentionally the first step only. Do not add a second per-parameter event index or callback-time owned structure until measurements show the bounded global scan is material.
 
 ## Automation publication
 
@@ -87,7 +89,7 @@ State
 └── typed/custom product persistent fields
 ```
 
-Transient DSP history is not persisted by convention.
+Transient DSP history is not persisted by convention. `ParameterIndex` values are process-local schema projections and never appear in state bytes.
 
 State encoding is deterministic, bounded, portable, explicitly versioned, and independent of Rust layout. `state-format.md` owns the current wire-format prototype.
 
@@ -137,7 +139,9 @@ The current CLAP scalar bridge lets the non-realtime save path wait for a cohere
 Current source/test coverage includes:
 
 - bounded/sorted automation event shape and domain validation;
-- sample-accurate set/linear cursor behavior;
+- stable-key to dense `ParameterIndex` resolution and invalid-index rejection;
+- dense-index sample-accurate set/linear cursor behavior;
+- CLAP ID to dense-index normalization and dense automation endpoint publication;
 - durable core base state across deactivate/reactivate;
 - activation observing current base state;
 - owned dynamic activation I/O;
@@ -148,7 +152,6 @@ Current source/test coverage includes:
 Still required before freezing this API:
 
 - local post-refactor fmt/test/Clippy/deny/machete/release-build gate;
-- dense `ParameterIndex` conversion and mapping tests;
 - automation/control/state race tests;
 - model testing for any generalized atomic publication primitive;
 - migration fixtures and corruption/exhaustion fuzzing;
@@ -165,7 +168,7 @@ declare typed controls + stable identities + policy
         ↓
 InstanceRuntime / deployment publication owns base-state semantics
         ↓
-setup resolves stable identities into bounded runtime projections
+setup resolves stable identities into bounded dense runtime projections
         ↓
 Processor consumes explicit realtime trajectories/views
 ```

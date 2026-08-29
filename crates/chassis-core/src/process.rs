@@ -510,6 +510,7 @@ mod tests {
         audio::{DEFAULT_EFFECT_CONFIGURATION, MAIN_INPUT, MAIN_OUTPUT},
         automation::{ParameterEvent, ParameterEventValue},
         buffer::{ChannelBuffer, InputEndpoint, OutputEndpoint},
+        parameters::ParameterIndex,
     };
 
     fn maximum(value: u32) -> NonZeroU32 {
@@ -623,7 +624,7 @@ mod tests {
 
         let raw_events = [ParameterEvent::set(
             0,
-            "gain",
+            ParameterIndex::new(0),
             ParameterEventValue::Float(0.5),
         )];
         let events = ParameterEvents::new(&raw_events, 2, 1).expect("event shape is valid");

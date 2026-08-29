@@ -121,7 +121,7 @@ where
 {
     runtime: InstanceRuntime<P>,
     shared: &'a ChassisShared,
-    normalized_events: Vec<chassis_core::automation::ParameterEvent<'a>>,
+    normalized_events: Vec<chassis_core::automation::ParameterEvent<'static>>,
     control_values: Vec<f64>,
 }
 

@@ -19,7 +19,7 @@ use chassis_core::{
     },
     automation::{ParameterEventValue, ParameterEvents},
     buffer::{ChannelBuffer, InputEndpoint, OutputEndpoint},
-    parameters::{ParameterDescriptor, ParameterValue},
+    parameters::{ParameterDescriptor, ParameterIndex, ParameterValue},
     process::{
         ActivationConfig, ProcessBlock, ProcessBlockError, ProcessConfig, ProcessContext,
         ProcessMode, TransportSnapshot,
@@ -99,6 +99,7 @@ impl Process<f32> for ConformanceProcessor {
     fn process(&mut self, block: &mut ProcessBlock<'_, '_, '_, '_, f32>) {
         self.metrics.process_calls.fetch_add(1, Ordering::Relaxed);
         let parameter_events = block.parameter_events();
+        let gain_index = block.parameters().index("input.gain");
         let base_gain = match block.parameters().get("input.gain") {
             Some(ParameterValue::Float(value)) => *value,
             _ => f64::from(self.gain),
@@ -116,19 +117,23 @@ impl Process<f32> for ConformanceProcessor {
                 continue;
             }
 
-            let mut gain = parameter_events
-                .float_cursor("input.gain", base_gain)
-                .expect("conformance gain cursor has a finite base");
-            for (offset, sample) in buffer
+            let samples = buffer
                 .make_in_place()
-                .expect("conformance main channels always have paired input/output")
-                .iter_mut()
-                .enumerate()
-            {
-                *sample *= gain
-                    .value_at(u32::try_from(offset).expect("test block fits in u32"))
-                    .expect("conformance cursor offset is within the block")
-                    as f32;
+                .expect("conformance main channels always have paired input/output");
+            if let Some(gain_index) = gain_index {
+                let mut gain = parameter_events
+                    .float_cursor(gain_index, base_gain)
+                    .expect("conformance gain cursor has a finite base");
+                for (offset, sample) in samples.iter_mut().enumerate() {
+                    *sample *= gain
+                        .value_at(u32::try_from(offset).expect("test block fits in u32"))
+                        .expect("conformance cursor offset is within the block")
+                        as f32;
+                }
+            } else {
+                for sample in samples {
+                    *sample *= self.gain;
+                }
             }
         }
     }
@@ -228,14 +233,18 @@ fn parameter_automation_is_sample_accurate_through_runtime() {
         DEFAULT_EFFECT_CONFIGURATION,
     )
     .expect("parameterized conformance activation is valid");
+    let gain = active
+        .parameters()
+        .index("input.gain")
+        .expect("gain index exists");
 
     let raw_events = [
         chassis_core::automation::ParameterEvent::set(
             1,
-            "input.gain",
+            gain,
             ParameterEventValue::Float(0.5),
         ),
-        chassis_core::automation::ParameterEvent::linear(3, "input.gain", 0.0),
+        chassis_core::automation::ParameterEvent::linear(3, gain, 0.0),
     ];
     let events = ParameterEvents::new(&raw_events, 4, 8).expect("events are valid");
     let context = ProcessContext::new(
@@ -281,7 +290,7 @@ fn invalid_parameter_events_never_reach_product_dsp() {
     .expect("parameterized conformance activation is valid");
     let raw_events = [chassis_core::automation::ParameterEvent::set(
         0,
-        "missing",
+        ParameterIndex::new(99),
         ParameterEventValue::Float(0.5),
     )];
     let events = ParameterEvents::new(&raw_events, 2, 8).expect("event shape is valid");

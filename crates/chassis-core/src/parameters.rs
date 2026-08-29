@@ -60,6 +60,32 @@ impl fmt::Display for ParameterKey {
     }
 }
 
+/// Dense schema-local identity used only by runtime/process paths.
+///
+/// A `ParameterIndex` is meaningful only relative to one validated immutable
+/// parameter schema. It is never persistent identity and must not be serialized
+/// into presets/projects or derived from backend numeric IDs without schema
+/// resolution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ParameterIndex(u32);
+
+impl ParameterIndex {
+    /// Construct a raw schema-local index.
+    ///
+    /// The active [`ParameterStore`] validates that an index is in range before
+    /// product DSP receives its event stream.
+    #[must_use]
+    pub const fn new(index: u32) -> Self {
+        Self(index)
+    }
+
+    /// Return the raw schema-local index.
+    #[must_use]
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
+
 /// Stable identity of one choice option.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ChoiceId(String);
@@ -915,10 +941,33 @@ impl ParameterStore {
         &self.descriptors
     }
 
+    /// Resolve a stable key to its dense schema-local runtime index.
+    #[must_use]
+    pub fn index(&self, key: impl AsRef<str>) -> Option<ParameterIndex> {
+        let position = self.position_for_key(key.as_ref())?;
+        let index = u32::try_from(position).ok()?;
+        Some(ParameterIndex::new(index))
+    }
+
+    /// Return the descriptor at one dense schema-local index.
+    #[must_use]
+    pub fn descriptor(&self, index: ParameterIndex) -> Option<&ParameterDescriptor> {
+        let position = usize::try_from(index.get()).ok()?;
+        self.descriptors.get(position)
+    }
+
+    /// Return the current value at one dense schema-local index.
+    #[must_use]
+    pub fn get_index(&self, index: ParameterIndex) -> Option<&ParameterValue> {
+        let position = usize::try_from(index.get()).ok()?;
+        self.values.get(position)
+    }
+
     /// Return the current value for a stable key.
     #[must_use]
     pub fn get(&self, key: impl AsRef<str>) -> Option<&ParameterValue> {
-        self.index_of(key.as_ref()).map(|index| &self.values[index])
+        self.position_for_key(key.as_ref())
+            .map(|index| &self.values[index])
     }
 
     /// Replace one value after validating it against its descriptor.
@@ -936,7 +985,7 @@ impl ParameterStore {
     ) -> Result<(), ParameterStoreError> {
         let key = key.as_ref();
         let index = self
-            .index_of(key)
+            .position_for_key(key)
             .ok_or_else(|| ParameterStoreError::UnknownParameter(key.to_owned()))?;
         self.descriptors[index]
             .validate_value(&value)
@@ -986,25 +1035,22 @@ impl ParameterStore {
 
     /// Validate normalized process-time parameter events against this schema.
     ///
-    /// This performs no allocation on the successful path and leaves the store
-    /// unchanged. It is intended to run at the process boundary before product
-    /// DSP receives the event view.
+    /// This performs no allocation or stable-key lookup on the successful path
+    /// and leaves the store unchanged. Adapters resolve persistent/backend
+    /// identity to [`ParameterIndex`] before constructing the process event
+    /// stream.
     ///
     /// # Errors
     ///
-    /// Returns [`ParameterAutomationError`] for unknown keys or values outside
-    /// their descriptor domains.
+    /// Returns [`ParameterAutomationError`] for out-of-range indices or values
+    /// outside their descriptor domains.
     pub fn validate_events(
         &self,
         events: ParameterEvents<'_>,
     ) -> Result<(), ParameterAutomationError> {
-        for (index, event) in events.iter().enumerate() {
-            let parameter = event.parameter();
-            let Some(descriptor) = self
-                .index_of(parameter)
-                .map(|index| &self.descriptors[index])
-            else {
-                return Err(ParameterAutomationError::UnknownParameter { index });
+        for (event_index, event) in events.iter().enumerate() {
+            let Some(descriptor) = self.descriptor(event.parameter()) else {
+                return Err(ParameterAutomationError::UnknownParameter { index: event_index });
             };
             let value = match event.change() {
                 ParameterEventChange::Set(value) => value,
@@ -1012,7 +1058,10 @@ impl ParameterStore {
             };
             descriptor
                 .validate_event_value(&value)
-                .map_err(|error| ParameterAutomationError::InvalidValue { index, error })?;
+                .map_err(|error| ParameterAutomationError::InvalidValue {
+                    index: event_index,
+                    error,
+                })?;
         }
         Ok(())
     }
@@ -1041,7 +1090,7 @@ impl ParameterStore {
                 continue;
             };
             let index = self
-                .index_of(key)
+                .position_for_key(key)
                 .ok_or_else(|| ParameterStateError::UnknownParameter(key.to_owned()))?;
             let value = parameter_value(entry.value()).map_err(|error| {
                 ParameterStateError::InvalidValue {
@@ -1088,7 +1137,7 @@ impl ParameterStore {
         self.apply_state_entries(document)
     }
 
-    fn index_of(&self, key: &str) -> Option<usize> {
+    fn position_for_key(&self, key: &str) -> Option<usize> {
         self.lookup
             .binary_search_by(|index| self.descriptors[*index].key().as_str().cmp(key))
             .ok()
@@ -1128,7 +1177,7 @@ fn parameter_value(value: &StateValue) -> Result<ParameterValue, ParameterValueE
 /// Failure while validating normalized process-time parameter events.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParameterAutomationError {
-    /// Event key did not identify a descriptor.
+    /// Event index did not identify a descriptor in the active schema.
     UnknownParameter {
         /// Zero-based event index.
         index: usize,
@@ -1148,7 +1197,7 @@ impl fmt::Display for ParameterAutomationError {
             Self::UnknownParameter { index } => {
                 write!(
                     formatter,
-                    "parameter event {index} targets an unknown parameter"
+                    "parameter event {index} targets an unknown parameter index"
                 )
             }
             Self::InvalidValue { index, error } => {
@@ -1270,10 +1319,17 @@ mod tests {
     }
 
     #[test]
-    fn store_starts_at_defaults_and_rejects_invalid_replacements() {
+    fn store_starts_at_defaults_and_resolves_dense_indices() {
         let definitions = descriptors();
         let mut store = ParameterStore::new(&definitions).expect("schema is valid");
-        assert_eq!(store.get("input.gain"), Some(&ParameterValue::Float(0.0)));
+        assert_eq!(store.index("input.gain"), Some(ParameterIndex::new(0)));
+        assert_eq!(store.index("mode"), Some(ParameterIndex::new(3)));
+        assert_eq!(store.index("missing"), None);
+        assert_eq!(
+            store.get_index(ParameterIndex::new(0)),
+            Some(&ParameterValue::Float(0.0))
+        );
+        assert_eq!(store.get_index(ParameterIndex::new(99)), None);
         assert_eq!(
             store.get("mode"),
             Some(&ParameterValue::Choice(
@@ -1392,18 +1448,21 @@ mod tests {
     }
 
     #[test]
-    fn automation_validation_uses_parameter_domains() {
+    fn automation_validation_uses_dense_indices_and_parameter_domains() {
         let definitions = descriptors();
         let store = ParameterStore::new(&definitions).expect("schema is valid");
+        let gain = store.index("input.gain").expect("gain index exists");
+        let quality = store.index("quality.level").expect("quality index exists");
+        let mode = store.index("mode").expect("mode index exists");
         let raw_events = [
-            ParameterEvent::set(0, "input.gain", ParameterEventValue::Float(0.5)),
-            ParameterEvent::linear(2, "input.gain", 1.0),
-            ParameterEvent::set(3, "mode", ParameterEventValue::Choice("warm")),
+            ParameterEvent::set(0, gain, ParameterEventValue::Float(0.5)),
+            ParameterEvent::linear(2, gain, 1.0),
+            ParameterEvent::set(3, mode, ParameterEventValue::Choice("warm")),
         ];
         let events = ParameterEvents::new(&raw_events, 4, 4).expect("events are valid");
         store.validate_events(events).expect("events match schema");
 
-        let invalid = [ParameterEvent::linear(0, "quality.level", 2.0)];
+        let invalid = [ParameterEvent::linear(0, quality, 2.0)];
         let invalid = ParameterEvents::new(&invalid, 1, 1).expect("event shape is valid");
         assert!(matches!(
             store.validate_events(invalid),
@@ -1418,7 +1477,7 @@ mod tests {
 
         let unknown = [ParameterEvent::set(
             0,
-            "missing",
+            ParameterIndex::new(99),
             ParameterEventValue::Boolean(true),
         )];
         let unknown = ParameterEvents::new(&unknown, 1, 1).expect("event shape is valid");
