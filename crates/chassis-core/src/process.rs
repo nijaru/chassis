@@ -5,7 +5,9 @@ use core::{fmt, num::NonZeroU32};
 use crate::{
     audio::AudioIoConfiguration,
     automation::ParameterEvents,
-    buffer::ChannelBuffer,
+    buffer::{
+        BufferAccessError, BufferRelationship, ChannelBuffer, InputEndpoint, OutputEndpoint,
+    },
     parameters::{ParameterAutomationError, ParameterStore},
 };
 
@@ -289,6 +291,193 @@ impl<'a> ActivationConfig<'a> {
     }
 }
 
+/// Common safe operations exposed by one process-time channel view.
+///
+/// [`ChannelBuffer`] implements this directly. A buffer source may instead yield
+/// another safe view type as long as it preserves the same endpoint, aliasing,
+/// frame-bound, and explicit-copy semantics. Product DSP therefore does not need
+/// to know whether channel views were materialized in a flat slice or generated
+/// lazily by an adapter.
+pub trait ProcessChannel<S> {
+    /// Return the already-proven host buffer relationship.
+    fn relationship(&self) -> BufferRelationship;
+
+    /// Return the semantic input endpoint when one exists.
+    fn input_endpoint(&self) -> Option<InputEndpoint>;
+
+    /// Return the semantic output endpoint when one exists.
+    fn output_endpoint(&self) -> Option<OutputEndpoint>;
+
+    /// Return the number of samples exposed by this view.
+    fn frame_count(&self) -> usize;
+
+    /// Borrow readable input samples when an input endpoint exists.
+    fn input(&self) -> Option<&[S]>;
+
+    /// Borrow writable output samples when an output endpoint exists.
+    fn output_mut(&mut self) -> Option<&mut [S]>;
+
+    /// Return writable in-place samples, explicitly copying separate input to output once.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BufferAccessError`] for input-only/output-only relationships
+    /// that cannot define an input-to-output in-place transform.
+    fn make_in_place(&mut self) -> Result<&mut [S], BufferAccessError>
+    where
+        S: Copy;
+}
+
+impl<S> ProcessChannel<S> for ChannelBuffer<'_, S> {
+    fn relationship(&self) -> BufferRelationship {
+        ChannelBuffer::relationship(self)
+    }
+
+    fn input_endpoint(&self) -> Option<InputEndpoint> {
+        ChannelBuffer::input_endpoint(self)
+    }
+
+    fn output_endpoint(&self) -> Option<OutputEndpoint> {
+        ChannelBuffer::output_endpoint(self)
+    }
+
+    fn frame_count(&self) -> usize {
+        ChannelBuffer::frame_count(self)
+    }
+
+    fn input(&self) -> Option<&[S]> {
+        ChannelBuffer::input(self)
+    }
+
+    fn output_mut(&mut self) -> Option<&mut [S]> {
+        ChannelBuffer::output_mut(self)
+    }
+
+    fn make_in_place(&mut self) -> Result<&mut [S], BufferAccessError>
+    where
+        S: Copy,
+    {
+        ChannelBuffer::make_in_place(self)
+    }
+}
+
+impl<S> ProcessChannel<S> for &mut ChannelBuffer<'_, S> {
+    fn relationship(&self) -> BufferRelationship {
+        (**self).relationship()
+    }
+
+    fn input_endpoint(&self) -> Option<InputEndpoint> {
+        (**self).input_endpoint()
+    }
+
+    fn output_endpoint(&self) -> Option<OutputEndpoint> {
+        (**self).output_endpoint()
+    }
+
+    fn frame_count(&self) -> usize {
+        (**self).frame_count()
+    }
+
+    fn input(&self) -> Option<&[S]> {
+        (**self).input()
+    }
+
+    fn output_mut(&mut self) -> Option<&mut [S]> {
+        (**self).output_mut()
+    }
+
+    fn make_in_place(&mut self) -> Result<&mut [S], BufferAccessError>
+    where
+        S: Copy,
+    {
+        (**self).make_in_place()
+    }
+}
+
+/// Reiterable, allocation-free source of safe process channel views.
+///
+/// `channels()` starts one traversal of the current callback's already-mapped
+/// channel views. Implementations may borrow a flat slice or generate views
+/// lazily from an adapter-owned host buffer representation. They must not grow
+/// owned storage in the callback. `validate_frame_count()` must inspect every
+/// channel the source can yield and reject a mismatched callback dimension before
+/// product DSP is entered.
+pub trait ProcessBufferSource<S> {
+    /// One safe channel item yielded by a traversal.
+    type Channel<'a>: ProcessChannel<S>
+    where
+        Self: 'a,
+        S: 'a;
+
+    /// Iterator over all channel items for one traversal.
+    type Channels<'a>: Iterator<Item = Self::Channel<'a>>
+    where
+        Self: 'a,
+        S: 'a;
+
+    /// Validate callback-varying frame dimensions for every available channel.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProcessBlockError::BufferFrameCountMismatch`] when one yielded
+    /// channel would not expose exactly `expected` samples.
+    fn validate_frame_count(&mut self, expected: usize) -> Result<(), ProcessBlockError>;
+
+    /// Start a complete channel traversal without allocating.
+    fn channels(&mut self) -> Self::Channels<'_>;
+}
+
+/// Compatibility buffer source over an already-materialized channel slice.
+pub struct ChannelBufferSlice<'buffers, 'samples, S> {
+    buffers: &'buffers mut [ChannelBuffer<'samples, S>],
+}
+
+impl<'buffers, 'samples, S> ChannelBufferSlice<'buffers, 'samples, S> {
+    /// Borrow an existing slice as a process buffer source.
+    #[must_use]
+    pub fn new(buffers: &'buffers mut [ChannelBuffer<'samples, S>]) -> Self {
+        Self { buffers }
+    }
+
+    /// Return the underlying materialized channel slice.
+    #[must_use]
+    pub fn as_mut_slice(&mut self) -> &mut [ChannelBuffer<'samples, S>] {
+        self.buffers
+    }
+}
+
+impl<'buffers, 'samples, S> ProcessBufferSource<S>
+    for ChannelBufferSlice<'buffers, 'samples, S>
+{
+    type Channel<'a>
+        = &'a mut ChannelBuffer<'samples, S>
+    where
+        Self: 'a,
+        S: 'a;
+
+    type Channels<'a>
+        = core::slice::IterMut<'a, ChannelBuffer<'samples, S>>
+    where
+        Self: 'a,
+        S: 'a;
+
+    fn validate_frame_count(&mut self, expected: usize) -> Result<(), ProcessBlockError> {
+        for buffer in &*self.buffers {
+            if buffer.frame_count() != expected {
+                return Err(ProcessBlockError::BufferFrameCountMismatch {
+                    expected,
+                    actual: buffer.frame_count(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn channels(&mut self) -> Self::Channels<'_> {
+        self.buffers.iter_mut()
+    }
+}
+
 /// Borrowed realtime process call passed to product DSP.
 ///
 /// Buffer entries already contain safe Rust references whose aliasing has been
@@ -521,6 +710,46 @@ mod tests {
         ParameterStore::new(&[]).expect("empty parameter schema is valid")
     }
 
+    struct SplitChannelBuffers<'buffers, 'samples, S> {
+        first: &'buffers mut [ChannelBuffer<'samples, S>],
+        second: &'buffers mut [ChannelBuffer<'samples, S>],
+    }
+
+    impl<'buffers, 'samples, S> ProcessBufferSource<S>
+        for SplitChannelBuffers<'buffers, 'samples, S>
+    {
+        type Channel<'a>
+            = &'a mut ChannelBuffer<'samples, S>
+        where
+            Self: 'a,
+            S: 'a;
+
+        type Channels<'a>
+            = core::iter::Chain<
+            core::slice::IterMut<'a, ChannelBuffer<'samples, S>>,
+            core::slice::IterMut<'a, ChannelBuffer<'samples, S>>,
+        >
+        where
+            Self: 'a,
+            S: 'a;
+
+        fn validate_frame_count(&mut self, expected: usize) -> Result<(), ProcessBlockError> {
+            for buffer in self.first.iter().chain(self.second.iter()) {
+                if buffer.frame_count() != expected {
+                    return Err(ProcessBlockError::BufferFrameCountMismatch {
+                        expected,
+                        actual: buffer.frame_count(),
+                    });
+                }
+            }
+            Ok(())
+        }
+
+        fn channels(&mut self) -> Self::Channels<'_> {
+            self.first.iter_mut().chain(self.second.iter_mut())
+        }
+    }
+
     #[test]
     fn rejects_invalid_sample_rate() {
         assert_eq!(
@@ -548,6 +777,48 @@ mod tests {
         assert_eq!(config.guaranteed_min_frames(), None);
         assert_eq!(config.max_frames(), maximum(2048));
         assert_eq!(config.max_parameter_events(), 0);
+    }
+
+    #[test]
+    fn process_buffer_source_does_not_require_one_flat_slice() {
+        let input_left = [1.0_f32, 2.0];
+        let input_right = [3.0_f32, 4.0];
+        let mut output_left = [0.0_f32; 2];
+        let mut output_right = [0.0_f32; 2];
+        let mut first = [ChannelBuffer::separate(
+            InputEndpoint::new(MAIN_INPUT, 0),
+            &input_left,
+            OutputEndpoint::new(MAIN_OUTPUT, 0),
+            &mut output_left,
+            2,
+        )
+        .expect("left buffer is valid")];
+        let mut second = [ChannelBuffer::separate(
+            InputEndpoint::new(MAIN_INPUT, 1),
+            &input_right,
+            OutputEndpoint::new(MAIN_OUTPUT, 1),
+            &mut output_right,
+            2,
+        )
+        .expect("right buffer is valid")];
+        let mut source = SplitChannelBuffers {
+            first: &mut first,
+            second: &mut second,
+        };
+
+        source
+            .validate_frame_count(2)
+            .expect("split source has coherent frame counts");
+        for mut channel in source.channels() {
+            channel
+                .make_in_place()
+                .expect("split source channels are paired")
+                .iter_mut()
+                .for_each(|sample| *sample *= 0.5);
+        }
+
+        assert_eq!(output_left, [0.5, 1.0]);
+        assert_eq!(output_right, [1.5, 2.0]);
     }
 
     #[test]
