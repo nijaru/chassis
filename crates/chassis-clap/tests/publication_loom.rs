@@ -183,7 +183,9 @@ fn pending_handoff_observes_completed_publication_without_losing_notification() 
         };
 
         writer.join().expect("model writer must not panic");
-        let handled_pending = sync_worker.join().expect("model sync worker must not panic");
+        let handled_pending = sync_worker
+            .join()
+            .expect("model sync worker must not panic");
 
         if !handled_pending {
             assert!(publication.take_pending());
