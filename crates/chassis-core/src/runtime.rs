@@ -15,7 +15,10 @@ use crate::{
     },
     buffer::ChannelBuffer,
     parameters::{ParameterDescriptor, ParameterStateError, ParameterStore, ParameterStoreError},
-    process::{ActivationConfig, ProcessBlock, ProcessBlockError, ProcessConfig, ProcessContext},
+    process::{
+        ActivationConfig, ChannelBufferSlice, ProcessBlock, ProcessBlockError, ProcessBufferSource,
+        ProcessConfig, ProcessContext,
+    },
     state::{
         StateDecodeError, StateDocument, StateEntry, StateLimits, StateMigration,
         StateMigrationError,
@@ -129,8 +132,10 @@ pub trait Processor {
 
 /// Processing capability for one sample representation.
 pub trait Process<S>: Processor {
-    /// Process one already-validated realtime block.
-    fn process(&mut self, block: &mut ProcessBlock<'_, '_, '_, '_, S>);
+    /// Process one already-validated realtime block from any safe buffer source.
+    fn process<B>(&mut self, block: &mut ProcessBlock<'_, '_, '_, S, B>)
+    where
+        B: ProcessBufferSource<S> + ?Sized;
 }
 
 /// Failure while constructing a durable [`InstanceRuntime`].
@@ -561,7 +566,10 @@ where
         Ok(())
     }
 
-    /// Process one block through the active processor.
+    /// Process one materialized channel slice through the active processor.
+    ///
+    /// This compatibility entry point wraps the slice in [`ChannelBufferSlice`]
+    /// and delegates to [`Self::process_source`]. It performs no allocation.
     ///
     /// # Errors
     ///
@@ -577,6 +585,31 @@ where
     where
         P: Process<S>,
     {
+        let mut source = ChannelBufferSlice::new(buffers);
+        self.process_source(frame_count, context, &mut source)
+    }
+
+    /// Process one allocation-free safe buffer source through the active processor.
+    ///
+    /// Source-specific stable endpoint mapping belongs to setup/adapter state;
+    /// this boundary validates callback dimensions and parameter events before
+    /// product DSP can traverse the source.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InstanceProcessError::NotActive`] when inactive or
+    /// [`InstanceProcessError::InvalidBlock`] before product DSP runs when the
+    /// callback violates the active process/parameter contract.
+    pub fn process_source<S, B>(
+        &mut self,
+        frame_count: u32,
+        context: ProcessContext<'_>,
+        source: &mut B,
+    ) -> Result<(), InstanceProcessError>
+    where
+        P: Process<S>,
+        B: ProcessBufferSource<S> + ?Sized,
+    {
         let Self {
             parameters,
             custom_state: _,
@@ -589,7 +622,7 @@ where
             processor,
         } = active;
         let config = ActivationConfig::new(*process, AudioIoConfiguration::new(audio_ports));
-        let mut block = ProcessBlock::new(&config, parameters, frame_count, context, buffers)
+        let mut block = ProcessBlock::new(&config, parameters, frame_count, context, source)
             .map_err(InstanceProcessError::InvalidBlock)?;
         parameters
             .validate_events(context.parameter_events())
@@ -895,7 +928,8 @@ where
         self.processor.reset();
     }
 
-    /// Process one block after validating dimensions, automation, and context.
+    /// Process one materialized channel slice after validating dimensions,
+    /// automation, and context.
     ///
     /// # Errors
     ///
@@ -911,12 +945,34 @@ where
     where
         P: Process<S>,
     {
+        let mut source = ChannelBufferSlice::new(buffers);
+        self.process_source(frame_count, context, &mut source)
+    }
+
+    /// Process one allocation-free buffer source after validating dimensions,
+    /// automation, and context.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProcessBlockError`] before product DSP runs if the callback
+    /// dimensions, event context, source dimensions, or parameter values violate
+    /// the activation contract.
+    pub fn process_source<S, B>(
+        &mut self,
+        frame_count: u32,
+        context: ProcessContext<'_>,
+        source: &mut B,
+    ) -> Result<(), ProcessBlockError>
+    where
+        P: Process<S>,
+        B: ProcessBufferSource<S> + ?Sized,
+    {
         let mut block = ProcessBlock::new(
             &self.config,
             &self.parameters,
             frame_count,
             context,
-            buffers,
+            source,
         )?;
         self.parameters
             .validate_events(context.parameter_events())
