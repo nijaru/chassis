@@ -9,6 +9,7 @@
 
 mod audio;
 mod parameters;
+mod process_audio;
 
 use core::{fmt::Write as _, marker::PhantomData, num::NonZeroU32};
 use std::{
@@ -21,7 +22,6 @@ use audio::{AudioMappingError, ClapAudioConfiguration};
 use chassis_core::{
     audio::{ChannelLayout, MAIN_INPUT, MAIN_OUTPUT, PortDirection, SIDECHAIN_INPUT},
     automation::ParameterEvents,
-    buffer::{ChannelBuffer, InputEndpoint, OutputEndpoint},
     parameters::ParameterStore,
     process::{ProcessConfig, ProcessContext, ProcessMode, TransportSnapshot},
     runtime::{Component, InstanceRuntime, Process as ChassisProcess, Processor},
@@ -35,7 +35,6 @@ use clack_extensions::{
     },
     state::{PluginState, PluginStateImpl},
 };
-use clack_plugin::process::audio::PortPair;
 use clack_plugin::{
     entry::{DefaultPluginFactory, SinglePluginEntry},
     events::{
@@ -44,10 +43,9 @@ use clack_plugin::{
     },
     plugin::features::{AUDIO_EFFECT, STEREO},
     prelude::{
-        Audio, ChannelPair, ClapId, Events, HostAudioProcessorHandle, HostMainThreadHandle,
-        HostSharedHandle, Plugin, PluginAudioConfiguration, PluginAudioProcessor, PluginDescriptor,
-        PluginError, PluginExtensions, PluginMainThread, PluginShared, Process as ClapProcess,
-        ProcessStatus,
+        Audio, ClapId, Events, HostAudioProcessorHandle, HostMainThreadHandle, HostSharedHandle,
+        Plugin, PluginAudioConfiguration, PluginAudioProcessor, PluginDescriptor, PluginError,
+        PluginExtensions, PluginMainThread, PluginShared, Process as ClapProcess, ProcessStatus,
     },
     stream::{InputStream, OutputStream},
     utils::Cookie,
@@ -56,6 +54,7 @@ use parameters::{
     ClapParameterState, ParameterMappingError, ParameterStateError, ParameterSyncError,
     normalized_events,
 };
+use process_audio::ClapStereoBufferSource;
 
 /// Explicit CLAP audio-port projection metadata.
 pub use audio::{ClapAudioPort, DEFAULT_CLAP_AUDIO_PORTS};
@@ -398,36 +397,13 @@ where
     fn process(
         &mut self,
         process: ClapProcess,
-        mut audio: Audio,
+        audio: Audio,
         events: Events,
     ) -> Result<ProcessStatus, PluginError> {
         self.sync_parameters()?;
         let transport = map_transport(process.transport)?;
-        let expected_inputs = if self.sidechain_enabled { 2 } else { 1 };
-        if audio.input_port_count() != expected_inputs || audio.output_port_count() != 1 {
-            return Err(PluginError::Message(
-                "CLAP audio buffers do not match the activated Chassis stereo topology",
-            ));
-        }
-
-        let mut ports = audio.port_pairs();
-        let main = ports
-            .next()
-            .ok_or(PluginError::Message("Missing CLAP main audio port pair"))?;
-        let frame_count = main.frames_count();
-        let sidechain = self
-            .sidechain_enabled
-            .then(|| {
-                ports
-                    .next()
-                    .ok_or(PluginError::Message("Missing CLAP sidechain input port"))
-            })
-            .transpose()?;
-        if ports.next().is_some() {
-            return Err(PluginError::Message(
-                "CLAP supplied unexpected audio ports for the activated topology",
-            ));
-        }
+        let mut buffers = ClapStereoBufferSource::new(audio, self.sidechain_enabled)?;
+        let frame_count = buffers.frame_count();
 
         normalized_events(
             &self.shared.parameters,
@@ -442,7 +418,9 @@ where
         )
         .map_err(|_| PluginError::Message("Invalid CLAP parameter event stream"))?;
         let context = ProcessContext::new(ProcessMode::Realtime, transport, parameter_events);
-        process_audio_ports(&mut self.runtime, main, sidechain, context)?;
+        self.runtime
+            .process_source(frame_count, context, &mut buffers)
+            .map_err(|_| PluginError::Message("Invalid Chassis process block"))?;
 
         self.shared
             .parameters
@@ -460,76 +438,6 @@ where
     fn reset(&mut self) {
         let _ = self.runtime.reset();
     }
-}
-
-fn process_audio_ports<P>(
-    runtime: &mut InstanceRuntime<P>,
-    mut main: PortPair<'_>,
-    mut sidechain: Option<PortPair<'_>>,
-    context: ProcessContext<'_>,
-) -> Result<(), PluginError>
-where
-    P: ChassisProcess<f32> + Processor,
-{
-    let frame_count = main.frames_count();
-    let channels = main.channels()?.into_f32().ok_or(PluginError::Message(
-        "Chassis stereo topology requires f32 main audio",
-    ))?;
-    if channels.channel_pair_count() != 2 {
-        return Err(PluginError::Message(
-            "Chassis stereo topology requires exactly two main channels",
-        ));
-    }
-
-    let mut channels = channels.into_iter();
-    let left = channels
-        .next()
-        .ok_or(PluginError::Message("Missing left main channel"))?;
-    let right = channels
-        .next()
-        .ok_or(PluginError::Message("Missing right main channel"))?;
-    let Some(sidechain) = sidechain.as_mut() else {
-        let mut buffers = [
-            map_main_channel(left, 0, frame_count)?,
-            map_main_channel(right, 1, frame_count)?,
-        ];
-        return runtime
-            .process(frame_count, context, &mut buffers)
-            .map_err(|_| PluginError::Message("Invalid Chassis process block"));
-    };
-
-    if sidechain.frames_count() != frame_count {
-        return Err(PluginError::Message(
-            "CLAP sidechain frame count differs from main audio",
-        ));
-    }
-    let sidechain_channels = sidechain
-        .channels()?
-        .into_f32()
-        .ok_or(PluginError::Message(
-            "Chassis stereo sidechain requires f32 audio",
-        ))?;
-    if sidechain_channels.channel_pair_count() != 2 {
-        return Err(PluginError::Message(
-            "Chassis stereo sidechain requires exactly two channels",
-        ));
-    }
-    let mut sidechain_channels = sidechain_channels.into_iter();
-    let sidechain_left = sidechain_channels
-        .next()
-        .ok_or(PluginError::Message("Missing left sidechain channel"))?;
-    let sidechain_right = sidechain_channels
-        .next()
-        .ok_or(PluginError::Message("Missing right sidechain channel"))?;
-    let mut buffers = [
-        map_main_channel(left, 0, frame_count)?,
-        map_main_channel(right, 1, frame_count)?,
-        map_sidechain_channel(&sidechain_left, 0, frame_count)?,
-        map_sidechain_channel(&sidechain_right, 1, frame_count)?,
-    ];
-    runtime
-        .process(frame_count, context, &mut buffers)
-        .map_err(|_| PluginError::Message("Invalid Chassis process block"))
 }
 
 impl<P> PluginAudioProcessorParams for ChassisAudioProcessor<'_, P>
@@ -696,46 +604,6 @@ fn map_process_config(
         max_parameter_events,
     )
     .map_err(|_| PluginError::Message("Invalid CLAP process configuration"))
-}
-
-fn map_main_channel(
-    pair: ChannelPair<'_, f32>,
-    channel: u32,
-    frame_count: u32,
-) -> Result<ChannelBuffer<'_, f32>, PluginError> {
-    let input = InputEndpoint::new(MAIN_INPUT, channel);
-    let output = OutputEndpoint::new(MAIN_OUTPUT, channel);
-
-    match pair {
-        ChannelPair::InputOutput(input_samples, output_samples) => {
-            ChannelBuffer::separate(input, input_samples, output, output_samples, frame_count)
-                .map_err(|_| PluginError::Message("Invalid disjoint CLAP channel buffers"))
-        }
-        ChannelPair::InPlace(samples) => {
-            ChannelBuffer::in_place(input, output, samples, frame_count)
-                .map_err(|_| PluginError::Message("Invalid in-place CLAP channel buffer"))
-        }
-        ChannelPair::InputOnly(_) | ChannelPair::OutputOnly(_) => Err(PluginError::Message(
-            "Required CLAP main input/output channel is missing",
-        )),
-    }
-}
-
-fn map_sidechain_channel<'a>(
-    pair: &ChannelPair<'a, f32>,
-    channel: u32,
-    frame_count: u32,
-) -> Result<ChannelBuffer<'a, f32>, PluginError> {
-    let input = InputEndpoint::new(SIDECHAIN_INPUT, channel);
-    match pair {
-        ChannelPair::InputOnly(samples) => ChannelBuffer::input_only(input, samples, frame_count)
-            .map_err(|_| PluginError::Message("Invalid CLAP sidechain channel buffer")),
-        ChannelPair::InputOutput(_, _) | ChannelPair::InPlace(_) | ChannelPair::OutputOnly(_) => {
-            Err(PluginError::Message(
-                "CLAP sidechain must be an input-only port",
-            ))
-        }
-    }
 }
 
 #[cfg(test)]
