@@ -21,8 +21,8 @@ use chassis_core::{
     buffer::{ChannelBuffer, InputEndpoint, OutputEndpoint},
     parameters::{ParameterDescriptor, ParameterIndex, ParameterValue},
     process::{
-        ActivationConfig, ProcessBlock, ProcessBlockError, ProcessConfig, ProcessContext,
-        ProcessMode, TransportSnapshot,
+        ActivationConfig, ProcessBlock, ProcessBlockError, ProcessBufferSource, ProcessChannel,
+        ProcessConfig, ProcessContext, ProcessMode, TransportSnapshot,
     },
     runtime::{ActivateError, Component, Process, Processor, activate},
 };
@@ -96,7 +96,10 @@ impl Processor for ConformanceProcessor {
 
 impl Process<f32> for ConformanceProcessor {
     #[allow(clippy::cast_possible_truncation)]
-    fn process(&mut self, block: &mut ProcessBlock<'_, '_, '_, '_, f32>) {
+    fn process<B>(&mut self, block: &mut ProcessBlock<'_, '_, '_, f32, B>)
+    where
+        B: ProcessBufferSource<f32> + ?Sized,
+    {
         self.metrics.process_calls.fetch_add(1, Ordering::Relaxed);
         let parameter_events = block.parameter_events();
         let gain_index = block.parameters().index("input.gain");
@@ -105,7 +108,7 @@ impl Process<f32> for ConformanceProcessor {
             _ => f64::from(self.gain),
         };
 
-        for buffer in block.buffers_mut() {
+        for mut buffer in block.channels() {
             let is_main_pair = buffer
                 .input_endpoint()
                 .is_some_and(|endpoint| endpoint.port() == MAIN_INPUT)
