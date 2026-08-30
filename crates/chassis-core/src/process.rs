@@ -810,7 +810,7 @@ mod tests {
         let mut block = ProcessBlock::new(&activation, &parameters, 2, context, &mut source)
             .expect("split source forms a valid process block");
 
-        for mut channel in block.channels() {
+        for channel in block.channels() {
             channel
                 .make_in_place()
                 .expect("split source channels are paired")

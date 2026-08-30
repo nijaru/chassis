@@ -967,13 +967,8 @@ where
         P: Process<S>,
         B: ProcessBufferSource<S> + ?Sized,
     {
-        let mut block = ProcessBlock::new(
-            &self.config,
-            &self.parameters,
-            frame_count,
-            context,
-            source,
-        )?;
+        let mut block =
+            ProcessBlock::new(&self.config, &self.parameters, frame_count, context, source)?;
         self.parameters
             .validate_events(context.parameter_events())
             .map_err(ProcessBlockError::InvalidParameterEvents)?;
