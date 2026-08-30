@@ -30,6 +30,16 @@ jobs:
       - name: Test workspace
         run: cargo +1.98.0 test --workspace --locked
 
+  loom:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Install Rust 1.98.0
+        run: rustup toolchain install 1.98.0 --profile minimal
+      - name: Model publication ordering
+        run: cargo +1.98.0 test -p chassis-clap --test publication_loom --locked
+
   clippy:
     runs-on: ubuntu-latest
     steps:
