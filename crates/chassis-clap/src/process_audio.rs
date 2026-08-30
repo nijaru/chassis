@@ -136,7 +136,7 @@ pub(crate) struct ClapChannel<'a> {
 
 impl ProcessChannel<f32> for ClapChannel<'_> {
     fn relationship(&self) -> BufferRelationship {
-        match self.pair {
+        match &self.pair {
             ChannelPair::InputOnly(_) => BufferRelationship::InputOnly,
             ChannelPair::OutputOnly(_) => BufferRelationship::OutputOnly,
             ChannelPair::InputOutput(_, _) => BufferRelationship::Separate,
@@ -145,7 +145,7 @@ impl ProcessChannel<f32> for ClapChannel<'_> {
     }
 
     fn input_endpoint(&self) -> Option<InputEndpoint> {
-        match self.pair {
+        match &self.pair {
             ChannelPair::InputOnly(_) | ChannelPair::InputOutput(_, _) | ChannelPair::InPlace(_) => {
                 self.input
             }
@@ -154,7 +154,7 @@ impl ProcessChannel<f32> for ClapChannel<'_> {
     }
 
     fn output_endpoint(&self) -> Option<OutputEndpoint> {
-        match self.pair {
+        match &self.pair {
             ChannelPair::OutputOnly(_) | ChannelPair::InputOutput(_, _) | ChannelPair::InPlace(_) => {
                 self.output
             }
@@ -182,19 +182,19 @@ impl ProcessChannel<f32> for ClapChannel<'_> {
 
     fn output_mut(&mut self) -> Option<&mut [f32]> {
         match &mut self.pair {
-            ChannelPair::OutputOnly(samples) => Some(samples),
-            ChannelPair::InputOutput(_, samples) => Some(samples),
-            ChannelPair::InPlace(samples) => Some(samples),
+            ChannelPair::OutputOnly(samples) => Some(&mut **samples),
+            ChannelPair::InputOutput(_, samples) => Some(&mut **samples),
+            ChannelPair::InPlace(samples) => Some(&mut **samples),
             ChannelPair::InputOnly(_) => None,
         }
     }
 
     fn make_in_place(&mut self) -> Result<&mut [f32], BufferAccessError> {
         match &mut self.pair {
-            ChannelPair::InPlace(samples) => Ok(samples),
+            ChannelPair::InPlace(samples) => Ok(&mut **samples),
             ChannelPair::InputOutput(input, output) => {
                 output.copy_from_slice(input);
-                Ok(output)
+                Ok(&mut **output)
             }
             ChannelPair::InputOnly(_) => Err(BufferAccessError::MissingOutput),
             ChannelPair::OutputOnly(_) => Err(BufferAccessError::MissingInput),
