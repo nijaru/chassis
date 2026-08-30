@@ -5,9 +5,7 @@ use core::{fmt, num::NonZeroU32};
 use crate::{
     audio::AudioIoConfiguration,
     automation::ParameterEvents,
-    buffer::{
-        BufferAccessError, BufferRelationship, ChannelBuffer, InputEndpoint, OutputEndpoint,
-    },
+    buffer::{BufferAccessError, BufferRelationship, ChannelBuffer, InputEndpoint, OutputEndpoint},
     parameters::{ParameterAutomationError, ParameterStore},
 };
 
@@ -446,9 +444,7 @@ impl<'buffers, 'samples, S> ChannelBufferSlice<'buffers, 'samples, S> {
     }
 }
 
-impl<'buffers, 'samples, S> ProcessBufferSource<S>
-    for ChannelBufferSlice<'buffers, 'samples, S>
-{
+impl<'samples, S> ProcessBufferSource<S> for ChannelBufferSlice<'_, 'samples, S> {
     type Channel<'a>
         = &'a mut ChannelBuffer<'samples, S>
     where
@@ -715,9 +711,7 @@ mod tests {
         second: &'buffers mut [ChannelBuffer<'samples, S>],
     }
 
-    impl<'buffers, 'samples, S> ProcessBufferSource<S>
-        for SplitChannelBuffers<'buffers, 'samples, S>
-    {
+    impl<'samples, S> ProcessBufferSource<S> for SplitChannelBuffers<'_, 'samples, S> {
         type Channel<'a>
             = &'a mut ChannelBuffer<'samples, S>
         where
@@ -809,7 +803,7 @@ mod tests {
         source
             .validate_frame_count(2)
             .expect("split source has coherent frame counts");
-        for mut channel in source.channels() {
+        for channel in source.channels() {
             channel
                 .make_in_place()
                 .expect("split source channels are paired")
@@ -817,8 +811,10 @@ mod tests {
                 .for_each(|sample| *sample *= 0.5);
         }
 
-        assert_eq!(output_left, [0.5, 1.0]);
-        assert_eq!(output_right, [1.5, 2.0]);
+        assert!((output_left[0] - 0.5).abs() <= f32::EPSILON);
+        assert!((output_left[1] - 1.0).abs() <= f32::EPSILON);
+        assert!((output_right[0] - 1.5).abs() <= f32::EPSILON);
+        assert!((output_right[1] - 2.0).abs() <= f32::EPSILON);
     }
 
     #[test]
