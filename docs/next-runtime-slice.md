@@ -2,29 +2,9 @@
 
 This is the current implementation order on `main`. It is an execution plan, not a stable API promise.
 
-## Validated checkpoint — `73d7012`
+## Validated checkpoint — `62b96cc`
 
-The runtime, state, dense-parameter, and dense-projection work through `73d7012` passed the full local Rust gate:
-
-- CLAP scalar publication serializes writers with a generation CAS token;
-- realtime automation endpoint publication is rejected when its observed generation is stale;
-- non-realtime state save obtains one completed coherent scalar generation;
-- CLAP scalar state load requires a complete mapped parameter snapshot;
-- CHSS decoding rejects empty entry keys and preserves `StateDocument` invariants;
-- `InstanceRuntime<P>` owns durable core `ParameterStore` state across activation cycles;
-- the component definition remains outside `InstanceRuntime`, so deployment transfer bounds apply to `Processor`, not `Component`;
-- activation can observe current validated base parameters through `Component::activate_with_parameters`;
-- active runtime owns a copy of negotiated `ConfiguredAudioPort` values allocated outside the callback;
-- core runtime parameter state replacement is complete and transactional at the `InstanceRuntime` boundary;
-- the CLAP audio processor uses `InstanceRuntime` and synchronizes published host state into the runtime before processor activation;
-- `ParameterIndex` is the schema-local dense realtime identity while `ParameterKey` remains persistent/authoring identity;
-- normalized CLAP parameter events map host IDs to dense indices before process validation;
-- process event validation and trajectory cursors use dense indices rather than stable string lookup;
-- `ParameterStore::set_index()` validates and replaces base values directly by schema-local `ParameterIndex`;
-- each CLAP parameter binding retains its declaration-order `ParameterIndex` at setup;
-- CLAP ID normalization and scalar projection synchronization reuse that stored dense index instead of re-resolving stable keys.
-
-Validation passed:
+The full local Rust gate passed through `62b96cc`:
 
 ```text
 cargo fmt --all -- --check
@@ -37,91 +17,122 @@ cargo build --release -p chassis-clap-conformance --locked
 
 `cargo deny` emitted only the existing unmatched-license-allowance warnings.
 
-The CLAP cross-domain parameter publication remains adapter-local. CLAP's audio-processor object exists only while active, so durable cross-activation host-visible state cannot simply live inside the audio-thread `InstanceRuntime`. Do not hide that host lifetime difference by moving the component or a mutex-protected processor into shared state.
+The validated runtime now includes:
 
-Dense IDs deliberately do not add a second per-parameter event index yet. The bounded globally sorted event scan remains until measurements justify another structure.
+- durable single-owner `InstanceRuntime<P>` lifecycle and owned accepted active I/O;
+- stable persistent parameter keys plus schema-local dense `ParameterIndex` identities for realtime work;
+- CLAP parameter bindings that retain dense indices and never re-resolve stable keys in the hot path;
+- adapter-local scalar publication qualified under Loom, including the fixed lossless `pending` handoff;
+- terminal publication generation exhaustion without ABA wraparound;
+- bounded decode of canonical CHSS semantic state;
+- adjacent typed product-schema migrations;
+- adversarial truncation/resource-bound/corruption coverage and a checked-in canonical v1 fixture;
+- complete transactional parameter replacement;
+- complete semantic instance state ownership: framework parameters and validated custom entries are accepted or rejected together;
+- product validation over the complete parameter/custom candidate before publication;
+- activation visibility of the accepted complete semantic state;
+- failure-atomic migrated byte loads and deterministic complete-state export.
 
-## Completed follow-on — publication protocol qualification
+The CLAP publication bridge remains adapter-local. Passing Loom demonstrates the current scalar protocol; it does not make that representation a deployment-independent core primitive.
 
-The existing scalar publication algorithm is now isolated as a private helper under the CLAP parameter module. This is a testability boundary, not framework infrastructure: it still stores CLAP-compatible scalar `f64` values and is not exported from the adapter.
+## Slice 1 — runtime ownership and dense identity
 
-The qualified source after `73d7012` additionally:
+Completed and qualified.
 
-- removes generation-counter wraparound as a correctness assumption;
-- reserves `u64::MAX - 1` as the final stable generation and refuses further writes once reached, so an ancient generation can never become current again through ABA wraparound;
-- lets coherent state save continue at the terminal generation while later state replacement fails explicitly rather than spinning or wrapping;
-- keeps realtime writer acquisition one-shot/nonblocking;
-- keeps realtime snapshot work bounded to a fixed retry count;
-- keeps control/state publication allowed to wait for a short in-flight writer;
-- exhaustively enumerates sequentially-consistent same-generation writer interleavings and proves only one writer acquires;
-- exhaustively enumerates the reader/writer steps of a two-value snapshot and rejects every accepted mixed snapshot;
-- tests concrete stale-generation rejection, bounded realtime failure while a writer owns the token, invalid value counts, and terminal generation exhaustion.
+`InstanceRuntime<P>` is the durable format-independent owner. `Processor` exclusively owns mutable realtime DSP history while active. `ParameterKey` remains persistent/authoring identity while `ParameterIndex` is the dense schema-local realtime identity.
 
-This follow-on is qualified through `3f18404`: the full local Rust gate passed, all five Loom tests passed, and the pending/synchronization handoff race is covered. The model is evidence for the current adapter-local scalar implementation, not a reason to extract it into `chassis-core`.
+The older activation-local `Activated<'a, P>` path remains only as a migration convenience and must not become a second persistent authority.
 
 ## Slice 2 — publication protocol qualification
 
-Completed. The qualified evidence covers:
+Completed and qualified.
 
-1. the standard local Rust gate;
-2. the acquire/release protocol under Loom;
-3. writer acquisition, coherent multi-value snapshots, stale-generation rejection, and the pending/synchronization handoff;
-4. bounded realtime operations while a writer is active;
-5. terminal generation exhaustion without ABA wraparound;
-6. typed-value and reclamation work remain adapter-local until another client proves the need;
-7. typed choice/string semantics remaining outside the CLAP scalar helper.
+Evidence covers:
 
-Loom 0.7.2 is the current upstream release as of this checkpoint. Adding it should be a deliberate dev/test dependency with the resulting `Cargo.lock` update reviewed and committed; do not hand-edit the lockfile.
+1. exact-generation writer acquisition;
+2. coherent multi-value snapshots;
+3. stale realtime publication rejection;
+4. bounded realtime failure while another writer is active;
+5. terminal generation exhaustion;
+6. weak-memory Acquire/Release/AcqRel behavior under Loom;
+7. the `pending` Release → AcqRel handoff without lost notification.
 
-A passing model does **not** imply that this helper belongs in `chassis-core`. Keep it adapter-local unless another deployment or real client demonstrates the same publication contract independently. A future deployment-independent primitive needs a semantic typed-value contract and a reclamation story, not merely a generalized version of CLAP's first scalar bridge.
+Loom exposed a real race in the old `pending.swap(false, AcqRel)` consume: a consumer that did not observe a concurrent `true` could still overwrite it. Production and model now consume with `compare_exchange(true, false, AcqRel, Acquire)`, so an unsuccessful observation is read-only.
 
-The desired authority model remains semantic rather than requiring one physical object shared by every host thread. A deployment may use synchronized projections when its lifecycle requires them, but there must still be one defined publication order and no independently mutable semantic copies.
+Typed non-scalar publication and reclamation remain separate problems and do not justify generalizing this CLAP-specific scalar helper into `chassis-core`.
 
 ## Slice 3 — complete state + migrations
 
-`InstanceRuntime::apply_parameter_state_for_product` provides complete transactional parameter replacement, while the lower-level `ParameterStore::apply_state_for_product` remains a patch-like semantic helper. `StateMigration`/`StateDocument::migrate_to` now provide the adjacent product-schema chain, and `InstanceRuntime::apply_parameter_state_bytes` performs bounded decode, migration, and complete application in that order.
+Completed and qualified through `62b96cc`.
 
-Next state work:
+The accepted complete-state path is:
 
 ```text
 bytes
  -> bounded decode
- -> product migration chain
- -> materialize complete current semantic state
- -> validate all parameter/custom domains
- -> publish one generation
+ -> adjacent product migration chain
+ -> materialize complete current parameter/custom candidate
+ -> validate framework parameter domain
+ -> validate product parameter/custom invariants
+ -> publish parameters + custom state together
 ```
 
-Acceptance criteria:
+`InstanceRuntime` retains canonical non-`parameter/` `StateEntry` values beside `ParameterStore`. It does not persist arbitrary Rust product structs. `Component::activate_with_state` can inspect the accepted complete semantic state during preparation while defaulting back to the earlier parameter-only activation hook for compatibility.
 
-- retain adjacent-version migration fixtures for every released schema;
-- failed migration or validation leaves current state unchanged;
-- fuzz corruption/truncation/exhaustion and migration failures;
-- extend the runtime state owner so parameter + custom product fields publish as one accepted generation;
-- keep deterministic golden fixtures for every released schema;
-- make partial parameter patches a separately named operation if a real client needs them.
+Qualified state evidence includes:
 
-Do not freeze CHSS v1 until migration and cross-format fixtures exist.
+- unique adjacent migration chains and typed product migration failures;
+- legacy v1 migration fixture;
+- checked-in binary v1 fixture that decodes and re-encodes byte-identically;
+- deterministic semantic value encoding;
+- every proper truncation prefix rejected;
+- configured total/product-ID/entry/key/payload bounds;
+- extreme declared lengths rejected without backing payloads;
+- bounded single-byte corruption corpus with no parser panic;
+- repeated failed runtime loads leave live state unchanged;
+- parameter + custom state commit atomically;
+- product rejection leaves both parameter and custom state unchanged;
+- migrated byte loads publish both together;
+- complete state is visible to later activation and export.
+
+CHSS envelope v1 is still **not frozen**. Remaining promotion evidence belongs with real adapters rather than more speculative core API:
+
+- sustained fuzz corpus/infrastructure beyond the deterministic adversarial corpus;
+- active save/load race qualification through the deployment consistency contract;
+- CLAP/VST3/AU cross-format round trips and partial-stream boundary tests;
+- golden fixtures for every actually released product schema.
 
 ## Slice 4 — general CLAP I/O
 
-The lifetime/ownership prerequisite is in place: active runtime owns its negotiated configuration. Use that to broaden the adapter instead of adding callback-time owned vectors.
+In progress after the `62b96cc` checkpoint.
 
-Order:
+The first implementation step introduces a setup-time CLAP audio mapping with explicit stable CLAP IDs rather than declaration-order-derived IDs. The mapper can validate arbitrary declared Chassis ports/layouts, direction-local CLAP ID uniqueness, main-port placement, and reciprocal in-place pairing while allocating only outside the process callback.
 
-1. default stereo main + optional stereo sidechain through the general mapping;
-2. arbitrary declared input/output ports and layouts;
-3. setup-time dense endpoint mapping;
-4. negative-space tests for disabled/missing/asymmetric/unsupported layouts;
-5. decide from adapter evidence whether the flat `ChannelBuffer` slice remains the right product-facing borrow shape.
+Current process qualification remains deliberately narrower:
 
-Required invariant: no `Vec<ChannelBuffer>` allocation in the process callback.
+1. stereo main input/output through the setup mapping;
+2. zero or one stereo sidechain input through the same mapping;
+3. sidechain channels reach product DSP as `ChannelBuffer::InputOnly`;
+4. unsupported arbitrary process topologies fail during activation rather than falling into a partial callback implementation.
+
+This split is intentional. The current product-facing `ProcessBlock` owns a borrowed flat `&mut [ChannelBuffer<'_, S>]`. An arbitrary runtime number of lifetime-bearing channel views cannot be retained in processor storage, and allocating a `Vec<ChannelBuffer>` in each callback is forbidden. Do not solve that by lifetime erasure or a hidden callback allocation.
+
+Next I/O work, after the current mapped stereo/sidechain slice passes the full gate:
+
+1. add negative-space adapter tests for missing/asymmetric/unsupported mapped layouts;
+2. qualify stable setup-time dense endpoint mapping independently from callback representation;
+3. choose a no-allocation process borrow shape that can represent arbitrary declared ports/channels;
+4. route arbitrary declared input/output layouts through that shape;
+5. re-evaluate whether the flat `ChannelBuffer` slice should remain a compatibility view or be replaced.
+
+Required invariant: no callback-time owned `Vec<ChannelBuffer>` allocation.
 
 ## Slice 5 — native CLAP qualification
 
-Once the current Rust checkpoint is green and the runtime/parameter/I/O changes are coherent, rebuild/package the conformance `.clap` and qualify the *current* artifact:
+Once current Rust semantics and general I/O are coherent, rebuild/package the conformance `.clap` and qualify the **current** artifact:
 
 - `clap-validator` normal suite and bounded fuzzing;
+- audio-port enumeration, stable IDs, main/sidechain metadata, and in-place pairing;
 - parameter enumeration/get/value conversion;
 - parameter automation through process and flush paths;
 - state save/load round trip while inactive;
@@ -129,10 +140,10 @@ Once the current Rust checkpoint is green and the runtime/parameter/I/O changes 
 - state load followed by processing;
 - repeated deactivate/reactivate preserving host-visible state;
 - lifecycle/repeated-instance stress;
-- REAPER render, automation, save/load and reopen smoke tests;
+- REAPER render, automation, sidechain, save/load and reopen smoke tests;
 - Bitwig when available because it exercises relevant CLAP/reentrancy behavior.
 
-Do not treat the older 19-pass validator artifact as evidence for the current parameter/state/runtime slice.
+Do not treat an older validator artifact as evidence for current runtime/parameter/state/I/O code.
 
 ## Slice 6 — CLAP capability expansion
 
@@ -149,7 +160,7 @@ Each capability needs conformance plus native-host evidence rather than source s
 
 ## Slice 7 — first real FX client
 
-Use a real effect before growing generic conveniences much further. It should exercise many parameters, state, latency/offline behavior, explicit smoothing policy, and meter/telemetry publication without sharing mutable processor state.
+Use a real effect before growing generic conveniences much further. It should exercise many parameters, complete semantic state, general I/O where useful, latency/offline behavior, explicit smoothing policy, and meter/telemetry publication without sharing mutable processor state.
 
 Only repeated product needs graduate into framework helpers.
 
