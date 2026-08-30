@@ -4,6 +4,7 @@ use core::convert::Infallible;
 
 use chassis_clap::{ClapStereoEffect, SingleComponentEntry, clack_export_entry};
 use chassis_core::{
+    buffer::BufferRelationship,
     process::{ActivationConfig, ProcessBlock},
     runtime::{Component, Process, Processor},
 };
@@ -35,11 +36,19 @@ impl Processor for ConformanceProcessor {}
 impl Process<f32> for ConformanceProcessor {
     fn process(&mut self, block: &mut ProcessBlock<'_, '_, '_, '_, f32>) {
         for buffer in block.buffers_mut() {
-            for sample in buffer
-                .make_in_place()
-                .expect("the CLAP proof exposes paired main input/output channels")
-            {
-                apply_gain(sample);
+            match buffer.relationship() {
+                BufferRelationship::InPlace | BufferRelationship::Separate => {
+                    for sample in buffer
+                        .make_in_place()
+                        .expect("paired main channel has input and output")
+                    {
+                        apply_gain(sample);
+                    }
+                }
+                BufferRelationship::InputOnly => {}
+                BufferRelationship::OutputOnly => {
+                    panic!("conformance effect does not declare output-only channels");
+                }
             }
         }
     }
