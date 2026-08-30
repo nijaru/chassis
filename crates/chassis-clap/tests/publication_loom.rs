@@ -1,7 +1,12 @@
+//! Weak-memory qualification model for the CLAP scalar publication protocol.
+//!
+//! This integration test mirrors the production generation/CAS and payload
+//! ordering without abstracting the production atomics solely for Loom.
+
 use loom::{
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicU64, Ordering},
     },
     thread,
 };
