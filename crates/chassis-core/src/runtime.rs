@@ -16,7 +16,10 @@ use crate::{
     buffer::ChannelBuffer,
     parameters::{ParameterDescriptor, ParameterStateError, ParameterStore, ParameterStoreError},
     process::{ActivationConfig, ProcessBlock, ProcessBlockError, ProcessConfig, ProcessContext},
-    state::{StateDecodeError, StateDocument, StateLimits, StateMigration, StateMigrationError},
+    state::{
+        StateDecodeError, StateDocument, StateEntry, StateLimits, StateMigration,
+        StateMigrationError,
+    },
 };
 
 /// Immutable product definition/factory for one Chassis component type.
@@ -82,6 +85,27 @@ pub trait Component {
     ) -> Result<Self::Processor, Self::ActivationError> {
         let _ = parameters;
         self.activate(config)
+    }
+
+    /// Create the realtime processor with the current complete semantic state.
+    ///
+    /// Custom entries are the canonical non-`parameter/` entries retained by
+    /// the durable instance. The default delegates to
+    /// [`Self::activate_with_parameters`] so products that only use framework
+    /// parameters remain source-compatible. Products that derive activation-time
+    /// resources from custom persistent fields may override this hook.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same product-defined activation error as [`Self::activate`].
+    fn activate_with_state(
+        &self,
+        config: &ActivationConfig<'_>,
+        parameters: &ParameterStore,
+        custom_state: &[StateEntry],
+    ) -> Result<Self::Processor, Self::ActivationError> {
+        let _ = custom_state;
+        self.activate_with_parameters(config, parameters)
     }
 }
 
@@ -300,6 +324,78 @@ where
     }
 }
 
+/// Failure while validating a complete semantic instance state.
+#[derive(Debug)]
+pub enum InstanceSemanticStateError<E> {
+    /// Framework-managed parameter validation failed.
+    Parameters(InstanceStateError),
+    /// Product-defined validation of the complete candidate state failed.
+    Product(E),
+}
+
+impl<E> fmt::Display for InstanceSemanticStateError<E>
+where
+    E: fmt::Display,
+{
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Parameters(error) => write!(formatter, "invalid parameter state: {error}"),
+            Self::Product(error) => write!(formatter, "invalid product state: {error}"),
+        }
+    }
+}
+
+impl<E> std::error::Error for InstanceSemanticStateError<E>
+where
+    E: std::error::Error + 'static,
+{
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Parameters(error) => Some(error),
+            Self::Product(error) => Some(error),
+        }
+    }
+}
+
+/// Failure while decoding, migrating, or applying a complete semantic state.
+#[derive(Debug)]
+pub enum InstanceSemanticStateLoadError<M, E> {
+    /// The encoded state was malformed or exceeded its bounds.
+    Decode(StateDecodeError),
+    /// Product-schema migration failed before live state was touched.
+    Migration(StateMigrationError<M>),
+    /// The migrated complete state failed framework or product validation.
+    Apply(InstanceSemanticStateError<E>),
+}
+
+impl<M, E> fmt::Display for InstanceSemanticStateLoadError<M, E>
+where
+    M: fmt::Display,
+    E: fmt::Display,
+{
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Decode(error) => write!(formatter, "could not decode state: {error}"),
+            Self::Migration(error) => write!(formatter, "could not migrate state: {error}"),
+            Self::Apply(error) => write!(formatter, "could not apply state: {error}"),
+        }
+    }
+}
+
+impl<M, E> std::error::Error for InstanceSemanticStateLoadError<M, E>
+where
+    M: std::error::Error + 'static,
+    E: std::error::Error + 'static,
+{
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Decode(error) => Some(error),
+            Self::Migration(error) => Some(error),
+            Self::Apply(error) => Some(error),
+        }
+    }
+}
+
 struct ActiveRuntime<P> {
     process: ProcessConfig,
     audio_ports: Vec<ConfiguredAudioPort>,
@@ -314,11 +410,12 @@ impl<P> ActiveRuntime<P> {
 
 /// Durable framework-owned runtime for one component instance.
 ///
-/// The runtime owns canonical base parameter state across activation cycles and
-/// optionally owns the active processor plus its accepted I/O configuration.
-/// The component definition itself remains outside this object and is borrowed
-/// only while activating, so deployment boundaries need to transfer only the
-/// concrete processor/runtime state rather than requiring `Component: Send`.
+/// The runtime owns canonical base parameter state and validated custom semantic
+/// state across activation cycles, and optionally owns the active processor plus
+/// its accepted I/O configuration. The component definition itself remains
+/// outside this object and is borrowed only while activating, so deployment
+/// boundaries need to transfer only the concrete processor/runtime state rather
+/// than requiring `Component: Send`.
 ///
 /// The accepted port list is copied once while inactive. Dynamically negotiated
 /// layouts therefore do not create self-referential lifetimes and require no
@@ -328,6 +425,7 @@ where
     P: Processor,
 {
     parameters: ParameterStore,
+    custom_state: Vec<StateEntry>,
     active: Option<ActiveRuntime<P>>,
 }
 
@@ -336,6 +434,9 @@ where
     P: Processor,
 {
     /// Construct one inactive instance from a validated parameter schema.
+    ///
+    /// Custom semantic state starts empty. Products may interpret missing custom
+    /// fields as defaults until a complete state replacement is accepted.
     ///
     /// # Errors
     ///
@@ -346,6 +447,7 @@ where
             ParameterStore::new(descriptors).map_err(InstanceRuntimeError::InvalidParameters)?;
         Ok(Self {
             parameters,
+            custom_state: Vec::new(),
             active: None,
         })
     }
@@ -377,6 +479,16 @@ where
         &mut self.parameters
     }
 
+    /// Return the durable validated non-parameter semantic state entries.
+    ///
+    /// Entries are kept in canonical key order. Mutation is intentionally not
+    /// exposed as an unrestricted slice; complete state replacement validates a
+    /// candidate parameter/custom generation before publishing either half.
+    #[must_use]
+    pub fn custom_state(&self) -> &[StateEntry] {
+        &self.custom_state
+    }
+
     /// Return whether the instance currently owns an active processor.
     #[must_use]
     pub const fn is_active(&self) -> bool {
@@ -391,9 +503,10 @@ where
 
     /// Activate this instance after validating and owning its accepted I/O layout.
     ///
-    /// The component receives the runtime's current base parameter state during
-    /// preparation, so state loaded before activation can affect precomputed DSP
-    /// resources without moving persistent authority into the processor.
+    /// The component receives the runtime's current complete validated semantic
+    /// state during preparation, so state loaded before activation can affect
+    /// precomputed DSP resources without moving persistent authority into the
+    /// processor.
     ///
     /// # Errors
     ///
@@ -424,7 +537,7 @@ where
         let audio_ports = audio_io.ports().to_vec();
         let config = ActivationConfig::new(process, AudioIoConfiguration::new(&audio_ports));
         let processor = component
-            .activate_with_parameters(&config, &self.parameters)
+            .activate_with_state(&config, &self.parameters, &self.custom_state)
             .map_err(ActivateError::Product)?;
         self.active = Some(ActiveRuntime {
             process,
@@ -464,7 +577,11 @@ where
     where
         P: Process<S>,
     {
-        let Self { parameters, active } = self;
+        let Self {
+            parameters,
+            custom_state: _,
+            active,
+        } = self;
         let active = active.as_mut().ok_or(InstanceProcessError::NotActive)?;
         let ActiveRuntime {
             process,
@@ -502,6 +619,9 @@ where
 
     /// Build a semantic document containing all durable parameter base values.
     ///
+    /// This compatibility helper excludes custom product state. Prefer
+    /// [`Self::state_document`] for complete instance persistence.
+    ///
     /// # Errors
     ///
     /// Returns [`ParameterStateError`] if document construction fails.
@@ -514,6 +634,9 @@ where
     }
 
     /// Encode all durable parameter base values under explicit state bounds.
+    ///
+    /// This compatibility helper excludes custom product state. Prefer
+    /// [`Self::encode_state`] for complete instance persistence.
     ///
     /// # Errors
     ///
@@ -529,23 +652,52 @@ where
             .encode_state(product_id, product_schema, limits)
     }
 
-    /// Replace durable parameter state transactionally from a complete document.
+    /// Build the complete durable semantic state document.
     ///
-    /// A normal instance/project/preset load is a complete replacement. Custom
-    /// non-parameter entries are ignored here for future product-state handling,
-    /// but every framework-managed parameter must be present after migration.
-    /// The current runtime remains unchanged on failure.
+    /// Framework-managed parameters are emitted from the canonical parameter
+    /// store and validated custom entries are appended. Encoding remains
+    /// deterministic because [`StateDocument`] canonicalizes entry order.
     ///
     /// # Errors
     ///
-    /// Returns [`InstanceStateError`] for identity/schema/value errors, unknown
-    /// parameter entries, or an incomplete parameter snapshot.
-    pub fn apply_parameter_state_for_product(
-        &mut self,
+    /// Returns [`ParameterStateError`] if document construction fails.
+    pub fn state_document(
+        &self,
+        product_id: impl Into<String>,
+        product_schema: u32,
+    ) -> Result<StateDocument, ParameterStateError> {
+        let mut document = self.parameters.state_document(product_id, product_schema)?;
+        for entry in &self.custom_state {
+            document
+                .insert(entry.clone())
+                .map_err(ParameterStateError::Document)?;
+        }
+        Ok(document)
+    }
+
+    /// Encode the complete durable semantic state under explicit bounds.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParameterStateError`] if document construction or bounded
+    /// encoding fails.
+    pub fn encode_state(
+        &self,
+        product_id: impl Into<String>,
+        product_schema: u32,
+        limits: StateLimits,
+    ) -> Result<Vec<u8>, ParameterStateError> {
+        self.state_document(product_id, product_schema)?
+            .encode_with_limits(limits)
+            .map_err(ParameterStateError::Encode)
+    }
+
+    fn parameter_state_candidate(
+        &self,
         document: &StateDocument,
         product_id: &str,
         product_schema: u32,
-    ) -> Result<(), InstanceStateError> {
+    ) -> Result<ParameterStore, InstanceStateError> {
         let descriptors = self.parameters.descriptors().to_vec();
         let mut candidate =
             ParameterStore::new(&descriptors).map_err(InstanceStateError::InvalidParameters)?;
@@ -562,17 +714,82 @@ where
         if actual != expected {
             return Err(InstanceStateError::IncompleteParameterState { expected, actual });
         }
+        Ok(candidate)
+    }
 
+    /// Replace durable parameter state transactionally from a complete document.
+    ///
+    /// This compatibility path publishes framework-managed parameters only and
+    /// leaves the current custom product state unchanged. Prefer
+    /// [`Self::apply_state_for_product`] when loading a complete instance state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InstanceStateError`] for identity/schema/value errors, unknown
+    /// parameter entries, or an incomplete parameter snapshot.
+    pub fn apply_parameter_state_for_product(
+        &mut self,
+        document: &StateDocument,
+        product_id: &str,
+        product_schema: u32,
+    ) -> Result<(), InstanceStateError> {
+        let candidate =
+            self.parameter_state_candidate(document, product_id, product_schema)?;
         self.parameters = candidate;
+        Ok(())
+    }
+
+    /// Replace the complete semantic instance state transactionally.
+    ///
+    /// Framework parameters are validated into a temporary store. All
+    /// non-`parameter/` entries are copied into a canonical temporary custom
+    /// state projection. `validate_product_state` then receives both candidates
+    /// so products can validate cross-field invariants. Neither candidate is
+    /// published until every framework and product check succeeds.
+    ///
+    /// The callback runs only on control/non-realtime paths and must not retain
+    /// references to the temporary candidates.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InstanceSemanticStateError::Parameters`] for framework-managed
+    /// state failures or [`InstanceSemanticStateError::Product`] when the
+    /// product rejects the complete candidate state. The runtime is unchanged on
+    /// every failure.
+    pub fn apply_state_for_product<E, F>(
+        &mut self,
+        document: &StateDocument,
+        product_id: &str,
+        product_schema: u32,
+        validate_product_state: F,
+    ) -> Result<(), InstanceSemanticStateError<E>>
+    where
+        F: FnOnce(&ParameterStore, &[StateEntry]) -> Result<(), E>,
+    {
+        let candidate_parameters = self
+            .parameter_state_candidate(document, product_id, product_schema)
+            .map_err(InstanceSemanticStateError::Parameters)?;
+        let mut candidate_custom: Vec<_> = document
+            .entries()
+            .iter()
+            .filter(|entry| !entry.key().starts_with("parameter/"))
+            .cloned()
+            .collect();
+        candidate_custom.sort_unstable_by(|left, right| {
+            left.key().as_bytes().cmp(right.key().as_bytes())
+        });
+        validate_product_state(&candidate_parameters, &candidate_custom)
+            .map_err(InstanceSemanticStateError::Product)?;
+
+        self.parameters = candidate_parameters;
+        self.custom_state = candidate_custom;
         Ok(())
     }
 
     /// Decode, migrate, and apply a complete parameter state transactionally.
     ///
-    /// The encoded document and every migration result remain temporary until
-    /// current-schema parameter validation succeeds. Custom entries are
-    /// preserved by [`StateDocument::migrate_to`] for a future product-state
-    /// owner, while this boundary publishes framework-managed parameters only.
+    /// This compatibility path publishes framework-managed parameters only.
+    /// Custom entries remain unchanged even though migration preserves them.
     /// Decoding and migration are control/non-realtime operations.
     ///
     /// # Errors
@@ -598,6 +815,47 @@ where
             .map_err(InstanceStateLoadError::Migration)?;
         self.apply_parameter_state_for_product(&document, product_id, product_schema)
             .map_err(InstanceStateLoadError::Apply)
+    }
+
+    /// Decode, migrate, validate, and publish a complete semantic state.
+    ///
+    /// The byte document and each migration result remain temporary. The final
+    /// migrated parameter/custom candidates are validated together and become
+    /// live only after all checks succeed. Decoding, migration, and product
+    /// validation are control/non-realtime operations.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InstanceSemanticStateLoadError`] for bounded decode failures,
+    /// migration failures, framework parameter failures, or product-defined
+    /// semantic validation failures. The runtime is unchanged on every failure.
+    pub fn apply_state_bytes<M, E, F>(
+        &mut self,
+        bytes: &[u8],
+        product_id: &str,
+        product_schema: u32,
+        limits: StateLimits,
+        migrations: &[&M],
+        validate_product_state: F,
+    ) -> Result<(), InstanceSemanticStateLoadError<M::Error, E>>
+    where
+        M: StateMigration + ?Sized,
+        M::Error: std::error::Error + 'static,
+        E: std::error::Error + 'static,
+        F: FnOnce(&ParameterStore, &[StateEntry]) -> Result<(), E>,
+    {
+        let document = StateDocument::decode_with_limits(bytes, limits)
+            .map_err(InstanceSemanticStateLoadError::Decode)?;
+        let document = document
+            .migrate_to(product_schema, migrations)
+            .map_err(InstanceSemanticStateLoadError::Migration)?;
+        self.apply_state_for_product(
+            &document,
+            product_id,
+            product_schema,
+            validate_product_state,
+        )
+        .map_err(InstanceSemanticStateLoadError::Apply)
     }
 }
 
