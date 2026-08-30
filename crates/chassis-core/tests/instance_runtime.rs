@@ -15,11 +15,11 @@ use chassis_core::{
         MAIN_INPUT, MAIN_OUTPUT,
     },
     automation::ParameterEvents,
-    buffer::ChannelBuffer,
+    buffer::{ChannelBuffer, InputEndpoint, OutputEndpoint},
     parameters::{ParameterDescriptor, ParameterStore, ParameterValue},
     process::{
-        ActivationConfig, ProcessBlock, ProcessConfig, ProcessContext, ProcessMode,
-        TransportSnapshot,
+        ActivationConfig, ProcessBlock, ProcessBlockError, ProcessBufferSource, ProcessChannel,
+        ProcessConfig, ProcessContext, ProcessMode, TransportSnapshot,
     },
     runtime::{
         Component, InstanceRuntime, InstanceStateError, InstanceStateLoadError, Process, Processor,
@@ -93,12 +93,15 @@ impl Processor for EffectProcessor {}
 
 impl Process<f32> for EffectProcessor {
     #[allow(clippy::cast_possible_truncation)]
-    fn process(&mut self, block: &mut ProcessBlock<'_, '_, '_, '_, f32>) {
+    fn process<B>(&mut self, block: &mut ProcessBlock<'_, '_, '_, f32, B>)
+    where
+        B: ProcessBufferSource<f32> + ?Sized,
+    {
         let gain = match block.parameters().get("gain") {
             Some(ParameterValue::Float(value)) => *value as f32,
             _ => 1.0,
         };
-        for buffer in block.buffers_mut() {
+        for mut buffer in block.channels() {
             if let Ok(samples) = buffer.make_in_place() {
                 for sample in samples {
                     *sample *= gain;
@@ -111,6 +114,44 @@ impl Process<f32> for EffectProcessor {
 impl Drop for EffectProcessor {
     fn drop(&mut self) {
         self.metrics.drops.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+struct SplitChannelBuffers<'buffers, 'samples, S> {
+    first: &'buffers mut [ChannelBuffer<'samples, S>],
+    second: &'buffers mut [ChannelBuffer<'samples, S>],
+}
+
+impl<'samples, S> ProcessBufferSource<S> for SplitChannelBuffers<'_, 'samples, S> {
+    type Channel<'a>
+        = &'a mut ChannelBuffer<'samples, S>
+    where
+        Self: 'a,
+        S: 'a;
+
+    type Channels<'a>
+        = core::iter::Chain<
+        core::slice::IterMut<'a, ChannelBuffer<'samples, S>>,
+        core::slice::IterMut<'a, ChannelBuffer<'samples, S>>,
+    >
+    where
+        Self: 'a,
+        S: 'a;
+
+    fn validate_frame_count(&mut self, expected: usize) -> Result<(), ProcessBlockError> {
+        for buffer in self.first.iter().chain(self.second.iter()) {
+            if buffer.frame_count() != expected {
+                return Err(ProcessBlockError::BufferFrameCountMismatch {
+                    expected,
+                    actual: buffer.frame_count(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn channels(&mut self) -> Self::Channels<'_> {
+        self.first.iter_mut().chain(self.second.iter_mut())
     }
 }
 
@@ -337,8 +378,8 @@ fn process_uses_durable_base_state() {
 
     let mut left = [1.0_f32, 0.5];
     let mut buffers = [ChannelBuffer::in_place(
-        chassis_core::buffer::InputEndpoint::new(MAIN_INPUT, 0),
-        chassis_core::buffer::OutputEndpoint::new(MAIN_OUTPUT, 0),
+        InputEndpoint::new(MAIN_INPUT, 0),
+        OutputEndpoint::new(MAIN_OUTPUT, 0),
         &mut left,
         2,
     )
@@ -354,5 +395,63 @@ fn process_uses_durable_base_state() {
     assert_eq!(
         left.map(f32::to_bits),
         [0.5_f32.to_bits(), 0.25_f32.to_bits()]
+    );
+}
+
+#[test]
+fn process_source_accepts_noncontiguous_channel_storage() {
+    let metrics = Arc::new(Metrics::default());
+    let component = Effect::new(metrics);
+    let mut runtime: InstanceRuntime<EffectProcessor> =
+        InstanceRuntime::for_component(&component).expect("instance schema is valid");
+    runtime
+        .parameters_mut()
+        .set("gain", ParameterValue::Float(0.5))
+        .expect("gain is valid");
+    runtime
+        .activate(&component, process_config(), DEFAULT_EFFECT_CONFIGURATION)
+        .expect("activation succeeds");
+
+    let left_input = [1.0_f32, 0.5];
+    let right_input = [0.25_f32, 2.0];
+    let mut left_output = [0.0_f32; 2];
+    let mut right_output = [0.0_f32; 2];
+    let mut first = [ChannelBuffer::separate(
+        InputEndpoint::new(MAIN_INPUT, 0),
+        &left_input,
+        OutputEndpoint::new(MAIN_OUTPUT, 0),
+        &mut left_output,
+        2,
+    )
+    .expect("left channel is valid")];
+    let mut second = [ChannelBuffer::separate(
+        InputEndpoint::new(MAIN_INPUT, 1),
+        &right_input,
+        OutputEndpoint::new(MAIN_OUTPUT, 1),
+        &mut right_output,
+        2,
+    )
+    .expect("right channel is valid")];
+    let mut source = SplitChannelBuffers {
+        first: &mut first,
+        second: &mut second,
+    };
+    let context = ProcessContext::new(
+        ProcessMode::Realtime,
+        TransportSnapshot::unknown(),
+        ParameterEvents::empty_for_block(2),
+    );
+
+    runtime
+        .process_source(2, context, &mut source)
+        .expect("noncontiguous buffer source processes");
+
+    assert_eq!(
+        left_output.map(f32::to_bits),
+        [0.5_f32.to_bits(), 0.25_f32.to_bits()]
+    );
+    assert_eq!(
+        right_output.map(f32::to_bits),
+        [0.125_f32.to_bits(), 1.0_f32.to_bits()]
     );
 }
