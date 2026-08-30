@@ -98,39 +98,8 @@ impl ClapAudioConfiguration {
         descriptors: &[AudioPortDescriptor],
         mapping: &[ClapAudioPort],
     ) -> Result<Self, AudioMappingError> {
-        for (index, mapped) in mapping.iter().enumerate() {
-            if mapped.id == u32::MAX {
-                return Err(AudioMappingError::InvalidClapId(mapped.key));
-            }
-            if mapping[..index]
-                .iter()
-                .any(|previous| previous.key == mapped.key)
-            {
-                return Err(AudioMappingError::DuplicateMappedPort(mapped.key));
-            }
-            if !descriptors
-                .iter()
-                .any(|descriptor| descriptor.key == mapped.key)
-            {
-                return Err(AudioMappingError::UnknownMappedPort(mapped.key));
-            }
-        }
-
-        let mut configured = Vec::new();
-        configured
-            .try_reserve_exact(mapping.len())
-            .map_err(|_| AudioMappingError::AllocationFailed)?;
-        for descriptor in descriptors {
-            if let Some(mapped) = mapping
-                .iter()
-                .find(|candidate| candidate.key == descriptor.key)
-            {
-                configured.push(ConfiguredAudioPort {
-                    key: mapped.key,
-                    layout: mapped.layout,
-                });
-            }
-        }
+        validate_mapping_identity(descriptors, mapping)?;
+        let configured = configured_ports(descriptors, mapping)?;
         AudioIoConfiguration::new(&configured)
             .validate(descriptors)
             .map_err(AudioMappingError::InvalidConfiguration)?;
@@ -145,57 +114,8 @@ impl ClapAudioConfiguration {
             .map_err(|_| AudioMappingError::AllocationFailed)?;
 
         for mapped in mapping {
-            let descriptor = descriptors
-                .iter()
-                .copied()
-                .find(|descriptor| descriptor.key == mapped.key)
-                .ok_or(AudioMappingError::UnknownMappedPort(mapped.key))?;
-            let in_place_pair_id = match mapped.in_place_pair {
-                Some(pair_key) => {
-                    let pair_descriptor = descriptors
-                        .iter()
-                        .copied()
-                        .find(|candidate| candidate.key == pair_key)
-                        .ok_or(AudioMappingError::UnknownInPlacePair {
-                            port: mapped.key,
-                            pair: pair_key,
-                        })?;
-                    if pair_descriptor.direction == descriptor.direction {
-                        return Err(AudioMappingError::InPlacePairSameDirection {
-                            port: mapped.key,
-                            pair: pair_key,
-                        });
-                    }
-                    let pair = mapping
-                        .iter()
-                        .copied()
-                        .find(|candidate| candidate.key == pair_key)
-                        .ok_or(AudioMappingError::InactiveInPlacePair {
-                            port: mapped.key,
-                            pair: pair_key,
-                        })?;
-                    if pair.layout.channel_count() != mapped.layout.channel_count() {
-                        return Err(AudioMappingError::InPlacePairChannelMismatch {
-                            port: mapped.key,
-                            pair: pair_key,
-                        });
-                    }
-                    if pair.in_place_pair != Some(mapped.key) {
-                        return Err(AudioMappingError::NonReciprocalInPlacePair {
-                            port: mapped.key,
-                            pair: pair_key,
-                        });
-                    }
-                    Some(pair.id)
-                }
-                None => None,
-            };
-            let binding = PortBinding {
-                descriptor,
-                mapping: *mapped,
-                in_place_pair_id,
-            };
-            match descriptor.direction {
+            let binding = port_binding(descriptors, mapping, mapped)?;
+            match binding.descriptor.direction {
                 PortDirection::Input => inputs.push(binding),
                 PortDirection::Output => outputs.push(binding),
             }
@@ -245,6 +165,116 @@ impl ClapAudioConfiguration {
     pub(crate) fn output(&self, index: usize) -> Option<ClapAudioPort> {
         self.outputs.get(index).map(|binding| binding.mapping)
     }
+}
+
+fn validate_mapping_identity(
+    descriptors: &[AudioPortDescriptor],
+    mapping: &[ClapAudioPort],
+) -> Result<(), AudioMappingError> {
+    for (index, mapped) in mapping.iter().enumerate() {
+        if mapped.id == u32::MAX {
+            return Err(AudioMappingError::InvalidClapId(mapped.key));
+        }
+        if mapping[..index]
+            .iter()
+            .any(|previous| previous.key == mapped.key)
+        {
+            return Err(AudioMappingError::DuplicateMappedPort(mapped.key));
+        }
+        if !descriptors
+            .iter()
+            .any(|descriptor| descriptor.key == mapped.key)
+        {
+            return Err(AudioMappingError::UnknownMappedPort(mapped.key));
+        }
+    }
+    Ok(())
+}
+
+fn configured_ports(
+    descriptors: &[AudioPortDescriptor],
+    mapping: &[ClapAudioPort],
+) -> Result<Vec<ConfiguredAudioPort>, AudioMappingError> {
+    let mut configured = Vec::new();
+    configured
+        .try_reserve_exact(mapping.len())
+        .map_err(|_| AudioMappingError::AllocationFailed)?;
+    for descriptor in descriptors {
+        if let Some(mapped) = mapping
+            .iter()
+            .find(|candidate| candidate.key == descriptor.key)
+        {
+            configured.push(ConfiguredAudioPort {
+                key: mapped.key,
+                layout: mapped.layout,
+            });
+        }
+    }
+    Ok(configured)
+}
+
+fn port_binding(
+    descriptors: &[AudioPortDescriptor],
+    mapping: &[ClapAudioPort],
+    mapped: &ClapAudioPort,
+) -> Result<PortBinding, AudioMappingError> {
+    let descriptor = descriptors
+        .iter()
+        .copied()
+        .find(|descriptor| descriptor.key == mapped.key)
+        .ok_or(AudioMappingError::UnknownMappedPort(mapped.key))?;
+    let in_place_pair_id = in_place_pair_id(descriptors, mapping, descriptor, *mapped)?;
+    Ok(PortBinding {
+        descriptor,
+        mapping: *mapped,
+        in_place_pair_id,
+    })
+}
+
+fn in_place_pair_id(
+    descriptors: &[AudioPortDescriptor],
+    mapping: &[ClapAudioPort],
+    descriptor: AudioPortDescriptor,
+    mapped: ClapAudioPort,
+) -> Result<Option<u32>, AudioMappingError> {
+    let Some(pair_key) = mapped.in_place_pair else {
+        return Ok(None);
+    };
+    let pair_descriptor = descriptors
+        .iter()
+        .copied()
+        .find(|candidate| candidate.key == pair_key)
+        .ok_or(AudioMappingError::UnknownInPlacePair {
+            port: mapped.key,
+            pair: pair_key,
+        })?;
+    if pair_descriptor.direction == descriptor.direction {
+        return Err(AudioMappingError::InPlacePairSameDirection {
+            port: mapped.key,
+            pair: pair_key,
+        });
+    }
+    let pair = mapping
+        .iter()
+        .copied()
+        .find(|candidate| candidate.key == pair_key)
+        .ok_or(AudioMappingError::InactiveInPlacePair {
+            port: mapped.key,
+            pair: pair_key,
+        })?;
+    if pair.layout.channel_count() != mapped.layout.channel_count() {
+        return Err(AudioMappingError::InPlacePairChannelMismatch {
+            port: mapped.key,
+            pair: pair_key,
+        });
+    }
+    if pair.in_place_pair != Some(mapped.key) {
+        return Err(AudioMappingError::NonReciprocalInPlacePair {
+            port: mapped.key,
+            pair: pair_key,
+        });
+    }
+    Ok(Some(pair.id))
 }
 
 fn order_direction(ports: &mut [PortBinding]) -> Result<(), AudioMappingError> {
