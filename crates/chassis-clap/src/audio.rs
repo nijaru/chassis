@@ -183,14 +183,6 @@ impl ClapAudioConfiguration {
         AudioIoConfiguration::new(&self.configured)
     }
 
-    pub(crate) fn input(&self, index: usize) -> Option<ClapAudioPort> {
-        self.inputs.get(index).map(|binding| binding.mapping)
-    }
-
-    pub(crate) fn output(&self, index: usize) -> Option<ClapAudioPort> {
-        self.outputs.get(index).map(|binding| binding.mapping)
-    }
-
     pub(crate) fn process_slots(&self) -> &[ClapProcessSlot] {
         &self.process_slots
     }
@@ -551,7 +543,13 @@ mod tests {
         assert_eq!(configuration.audio_io().ports()[1].key, MAIN_OUTPUT);
         assert_eq!(configuration.audio_io().ports()[2].key, SIDECHAIN_INPUT);
         assert!(configuration.process_slots()[0].paired);
-        assert_eq!(configuration.process_slots()[1].input.unwrap().key, SIDECHAIN_INPUT);
+        assert_eq!(
+            configuration.process_slots()[1]
+                .input
+                .expect("sidechain slot has an input")
+                .key,
+            SIDECHAIN_INPUT
+        );
         assert!(configuration.process_slots()[1].output.is_none());
     }
 
@@ -565,16 +563,15 @@ mod tests {
         let configuration =
             ClapAudioConfiguration::new(&chassis_core::audio::DEFAULT_EFFECT_PORTS, &reordered)
                 .expect("reordered mapping is valid");
+        let main = configuration.process_slots()[0];
+        assert_eq!(main.input.expect("main input exists").key, MAIN_INPUT);
+        assert_eq!(main.output.expect("main output exists").key, MAIN_OUTPUT);
+        assert!(main.paired);
         assert_eq!(
-            configuration.input(0).expect("main input exists").key,
-            MAIN_INPUT
-        );
-        assert_eq!(
-            configuration.output(0).expect("main output exists").key,
-            MAIN_OUTPUT
-        );
-        assert_eq!(
-            configuration.input(1).expect("sidechain exists").key,
+            configuration.process_slots()[1]
+                .input
+                .expect("sidechain exists")
+                .key,
             SIDECHAIN_INPUT
         );
     }
@@ -646,7 +643,13 @@ mod tests {
         );
         assert_eq!(configuration.process_slots().len(), 2);
         assert!(configuration.process_slots()[0].paired);
-        assert_eq!(configuration.process_slots()[1].input.unwrap().key, AUX_INPUT);
+        assert_eq!(
+            configuration.process_slots()[1]
+                .input
+                .expect("aux input exists")
+                .key,
+            AUX_INPUT
+        );
     }
 
     #[test]
@@ -693,11 +696,17 @@ mod tests {
             ClapAudioConfiguration::new(&PORTS, &mapping).expect("paired aux mapping is valid");
         let slots = configuration.process_slots();
         assert_eq!(slots.len(), 2);
-        assert_eq!(slots[0].input.unwrap().key, MAIN_INPUT);
-        assert_eq!(slots[0].output.unwrap().key, MAIN_OUTPUT);
+        assert_eq!(slots[0].input.expect("main input exists").key, MAIN_INPUT);
+        assert_eq!(
+            slots[0].output.expect("main output exists").key,
+            MAIN_OUTPUT
+        );
         assert!(slots[0].paired);
-        assert_eq!(slots[1].input.unwrap().key, AUX_INPUT);
-        assert_eq!(slots[1].output.unwrap().key, AUX_OUTPUT);
+        assert_eq!(slots[1].input.expect("aux input exists").key, AUX_INPUT);
+        assert_eq!(
+            slots[1].output.expect("aux output exists").key,
+            AUX_OUTPUT
+        );
         assert!(slots[1].paired);
     }
 
@@ -744,8 +753,8 @@ mod tests {
         let configuration = ClapAudioConfiguration::new(&PORTS, &mapping)
             .expect("independent aux mapping is valid");
         let slot = configuration.process_slots()[1];
-        assert_eq!(slot.input.unwrap().key, AUX_INPUT);
-        assert_eq!(slot.output.unwrap().key, AUX_OUTPUT);
+        assert_eq!(slot.input.expect("aux input exists").key, AUX_INPUT);
+        assert_eq!(slot.output.expect("aux output exists").key, AUX_OUTPUT);
         assert!(!slot.paired);
     }
 }
