@@ -634,7 +634,6 @@ mod tests {
         );
         let mapped = map_transport(Some(&event)).expect("transport is valid");
         assert_eq!(mapped.playing(), Some(true));
-        assert_eq!(mapped.recording(), Some(false).map(|_| true));
         assert_eq!(mapped.recording(), Some(true));
         assert_eq!(mapped.tempo_bpm(), Some(120.0));
         assert_eq!(mapped.sample_position(), None);
