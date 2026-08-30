@@ -322,19 +322,34 @@ impl fmt::Display for AudioMappingError {
         match self {
             Self::AllocationFailed => formatter.write_str("audio mapping allocation failed"),
             Self::InvalidClapId(port) => {
-                write!(formatter, "audio port {} uses the invalid CLAP ID", port.as_str())
+                write!(
+                    formatter,
+                    "audio port {} uses the invalid CLAP ID",
+                    port.as_str()
+                )
             }
             Self::DuplicateMappedPort(port) => {
-                write!(formatter, "audio port {} is mapped more than once", port.as_str())
+                write!(
+                    formatter,
+                    "audio port {} is mapped more than once",
+                    port.as_str()
+                )
             }
             Self::UnknownMappedPort(port) => {
-                write!(formatter, "mapped audio port {} is not declared", port.as_str())
+                write!(
+                    formatter,
+                    "mapped audio port {} is not declared",
+                    port.as_str()
+                )
             }
             Self::InvalidConfiguration(error) => {
                 write!(formatter, "invalid Chassis audio configuration: {error}")
             }
             Self::DuplicateClapId(id) => {
-                write!(formatter, "CLAP audio port ID {id} is duplicated in one direction")
+                write!(
+                    formatter,
+                    "CLAP audio port ID {id} is duplicated in one direction"
+                )
             }
             Self::MultipleMainPorts => {
                 formatter.write_str("CLAP allows at most one main port per direction")
@@ -417,11 +432,9 @@ mod tests {
             DEFAULT_CLAP_AUDIO_PORTS[1],
             DEFAULT_CLAP_AUDIO_PORTS[0],
         ];
-        let configuration = ClapAudioConfiguration::new(
-            &chassis_core::audio::DEFAULT_EFFECT_PORTS,
-            &reordered,
-        )
-        .expect("reordered mapping is valid");
+        let configuration =
+            ClapAudioConfiguration::new(&chassis_core::audio::DEFAULT_EFFECT_PORTS, &reordered)
+                .expect("reordered mapping is valid");
         assert_eq!(
             configuration.input(0).expect("main input exists").key,
             MAIN_INPUT
@@ -490,8 +503,8 @@ mod tests {
             ClapAudioPort::new(MAIN_OUTPUT, 20, ChannelLayout::Mono, Some(MAIN_INPUT)),
             ClapAudioPort::new(AUX_INPUT, 11, ChannelLayout::Mono, None),
         ];
-        let configuration =
-            ClapAudioConfiguration::new(&PORTS, &mapping).expect("arbitrary setup mapping is valid");
+        let configuration = ClapAudioConfiguration::new(&PORTS, &mapping)
+            .expect("arbitrary setup mapping is valid");
         assert_eq!(configuration.count(PortDirection::Input), 2);
         assert_eq!(configuration.count(PortDirection::Output), 1);
         assert_eq!(

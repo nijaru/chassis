@@ -17,6 +17,7 @@ use std::{
     vec::Vec,
 };
 
+use audio::{AudioMappingError, ClapAudioConfiguration};
 use chassis_core::{
     audio::{ChannelLayout, MAIN_INPUT, MAIN_OUTPUT, PortDirection, SIDECHAIN_INPUT},
     automation::ParameterEvents,
@@ -34,6 +35,7 @@ use clack_extensions::{
     },
     state::{PluginState, PluginStateImpl},
 };
+use clack_plugin::process::audio::PortPair;
 use clack_plugin::{
     entry::{DefaultPluginFactory, SinglePluginEntry},
     events::{
@@ -50,16 +52,15 @@ use clack_plugin::{
     stream::{InputStream, OutputStream},
     utils::Cookie,
 };
-use audio::{AudioMappingError, ClapAudioConfiguration};
 use parameters::{
     ClapParameterState, ParameterMappingError, ParameterStateError, ParameterSyncError,
     normalized_events,
 };
 
-/// Re-export of Clack's CLAP entry macro for Chassis export crates.
-pub use clack_plugin::clack_export_entry;
 /// Explicit CLAP audio-port projection metadata.
 pub use audio::{ClapAudioPort, DEFAULT_CLAP_AUDIO_PORTS};
+/// Re-export of Clack's CLAP entry macro for Chassis export crates.
+pub use clack_plugin::clack_export_entry;
 
 /// Temporary CLAP metadata contract for the conventional stereo-effect adapter.
 ///
@@ -410,31 +411,21 @@ where
         }
 
         let mut ports = audio.port_pairs();
-        let mut main = ports
+        let main = ports
             .next()
             .ok_or(PluginError::Message("Missing CLAP main audio port pair"))?;
         let frame_count = main.frames_count();
-        let mut sidechain = if self.sidechain_enabled {
-            Some(
+        let sidechain = self
+            .sidechain_enabled
+            .then(|| {
                 ports
                     .next()
-                    .ok_or(PluginError::Message("Missing CLAP sidechain input port"))?,
-            )
-        } else {
-            None
-        };
+                    .ok_or(PluginError::Message("Missing CLAP sidechain input port"))
+            })
+            .transpose()?;
         if ports.next().is_some() {
             return Err(PluginError::Message(
                 "CLAP supplied unexpected audio ports for the activated topology",
-            ));
-        }
-
-        let channels = main.channels()?.into_f32().ok_or(PluginError::Message(
-            "Chassis stereo topology requires f32 main audio",
-        ))?;
-        if channels.channel_pair_count() != 2 {
-            return Err(PluginError::Message(
-                "Chassis stereo topology requires exactly two main channels",
             ));
         }
 
@@ -451,57 +442,7 @@ where
         )
         .map_err(|_| PluginError::Message("Invalid CLAP parameter event stream"))?;
         let context = ProcessContext::new(ProcessMode::Realtime, transport, parameter_events);
-
-        let mut channels = channels.into_iter();
-        let left = channels
-            .next()
-            .ok_or(PluginError::Message("Missing left main channel"))?;
-        let right = channels
-            .next()
-            .ok_or(PluginError::Message("Missing right main channel"))?;
-
-        if let Some(sidechain) = sidechain.as_mut() {
-            if sidechain.frames_count() != frame_count {
-                return Err(PluginError::Message(
-                    "CLAP sidechain frame count differs from main audio",
-                ));
-            }
-            let sidechain_channels = sidechain
-                .channels()?
-                .into_f32()
-                .ok_or(PluginError::Message(
-                    "Chassis stereo sidechain requires f32 audio",
-                ))?;
-            if sidechain_channels.channel_pair_count() != 2 {
-                return Err(PluginError::Message(
-                    "Chassis stereo sidechain requires exactly two channels",
-                ));
-            }
-            let mut sidechain_channels = sidechain_channels.into_iter();
-            let sidechain_left = sidechain_channels
-                .next()
-                .ok_or(PluginError::Message("Missing left sidechain channel"))?;
-            let sidechain_right = sidechain_channels
-                .next()
-                .ok_or(PluginError::Message("Missing right sidechain channel"))?;
-            let mut buffers = [
-                map_main_channel(left, 0, frame_count)?,
-                map_main_channel(right, 1, frame_count)?,
-                map_sidechain_channel(sidechain_left, 0, frame_count)?,
-                map_sidechain_channel(sidechain_right, 1, frame_count)?,
-            ];
-            self.runtime
-                .process(frame_count, context, &mut buffers)
-                .map_err(|_| PluginError::Message("Invalid Chassis process block"))?;
-        } else {
-            let mut buffers = [
-                map_main_channel(left, 0, frame_count)?,
-                map_main_channel(right, 1, frame_count)?,
-            ];
-            self.runtime
-                .process(frame_count, context, &mut buffers)
-                .map_err(|_| PluginError::Message("Invalid Chassis process block"))?;
-        }
+        process_audio_ports(&mut self.runtime, main, sidechain, context)?;
 
         self.shared
             .parameters
@@ -519,6 +460,76 @@ where
     fn reset(&mut self) {
         let _ = self.runtime.reset();
     }
+}
+
+fn process_audio_ports<P>(
+    runtime: &mut InstanceRuntime<P>,
+    mut main: PortPair<'_>,
+    mut sidechain: Option<PortPair<'_>>,
+    context: ProcessContext<'_>,
+) -> Result<(), PluginError>
+where
+    P: ChassisProcess<f32> + Processor,
+{
+    let frame_count = main.frames_count();
+    let channels = main.channels()?.into_f32().ok_or(PluginError::Message(
+        "Chassis stereo topology requires f32 main audio",
+    ))?;
+    if channels.channel_pair_count() != 2 {
+        return Err(PluginError::Message(
+            "Chassis stereo topology requires exactly two main channels",
+        ));
+    }
+
+    let mut channels = channels.into_iter();
+    let left = channels
+        .next()
+        .ok_or(PluginError::Message("Missing left main channel"))?;
+    let right = channels
+        .next()
+        .ok_or(PluginError::Message("Missing right main channel"))?;
+    let Some(sidechain) = sidechain.as_mut() else {
+        let mut buffers = [
+            map_main_channel(left, 0, frame_count)?,
+            map_main_channel(right, 1, frame_count)?,
+        ];
+        return runtime
+            .process(frame_count, context, &mut buffers)
+            .map_err(|_| PluginError::Message("Invalid Chassis process block"));
+    };
+
+    if sidechain.frames_count() != frame_count {
+        return Err(PluginError::Message(
+            "CLAP sidechain frame count differs from main audio",
+        ));
+    }
+    let sidechain_channels = sidechain
+        .channels()?
+        .into_f32()
+        .ok_or(PluginError::Message(
+            "Chassis stereo sidechain requires f32 audio",
+        ))?;
+    if sidechain_channels.channel_pair_count() != 2 {
+        return Err(PluginError::Message(
+            "Chassis stereo sidechain requires exactly two channels",
+        ));
+    }
+    let mut sidechain_channels = sidechain_channels.into_iter();
+    let sidechain_left = sidechain_channels
+        .next()
+        .ok_or(PluginError::Message("Missing left sidechain channel"))?;
+    let sidechain_right = sidechain_channels
+        .next()
+        .ok_or(PluginError::Message("Missing right sidechain channel"))?;
+    let mut buffers = [
+        map_main_channel(left, 0, frame_count)?,
+        map_main_channel(right, 1, frame_count)?,
+        map_sidechain_channel(&sidechain_left, 0, frame_count)?,
+        map_sidechain_channel(&sidechain_right, 1, frame_count)?,
+    ];
+    runtime
+        .process(frame_count, context, &mut buffers)
+        .map_err(|_| PluginError::Message("Invalid Chassis process block"))
 }
 
 impl<P> PluginAudioProcessorParams for ChassisAudioProcessor<'_, P>
@@ -542,9 +553,7 @@ where
     }
 }
 
-fn validate_stereo_process_mapping(
-    audio: &ClapAudioConfiguration,
-) -> Result<bool, PluginError> {
+fn validate_stereo_process_mapping(audio: &ClapAudioConfiguration) -> Result<bool, PluginError> {
     let input_count = audio.count(PortDirection::Input);
     let output_count = audio.count(PortDirection::Output);
     if !(input_count == 1 || input_count == 2) || output_count != 1 {
@@ -712,11 +721,11 @@ fn map_main_channel(
     }
 }
 
-fn map_sidechain_channel(
-    pair: ChannelPair<'_, f32>,
+fn map_sidechain_channel<'a>(
+    pair: &ChannelPair<'a, f32>,
     channel: u32,
     frame_count: u32,
-) -> Result<ChannelBuffer<'_, f32>, PluginError> {
+) -> Result<ChannelBuffer<'a, f32>, PluginError> {
     let input = InputEndpoint::new(SIDECHAIN_INPUT, channel);
     match pair {
         ChannelPair::InputOnly(samples) => ChannelBuffer::input_only(input, samples, frame_count)
@@ -806,14 +815,11 @@ mod tests {
     #[test]
     fn current_process_mapping_accepts_main_only_or_default_sidechain() {
         let main_only = [DEFAULT_CLAP_AUDIO_PORTS[0], DEFAULT_CLAP_AUDIO_PORTS[1]];
-        let main_only = ClapAudioConfiguration::new(
-            &chassis_core::audio::DEFAULT_EFFECT_PORTS,
-            &main_only,
-        )
-        .expect("main-only mapping is valid");
-        assert_eq!(
-            validate_stereo_process_mapping(&main_only).expect("main-only process is supported"),
-            false
+        let main_only =
+            ClapAudioConfiguration::new(&chassis_core::audio::DEFAULT_EFFECT_PORTS, &main_only)
+                .expect("main-only mapping is valid");
+        assert!(
+            !validate_stereo_process_mapping(&main_only).expect("main-only process is supported")
         );
 
         let sidechain = ClapAudioConfiguration::new(
