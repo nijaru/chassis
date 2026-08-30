@@ -1,12 +1,13 @@
 //! Weak-memory qualification model for the CLAP scalar publication protocol.
 //!
-//! This integration test mirrors the production generation/CAS and payload
-//! ordering without abstracting the production atomics solely for Loom.
+//! This integration test mirrors the production generation/CAS, payload, and
+//! pending synchronization ordering without abstracting the production atomics
+//! solely for Loom.
 
 use loom::{
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     thread,
 };
@@ -22,6 +23,7 @@ const INITIAL_VALUES: [u64; 2] = [10, 20];
 struct PublicationModel {
     values: [AtomicU64; 2],
     generation: AtomicU64,
+    pending: AtomicBool,
 }
 
 impl PublicationModel {
@@ -32,6 +34,7 @@ impl PublicationModel {
                 AtomicU64::new(INITIAL_VALUES[1]),
             ],
             generation: AtomicU64::new(0),
+            pending: AtomicBool::new(false),
         }
     }
 
@@ -49,6 +52,11 @@ impl PublicationModel {
 
     fn finish_write(&self, completed: u64) {
         self.generation.store(completed, Ordering::Release);
+        self.pending.store(true, Ordering::Release);
+    }
+
+    fn take_pending(&self) -> bool {
+        self.pending.swap(false, Ordering::AcqRel)
     }
 
     fn try_publish_values_from(&self, expected: u64, values: [u64; 2]) -> bool {
@@ -141,6 +149,47 @@ fn accepted_snapshot_never_mixes_generations() {
                 2 => assert_eq!(values, [11, 21]),
                 _ => panic!("accepted an unexpected generation {generation}"),
             }
+        }
+    });
+}
+
+#[test]
+fn pending_handoff_observes_completed_publication_without_losing_notification() {
+    loom::model(|| {
+        let publication = Arc::new(PublicationModel::new());
+
+        let writer = {
+            let publication = Arc::clone(&publication);
+            thread::spawn(move || {
+                assert!(publication.try_publish_values_from(0, [11, 21]));
+            })
+        };
+        let consumer = {
+            let publication = Arc::clone(&publication);
+            thread::spawn(move || {
+                if !publication.take_pending() {
+                    return false;
+                }
+
+                let (generation, values) = publication
+                    .try_snapshot()
+                    .expect("consumed pending publication must have a coherent snapshot");
+                assert_eq!(generation, 2);
+                assert_eq!(values, [11, 21]);
+                true
+            })
+        };
+
+        writer.join().expect("model writer must not panic");
+        let consumed = consumer.join().expect("model consumer must not panic");
+
+        if !consumed {
+            assert!(publication.take_pending());
+            let (generation, values) = publication
+                .try_snapshot()
+                .expect("retained pending publication must have a coherent snapshot");
+            assert_eq!(generation, 2);
+            assert_eq!(values, [11, 21]);
         }
     });
 }
