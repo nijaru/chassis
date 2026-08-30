@@ -44,7 +44,9 @@ impl ScalarPublication {
     }
 
     pub(super) fn take_pending(&self) -> bool {
-        self.pending.swap(false, Ordering::AcqRel)
+        self.pending
+            .compare_exchange(true, false, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
     }
 
     fn try_begin_write(&self, expected: u64) -> Option<u64> {
