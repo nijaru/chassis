@@ -5,6 +5,7 @@
 //! direction-local setup details. Mapping and validation run outside the audio
 //! callback and may allocate.
 
+use core::fmt;
 use std::vec::Vec;
 
 use chassis_core::audio::{
@@ -107,17 +108,28 @@ impl ClapAudioConfiguration {
             {
                 return Err(AudioMappingError::DuplicateMappedPort(mapped.key));
             }
+            if !descriptors
+                .iter()
+                .any(|descriptor| descriptor.key == mapped.key)
+            {
+                return Err(AudioMappingError::UnknownMappedPort(mapped.key));
+            }
         }
 
         let mut configured = Vec::new();
         configured
             .try_reserve_exact(mapping.len())
             .map_err(|_| AudioMappingError::AllocationFailed)?;
-        for mapped in mapping {
-            configured.push(ConfiguredAudioPort {
-                key: mapped.key,
-                layout: mapped.layout,
-            });
+        for descriptor in descriptors {
+            if let Some(mapped) = mapping
+                .iter()
+                .find(|candidate| candidate.key == descriptor.key)
+            {
+                configured.push(ConfiguredAudioPort {
+                    key: mapped.key,
+                    layout: mapped.layout,
+                });
+            }
         }
         AudioIoConfiguration::new(&configured)
             .validate(descriptors)
@@ -275,6 +287,64 @@ pub(crate) enum AudioMappingError {
     NonReciprocalInPlacePair { port: PortKey, pair: PortKey },
 }
 
+impl fmt::Display for AudioMappingError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::AllocationFailed => formatter.write_str("audio mapping allocation failed"),
+            Self::InvalidClapId(port) => {
+                write!(formatter, "audio port {} uses the invalid CLAP ID", port.as_str())
+            }
+            Self::DuplicateMappedPort(port) => {
+                write!(formatter, "audio port {} is mapped more than once", port.as_str())
+            }
+            Self::UnknownMappedPort(port) => {
+                write!(formatter, "mapped audio port {} is not declared", port.as_str())
+            }
+            Self::InvalidConfiguration(error) => {
+                write!(formatter, "invalid Chassis audio configuration: {error}")
+            }
+            Self::DuplicateClapId(id) => {
+                write!(formatter, "CLAP audio port ID {id} is duplicated in one direction")
+            }
+            Self::MultipleMainPorts => {
+                formatter.write_str("CLAP allows at most one main port per direction")
+            }
+            Self::UnknownInPlacePair { port, pair } => write!(
+                formatter,
+                "audio port {} pairs with undeclared port {}",
+                port.as_str(),
+                pair.as_str()
+            ),
+            Self::InactiveInPlacePair { port, pair } => write!(
+                formatter,
+                "audio port {} pairs with inactive port {}",
+                port.as_str(),
+                pair.as_str()
+            ),
+            Self::InPlacePairSameDirection { port, pair } => write!(
+                formatter,
+                "audio port {} pairs in place with same-direction port {}",
+                port.as_str(),
+                pair.as_str()
+            ),
+            Self::InPlacePairChannelMismatch { port, pair } => write!(
+                formatter,
+                "audio port {} has a different channel count from in-place pair {}",
+                port.as_str(),
+                pair.as_str()
+            ),
+            Self::NonReciprocalInPlacePair { port, pair } => write!(
+                formatter,
+                "audio port {} and in-place pair {} do not reference each other",
+                port.as_str(),
+                pair.as_str()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for AudioMappingError {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -285,9 +355,11 @@ mod tests {
 
     #[test]
     fn default_mapping_projects_main_and_sidechain_without_derived_ids() {
-        let configuration =
-            ClapAudioConfiguration::new(&chassis_core::audio::DEFAULT_EFFECT_PORTS, &DEFAULT_CLAP_AUDIO_PORTS)
-                .expect("default mapping is valid");
+        let configuration = ClapAudioConfiguration::new(
+            &chassis_core::audio::DEFAULT_EFFECT_PORTS,
+            &DEFAULT_CLAP_AUDIO_PORTS,
+        )
+        .expect("default mapping is valid");
         assert_eq!(configuration.count(PortDirection::Input), 2);
         assert_eq!(configuration.count(PortDirection::Output), 1);
         let main_input = configuration
@@ -303,6 +375,9 @@ mod tests {
         assert!(!sidechain.flags.contains(AudioPortFlags::IS_MAIN));
         assert_eq!(sidechain.in_place_pair, None);
         assert_eq!(configuration.audio_io().ports().len(), 3);
+        assert_eq!(configuration.audio_io().ports()[0].key, MAIN_INPUT);
+        assert_eq!(configuration.audio_io().ports()[1].key, MAIN_OUTPUT);
+        assert_eq!(configuration.audio_io().ports()[2].key, SIDECHAIN_INPUT);
     }
 
     #[test]
@@ -312,9 +387,11 @@ mod tests {
             DEFAULT_CLAP_AUDIO_PORTS[1],
             DEFAULT_CLAP_AUDIO_PORTS[0],
         ];
-        let configuration =
-            ClapAudioConfiguration::new(&chassis_core::audio::DEFAULT_EFFECT_PORTS, &reordered)
-                .expect("reordered mapping is valid");
+        let configuration = ClapAudioConfiguration::new(
+            &chassis_core::audio::DEFAULT_EFFECT_PORTS,
+            &reordered,
+        )
+        .expect("reordered mapping is valid");
         assert_eq!(
             configuration.input(0).expect("main input exists").key,
             MAIN_INPUT
@@ -388,7 +465,10 @@ mod tests {
         assert_eq!(configuration.count(PortDirection::Input), 2);
         assert_eq!(configuration.count(PortDirection::Output), 1);
         assert_eq!(
-            configuration.info(0, PortDirection::Input).unwrap().channel_count,
+            configuration
+                .info(0, PortDirection::Input)
+                .expect("main input exists")
+                .channel_count,
             1
         );
     }
