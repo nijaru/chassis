@@ -14,12 +14,12 @@ fn rich_document() -> StateDocument {
     let mut document = StateDocument::new(PRODUCT_ID, 7).expect("product identity is valid");
     for entry in [
         StateEntry::new("state/boolean", StateValue::Boolean(true)),
-        StateEntry::new("state/signed", StateValue::Signed(-42)),
-        StateEntry::new("state/unsigned", StateValue::Unsigned(42)),
-        StateEntry::new("state/float", StateValue::Float(0.25)),
-        StateEntry::new("state/text", StateValue::Text("hello".into())),
-        StateEntry::new("state/choice", StateValue::Choice("high".into())),
         StateEntry::new("state/bytes", StateValue::Bytes(vec![1, 2, 3, 4, 5])),
+        StateEntry::new("state/choice", StateValue::Choice("high".into())),
+        StateEntry::new("state/float", StateValue::Float(0.25)),
+        StateEntry::new("state/signed", StateValue::Signed(-42)),
+        StateEntry::new("state/text", StateValue::Text("hello".into())),
+        StateEntry::new("state/unsigned", StateValue::Unsigned(42)),
     ] {
         document.insert(entry).expect("fixture key is unique");
     }
