@@ -1,6 +1,6 @@
 # Chassis State Format
 
-Status: preferred prototype implemented in `chassis-core`; **not a stable wire-format promise**. Freeze only after corruption/property/fuzz tests, migration fixtures, and cross-format round trips.
+Status: preferred prototype implemented in `chassis-core`, including adjacent product-schema migration traversal; **not a stable wire-format promise**. Freeze only after corruption/property/fuzz tests, migration fixtures, and cross-format round trips.
 
 ## Goal
 
@@ -140,6 +140,15 @@ Product migrations conventionally run adjacent versions:
 ```text
 v1 -> v2 -> v3 -> current
 ```
+
+`chassis-core::StateMigration` and `StateDocument::migrate_to()` now enforce a
+unique one-version-at-a-time chain. Each migration receives a temporary
+`StateDocument`, must preserve its product identity, and must return its
+declared next schema. Missing, ambiguous, non-adjacent, identity-changing,
+and schema-mismatched steps fail before a caller can publish the result.
+Product-defined migration errors remain typed. The runtime byte-load boundary
+decodes and migrates before its complete transactional parameter replacement;
+custom entries survive the document migration for a future product-state owner.
 
 Keep at least one golden fixture from every public product schema. A newer unknown product schema fails safely by default unless the product explicitly proves a forward-compatibility rule.
 

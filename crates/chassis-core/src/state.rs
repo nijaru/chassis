@@ -405,6 +405,222 @@ impl StateDocument {
             entries,
         })
     }
+
+    /// Migrate this document through adjacent product schema versions.
+    ///
+    /// Migrations receive ownership of a temporary document and must return a
+    /// document with the same product identity and the declared next schema.
+    /// The chain is local to this method; live runtime state is not touched
+    /// until a caller accepts the returned document.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StateMigrationError`] when the target is older than the
+    /// document, a unique adjacent migration is not available, a migration
+    /// produces an invalid result, or the migration itself fails.
+    pub fn migrate_to<M>(
+        mut self,
+        target_schema: u32,
+        migrations: &[&M],
+    ) -> Result<Self, StateMigrationError<M::Error>>
+    where
+        M: StateMigration + ?Sized,
+    {
+        if self.product_schema > target_schema {
+            return Err(StateMigrationError::SchemaTooNew {
+                actual: self.product_schema,
+                target: target_schema,
+            });
+        }
+
+        while self.product_schema < target_schema {
+            let from_schema = self.product_schema;
+            let mut migration = None;
+            let mut ambiguous = false;
+            for candidate in migrations
+                .iter()
+                .copied()
+                .filter(|candidate| candidate.source_schema() == from_schema)
+            {
+                if migration.is_some() {
+                    ambiguous = true;
+                } else {
+                    migration = Some(candidate);
+                }
+            }
+            if ambiguous {
+                return Err(StateMigrationError::AmbiguousMigration { from: from_schema });
+            }
+            let Some(migration) = migration else {
+                return Err(StateMigrationError::MissingMigration {
+                    from: from_schema,
+                    target: target_schema,
+                });
+            };
+
+            let expected_to =
+                from_schema
+                    .checked_add(1)
+                    .ok_or(StateMigrationError::InvalidStep {
+                        from: from_schema,
+                        to: migration.to_schema(),
+                    })?;
+            if migration.to_schema() != expected_to {
+                return Err(StateMigrationError::InvalidStep {
+                    from: from_schema,
+                    to: migration.to_schema(),
+                });
+            }
+
+            let product_id = self.product_id.clone();
+            self = migration
+                .migrate(self)
+                .map_err(StateMigrationError::Failed)?;
+            if self.product_id != product_id {
+                return Err(StateMigrationError::ProductIdentityChanged {
+                    expected: product_id,
+                    actual: self.product_id.clone(),
+                });
+            }
+            if self.product_schema != migration.to_schema() {
+                return Err(StateMigrationError::OutputSchemaMismatch {
+                    expected: migration.to_schema(),
+                    actual: self.product_schema,
+                });
+            }
+        }
+        Ok(self)
+    }
+}
+
+/// One adjacent product-schema migration owned by a product.
+///
+/// Implementations should preserve every entry they do not own. Migrations
+/// run only on temporary, non-realtime state and may return a product-defined
+/// typed error.
+pub trait StateMigration {
+    /// Product-defined migration failure.
+    type Error;
+
+    /// Source product schema accepted by this migration.
+    fn source_schema(&self) -> u32;
+
+    /// Destination product schema produced by this migration.
+    fn to_schema(&self) -> u32;
+
+    /// Transform one temporary semantic document.
+    ///
+    /// # Errors
+    ///
+    /// Returns the product-defined error when the document cannot be migrated.
+    fn migrate(&self, document: StateDocument) -> Result<StateDocument, Self::Error>;
+}
+
+/// Failure while traversing a product schema migration chain.
+#[derive(Debug)]
+pub enum StateMigrationError<E> {
+    /// The document uses a schema newer than the requested target.
+    SchemaTooNew {
+        /// Input schema version.
+        actual: u32,
+        /// Requested target schema version.
+        target: u32,
+    },
+    /// No migration starts at the current schema.
+    MissingMigration {
+        /// Current schema version.
+        from: u32,
+        /// Requested target schema version.
+        target: u32,
+    },
+    /// More than one migration starts at the current schema.
+    AmbiguousMigration {
+        /// Current schema version.
+        from: u32,
+    },
+    /// A migration was not adjacent to its declared source schema.
+    InvalidStep {
+        /// Declared source schema version.
+        from: u32,
+        /// Declared destination schema version.
+        to: u32,
+    },
+    /// A migration changed the product identity.
+    ProductIdentityChanged {
+        /// Original product identity.
+        expected: String,
+        /// Returned product identity.
+        actual: String,
+    },
+    /// A migration returned a schema other than its declared destination.
+    OutputSchemaMismatch {
+        /// Declared destination schema version.
+        expected: u32,
+        /// Returned schema version.
+        actual: u32,
+    },
+    /// Product-defined migration failure.
+    Failed(E),
+}
+
+impl<E> fmt::Display for StateMigrationError<E>
+where
+    E: fmt::Display,
+{
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SchemaTooNew { actual, target } => {
+                write!(
+                    formatter,
+                    "state schema {actual} is newer than target {target}"
+                )
+            }
+            Self::MissingMigration { from, target } => {
+                write!(
+                    formatter,
+                    "no state migration exists from schema {from} to {target}"
+                )
+            }
+            Self::AmbiguousMigration { from } => {
+                write!(
+                    formatter,
+                    "multiple state migrations start at schema {from}"
+                )
+            }
+            Self::InvalidStep { from, to } => {
+                write!(
+                    formatter,
+                    "state migration step {from} to {to} is not adjacent"
+                )
+            }
+            Self::ProductIdentityChanged { expected, actual } => write!(
+                formatter,
+                "state migration changed product identity from {expected:?} to {actual:?}"
+            ),
+            Self::OutputSchemaMismatch { expected, actual } => write!(
+                formatter,
+                "state migration returned schema {actual}, expected {expected}"
+            ),
+            Self::Failed(error) => write!(formatter, "state migration failed: {error}"),
+        }
+    }
+}
+
+impl<E> std::error::Error for StateMigrationError<E>
+where
+    E: std::error::Error + 'static,
+{
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Failed(error) => Some(error),
+            Self::SchemaTooNew { .. }
+            | Self::MissingMigration { .. }
+            | Self::AmbiguousMigration { .. }
+            | Self::InvalidStep { .. }
+            | Self::ProductIdentityChanged { .. }
+            | Self::OutputSchemaMismatch { .. } => None,
+        }
+    }
 }
 
 const HEADER_LEN: usize = 4 + 2 + 2 + 4 + 4;
@@ -924,6 +1140,55 @@ impl std::error::Error for StateDecodeError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::convert::Infallible;
+
+    struct RenameGain;
+
+    impl StateMigration for RenameGain {
+        type Error = Infallible;
+
+        fn source_schema(&self) -> u32 {
+            1
+        }
+
+        fn to_schema(&self) -> u32 {
+            2
+        }
+
+        fn migrate(&self, document: StateDocument) -> Result<StateDocument, Self::Error> {
+            let mut migrated = StateDocument::new(document.product_id().to_owned(), 2)
+                .expect("source identity is valid");
+            for entry in document.entries() {
+                let key = if entry.key() == "parameter/old_gain" {
+                    "parameter/gain"
+                } else {
+                    entry.key()
+                };
+                migrated
+                    .insert(StateEntry::new(key, entry.value().clone()))
+                    .expect("migration fixture keys are unique");
+            }
+            Ok(migrated)
+        }
+    }
+
+    struct SkipsVersion;
+
+    impl StateMigration for SkipsVersion {
+        type Error = Infallible;
+
+        fn source_schema(&self) -> u32 {
+            1
+        }
+
+        fn to_schema(&self) -> u32 {
+            3
+        }
+
+        fn migrate(&self, document: StateDocument) -> Result<StateDocument, Self::Error> {
+            Ok(document)
+        }
+    }
 
     fn document_with_all_values() -> StateDocument {
         let mut document = StateDocument::new("com.example.test", 7).expect("identity is valid");
@@ -1132,6 +1397,60 @@ mod tests {
             invalid_float.encode(),
             Err(StateEncodeError::NonFiniteFloat)
         );
+    }
+
+    #[test]
+    fn migrates_adjacent_schema_and_preserves_unowned_entries() {
+        let mut document = StateDocument::new("com.example.test", 1).expect("identity is valid");
+        document
+            .insert(StateEntry::new(
+                "parameter/old_gain",
+                StateValue::Float(0.5),
+            ))
+            .expect("key is unique");
+        document
+            .insert(StateEntry::new(
+                "state/custom",
+                StateValue::Bytes(vec![1, 2, 3]),
+            ))
+            .expect("key is unique");
+
+        let migration = RenameGain;
+        let migrated = document
+            .migrate_to(2, &[&migration])
+            .expect("adjacent migration succeeds");
+        assert_eq!(migrated.product_schema(), 2);
+        assert_eq!(migrated.product_id(), "com.example.test");
+        assert_eq!(
+            migrated.entries(),
+            &[
+                StateEntry::new("parameter/gain", StateValue::Float(0.5)),
+                StateEntry::new("state/custom", StateValue::Bytes(vec![1, 2, 3])),
+            ]
+        );
+    }
+
+    #[test]
+    fn migration_chain_rejects_missing_or_non_adjacent_steps() {
+        let document = StateDocument::new("com.example.test", 1).expect("identity is valid");
+        let migration = RenameGain;
+        assert!(matches!(
+            document.clone().migrate_to(3, &[&migration]),
+            Err(StateMigrationError::MissingMigration { from: 2, target: 3 })
+        ));
+        assert!(matches!(
+            document.migrate_to(0, &[&migration]),
+            Err(StateMigrationError::SchemaTooNew {
+                actual: 1,
+                target: 0
+            })
+        ));
+
+        let document = StateDocument::new("com.example.test", 1).expect("identity is valid");
+        assert!(matches!(
+            document.migrate_to(3, &[&SkipsVersion]),
+            Err(StateMigrationError::InvalidStep { from: 1, to: 3 })
+        ));
     }
 
     #[test]

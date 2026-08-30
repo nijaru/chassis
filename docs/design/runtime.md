@@ -118,7 +118,7 @@ It:
 
 Failure leaves the current runtime state unchanged. The lower-level `ParameterStore::apply_state_for_product()` remains patch-like and should be treated as a semantic helper rather than the final plugin/project state-load contract.
 
-Future migration handling belongs before the complete-current-state check:
+The byte-load path now places adjacent product migration before the complete-current-state check:
 
 ```text
 bytes
@@ -128,6 +128,12 @@ bytes
  -> validate
  -> publish
 ```
+
+`StateMigration`/`StateDocument::migrate_to()` enforce a unique adjacent chain,
+preserve product identity, and keep migration failures away from live state.
+`InstanceRuntime::apply_parameter_state_bytes()` owns the decode/migrate/apply
+ordering for framework-managed parameters; custom entries remain in the
+migrated temporary document until a product-state owner is added.
 
 ## CLAP host lifetime
 

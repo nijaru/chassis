@@ -41,11 +41,11 @@ The CLAP cross-domain parameter publication remains adapter-local. CLAP's audio-
 
 Dense IDs deliberately do not add a second per-parameter event index yet. The bounded globally sorted event scan remains until measurements justify another structure.
 
-## Current follow-on — publication protocol qualification
+## Completed follow-on — publication protocol qualification
 
 The existing scalar publication algorithm is now isolated as a private helper under the CLAP parameter module. This is a testability boundary, not framework infrastructure: it still stores CLAP-compatible scalar `f64` values and is not exported from the adapter.
 
-Current source after `73d7012` additionally:
+The qualified source after `73d7012` additionally:
 
 - removes generation-counter wraparound as a correctness assumption;
 - reserves `u64::MAX - 1` as the final stable generation and refuses further writes once reached, so an ancient generation can never become current again through ABA wraparound;
@@ -57,19 +57,19 @@ Current source after `73d7012` additionally:
 - exhaustively enumerates the reader/writer steps of a two-value snapshot and rejects every accepted mixed snapshot;
 - tests concrete stale-generation rejection, bounded realtime failure while a writer owns the token, invalid value counts, and terminal generation exhaustion.
 
-This follow-on still needs the full local Rust gate. The abstract interleaving model is useful algorithmic evidence, but it is **not** a substitute for weak-memory permutation testing of the acquire/release implementation.
+This follow-on is qualified through `3f18404`: the full local Rust gate passed, all five Loom tests passed, and the pending/synchronization handoff race is covered. The model is evidence for the current adapter-local scalar implementation, not a reason to extract it into `chassis-core`.
 
 ## Slice 2 — finish publication protocol qualification
 
-Before considering any extraction from CLAP:
+Completed. The qualified evidence covers:
 
-1. qualify the current refactor with the standard local gate;
-2. model the acquire/release protocol under Loom or an equivalent C11 weak-memory permutation tool;
-3. cover writer acquisition, coherent multi-value snapshots, stale-generation rejection, and the pending/synchronization handoff;
-4. confirm realtime operations have no retry loop whose termination depends on another thread;
-5. keep terminal generation exhaustion in the model so wraparound cannot reintroduce ABA;
-6. define reclamation before supporting values/resources that cannot fit directly in atomics;
-7. preserve typed choice/string semantics rather than forcing every parameter through `f64` merely because CLAP scalar values do.
+1. the standard local Rust gate;
+2. the acquire/release protocol under Loom;
+3. writer acquisition, coherent multi-value snapshots, stale-generation rejection, and the pending/synchronization handoff;
+4. bounded realtime operations while a writer is active;
+5. terminal generation exhaustion without ABA wraparound;
+6. keeps typed-value and reclamation work adapter-local until another client proves the need;
+7. typed choice/string semantics remaining outside the CLAP scalar helper.
 
 Loom 0.7.2 is the current upstream release as of this checkpoint. Adding it should be a deliberate dev/test dependency with the resulting `Cargo.lock` update reviewed and committed; do not hand-edit the lockfile.
 
@@ -79,7 +79,7 @@ The desired authority model remains semantic rather than requiring one physical 
 
 ## Slice 3 — complete state + migrations
 
-`InstanceRuntime::apply_parameter_state_for_product` provides complete transactional parameter replacement, while the lower-level `ParameterStore::apply_state_for_product` remains a patch-like semantic helper.
+`InstanceRuntime::apply_parameter_state_for_product` provides complete transactional parameter replacement, while the lower-level `ParameterStore::apply_state_for_product` remains a patch-like semantic helper. `StateMigration`/`StateDocument::migrate_to` now provide the adjacent product-schema chain, and `InstanceRuntime::apply_parameter_state_bytes` performs bounded decode, migration, and complete application in that order.
 
 Next state work:
 
@@ -94,11 +94,11 @@ bytes
 
 Acceptance criteria:
 
-- add an adjacent-version migration fixture;
-- failed migration/validation leaves current state unchanged;
-- parameter + future custom product fields publish as one generation;
+- retain adjacent-version migration fixtures for every released schema;
+- failed migration or validation leaves current state unchanged;
+- fuzz corruption/truncation/exhaustion and migration failures;
+- extend the runtime state owner so parameter + custom product fields publish as one accepted generation;
 - keep deterministic golden fixtures for every released schema;
-- fuzz corruption/truncation/exhaustion;
 - make partial parameter patches a separately named operation if a real client needs them.
 
 Do not freeze CHSS v1 until migration and cross-format fixtures exist.

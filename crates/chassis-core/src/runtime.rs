@@ -16,7 +16,7 @@ use crate::{
     buffer::ChannelBuffer,
     parameters::{ParameterDescriptor, ParameterStateError, ParameterStore, ParameterStoreError},
     process::{ActivationConfig, ProcessBlock, ProcessBlockError, ProcessConfig, ProcessContext},
-    state::{StateDocument, StateLimits},
+    state::{StateDecodeError, StateDocument, StateLimits, StateMigration, StateMigrationError},
 };
 
 /// Immutable product definition/factory for one Chassis component type.
@@ -259,6 +259,43 @@ impl std::error::Error for InstanceStateError {
             Self::InvalidParameters(error) => Some(error),
             Self::ParameterState(error) => Some(error),
             Self::IncompleteParameterState { .. } => None,
+        }
+    }
+}
+
+/// Failure while decoding, migrating, or applying a complete parameter state.
+#[derive(Debug)]
+pub enum InstanceStateLoadError<E> {
+    /// The encoded state was malformed or exceeded its bounds.
+    Decode(StateDecodeError),
+    /// Product-schema migration failed before live state was touched.
+    Migration(StateMigrationError<E>),
+    /// The migrated state failed current parameter validation.
+    Apply(InstanceStateError),
+}
+
+impl<E> fmt::Display for InstanceStateLoadError<E>
+where
+    E: fmt::Display,
+{
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Decode(error) => write!(formatter, "could not decode state: {error}"),
+            Self::Migration(error) => write!(formatter, "could not migrate state: {error}"),
+            Self::Apply(error) => write!(formatter, "could not apply state: {error}"),
+        }
+    }
+}
+
+impl<E> std::error::Error for InstanceStateLoadError<E>
+where
+    E: std::error::Error + 'static,
+{
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Decode(error) => Some(error),
+            Self::Migration(error) => Some(error),
+            Self::Apply(error) => Some(error),
         }
     }
 }
@@ -528,6 +565,39 @@ where
 
         self.parameters = candidate;
         Ok(())
+    }
+
+    /// Decode, migrate, and apply a complete parameter state transactionally.
+    ///
+    /// The encoded document and every migration result remain temporary until
+    /// current-schema parameter validation succeeds. Custom entries are
+    /// preserved by [`StateDocument::migrate_to`] for a future product-state
+    /// owner, while this boundary publishes framework-managed parameters only.
+    /// Decoding and migration are control/non-realtime operations.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InstanceStateLoadError`] when decoding, migration, or current
+    /// schema validation fails. The runtime is unchanged on every failure.
+    pub fn apply_parameter_state_bytes<M>(
+        &mut self,
+        bytes: &[u8],
+        product_id: &str,
+        product_schema: u32,
+        limits: StateLimits,
+        migrations: &[&M],
+    ) -> Result<(), InstanceStateLoadError<M::Error>>
+    where
+        M: StateMigration + ?Sized,
+        M::Error: std::error::Error + 'static,
+    {
+        let document = StateDocument::decode_with_limits(bytes, limits)
+            .map_err(InstanceStateLoadError::Decode)?;
+        let document = document
+            .migrate_to(product_schema, migrations)
+            .map_err(InstanceStateLoadError::Migration)?;
+        self.apply_parameter_state_for_product(&document, product_id, product_schema)
+            .map_err(InstanceStateLoadError::Apply)
     }
 }
 
