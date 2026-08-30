@@ -94,11 +94,13 @@ fn extreme_declared_lengths_are_rejected_without_backing_bytes() {
 
     let first_entry = 16 + PRODUCT_ID.len();
     let mut key_length = encoded.clone();
-    key_length[first_entry..first_entry + 2].copy_from_slice(&u16::MAX.to_le_bytes());
+    key_length[first_entry..first_entry + 2]
+        .copy_from_slice(&u16::MAX.to_le_bytes());
     assert!(StateDocument::decode(&key_length).is_err());
 
     let mut payload_length = encoded.clone();
-    payload_length[first_entry + 4..first_entry + 8].copy_from_slice(&u32::MAX.to_le_bytes());
+    payload_length[first_entry + 4..first_entry + 8]
+        .copy_from_slice(&u32::MAX.to_le_bytes());
     assert!(StateDocument::decode(&payload_length).is_err());
 }
 
