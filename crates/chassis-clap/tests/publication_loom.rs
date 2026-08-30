@@ -56,7 +56,9 @@ impl PublicationModel {
     }
 
     fn take_pending(&self) -> bool {
-        self.pending.swap(false, Ordering::AcqRel)
+        self.pending
+            .compare_exchange(true, false, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
     }
 
     fn try_publish_values_from(&self, expected: u64, values: [u64; 2]) -> bool {
@@ -164,7 +166,7 @@ fn pending_handoff_observes_completed_publication_without_losing_notification() 
                 assert!(publication.try_publish_values_from(0, [11, 21]));
             })
         };
-        let consumer = {
+        let sync_worker = {
             let publication = Arc::clone(&publication);
             thread::spawn(move || {
                 if !publication.take_pending() {
@@ -181,9 +183,9 @@ fn pending_handoff_observes_completed_publication_without_losing_notification() 
         };
 
         writer.join().expect("model writer must not panic");
-        let consumed = consumer.join().expect("model consumer must not panic");
+        let handled_pending = sync_worker.join().expect("model sync worker must not panic");
 
-        if !consumed {
+        if !handled_pending {
             assert!(publication.take_pending());
             let (generation, values) = publication
                 .try_snapshot()
