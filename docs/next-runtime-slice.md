@@ -2,20 +2,18 @@
 
 This is the current implementation order on `main`. It is an execution plan, not a stable API promise.
 
-## Validated checkpoint — `62b96cc`
+## Validated checkpoint — `ad57f50`
 
-The full local Rust gate passed through `62b96cc`:
+The local Rust qualification gate passed through `ad57f50`:
 
 ```text
 cargo fmt --all -- --check
 cargo test --workspace --locked
 cargo clippy --workspace --all-features --all-targets --locked -- -D warnings
-cargo deny check
-cargo machete
 cargo build --release -p chassis-clap-conformance --locked
 ```
 
-`cargo deny` emitted only the existing unmatched-license-allowance warnings.
+The earlier full gate through `62b96cc` also included `cargo deny check` and `cargo machete`; no dependencies changed in the CLAP-I/O slice after that checkpoint. `cargo deny` emitted only the existing unmatched-license-allowance warnings.
 
 The validated runtime now includes:
 
@@ -31,7 +29,11 @@ The validated runtime now includes:
 - complete semantic instance state ownership: framework parameters and validated custom entries are accepted or rejected together;
 - product validation over the complete parameter/custom candidate before publication;
 - activation visibility of the accepted complete semantic state;
-- failure-atomic migrated byte loads and deterministic complete-state export.
+- failure-atomic migrated byte loads and deterministic complete-state export;
+- explicit stable CLAP audio-port IDs rather than declaration-order identity;
+- setup-time audio mapping validation for declared ports/layouts, direction-local IDs, main-port placement, and reciprocal in-place pairing;
+- qualified stereo main I/O with zero or one stereo sidechain through that mapping;
+- input-only sidechain channels delivered to product DSP without callback allocation.
 
 The CLAP publication bridge remains adapter-local. Passing Loom demonstrates the current scalar protocol; it does not make that representation a deployment-independent core primitive.
 
@@ -104,26 +106,42 @@ CHSS envelope v1 is still **not frozen**. Remaining promotion evidence belongs w
 
 ## Slice 4 — general CLAP I/O
 
-In progress after the `62b96cc` checkpoint.
+The mapped stereo/sidechain step is completed and qualified through `ad57f50`.
 
-The first implementation step introduces a setup-time CLAP audio mapping with explicit stable CLAP IDs rather than declaration-order-derived IDs. The mapper can validate arbitrary declared Chassis ports/layouts, direction-local CLAP ID uniqueness, main-port placement, and reciprocal in-place pairing while allocating only outside the process callback.
+Qualified setup/process behavior now provides:
 
-Current process qualification remains deliberately narrower:
+1. explicit stable CLAP audio-port IDs supplied by product/deployment metadata;
+2. direction-local dense CLAP indices with main ports placed at index 0;
+3. setup-time validation of arbitrary declared Chassis ports/layouts;
+4. unique CLAP IDs within each direction;
+5. reciprocal opposite-direction equal-width in-place pairing;
+6. runtime activation from the mapped `AudioIoConfiguration` rather than a hard-coded default;
+7. stereo main input/output processing with zero or one stereo input-only sidechain;
+8. unsupported process topologies rejected during activation instead of reaching partial DSP code.
 
-1. stereo main input/output through the setup mapping;
-2. zero or one stereo sidechain input through the same mapping;
-3. sidechain channels reach product DSP as `ChannelBuffer::InputOnly`;
-4. unsupported arbitrary process topologies fail during activation rather than falling into a partial callback implementation.
+The remaining blocker is representation rather than metadata. The current product-facing `ProcessBlock` still owns a borrowed flat `&mut [ChannelBuffer<'_, S>]`. An arbitrary runtime number of lifetime-bearing channel views cannot be retained in processor storage, and allocating a `Vec<ChannelBuffer>` in each callback is forbidden. Do not solve that by lifetime erasure or hidden callback allocation.
 
-This split is intentional. The current product-facing `ProcessBlock` owns a borrowed flat `&mut [ChannelBuffer<'_, S>]`. An arbitrary runtime number of lifetime-bearing channel views cannot be retained in processor storage, and allocating a `Vec<ChannelBuffer>` in each callback is forbidden. Do not solve that by lifetime erasure or a hidden callback allocation.
+### Buffer-source sub-slice
 
-Next I/O work, after the current mapped stereo/sidechain slice passes the full gate:
+A follow-on after `ad57f50` introduces the proposed no-allocation source shape in `chassis-core`:
 
-1. add negative-space adapter tests for missing/asymmetric/unsupported mapped layouts;
-2. qualify stable setup-time dense endpoint mapping independently from callback representation;
-3. choose a no-allocation process borrow shape that can represent arbitrary declared ports/channels;
-4. route arbitrary declared input/output layouts through that shape;
-5. re-evaluate whether the flat `ChannelBuffer` slice should remain a compatibility view or be replaced.
+- `ProcessChannel<S>` abstracts only the already-proven `ChannelBuffer` operations;
+- `ProcessBufferSource<S>` uses generic associated channel/iterator types so an adapter can yield safe channel views lazily;
+- `ChannelBufferSlice` proves the existing materialized slice can act as a compatibility source;
+- a core test source chains two independent slices, proving one traversal does not require a single flat backing collection;
+- `validate_frame_count()` remains an explicit pre-DSP source responsibility.
+
+This source abstraction is implemented but **not yet qualified** and is not yet wired into `ProcessBlock`/`InstanceRuntime`. It exists to get the Rust lifetime/GAT shape through the local gate before replacing the established process path.
+
+After that source shape passes:
+
+1. make `ProcessBlock` generic over `ProcessBufferSource<S>` while retaining `ChannelBufferSlice` for existing callers;
+2. make `Process<S>::process` generic over the concrete buffer source so adapters remain allocation-free without type erasure;
+3. add `InstanceRuntime::process_buffers` and keep the current slice entry point as a compatibility wrapper;
+4. implement a CLAP source that traverses `PortPairsIter`/`PairedChannelsIter` lazily with setup-retained semantic endpoints;
+5. validate all host buffer dimensions/sample representation before product DSP;
+6. remove the stereo-specific callback materialization branches;
+7. add asymmetric/multi-bus/high-channel-count conformance cases.
 
 Required invariant: no callback-time owned `Vec<ChannelBuffer>` allocation.
 
