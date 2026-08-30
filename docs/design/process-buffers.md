@@ -1,6 +1,6 @@
 # Processing and Audio Buffer Model
 
-Status: first safe channel-view slice implemented; higher-level port views and public API remain pre-alpha.
+Status: safe channel relationships are implemented; a no-allocation generic buffer-source shape is now implemented for qualification but is not yet wired into `ProcessBlock`/`InstanceRuntime`. Higher-level port views and public API remain pre-alpha.
 
 ## Goal
 
@@ -66,16 +66,45 @@ This copy is controlled product/framework behavior, not hidden adapter normaliza
 
 Products that benefit from out-of-place processing can use `input()` and `output_mut()` directly and skip the copy.
 
+## No-allocation buffer sources
+
+General CLAP I/O exposed a representation constraint that the first flat-slice model cannot solve cleanly: the number of active ports/channels is negotiated at runtime, but lifetime-bearing `ChannelBuffer` values cannot be retained in processor storage across callbacks. Building `Vec<ChannelBuffer>` every callback would violate the realtime contract, and lifetime erasure would weaken the aliasing model.
+
+The proposed source shape is therefore iterator-based rather than collection-based:
+
+```text
+ProcessBufferSource<S>
+  validate_frame_count(expected)
+  channels() -> allocation-free iterator
+
+iterator item: ProcessChannel<S>
+  relationship
+  input/output endpoint
+  frame_count
+  input / output_mut
+  make_in_place
+```
+
+`ProcessChannel<S>` deliberately abstracts only operations already provided by `ChannelBuffer`; it is not a second buffer semantic model. `ChannelBuffer` and a mutable borrow of `ChannelBuffer` both implement it.
+
+`ProcessBufferSource<S>` uses generic associated types for its channel item and iterator. That allows a materialized slice to yield borrowed `&mut ChannelBuffer` items while a format adapter can later yield freshly constructed safe `ChannelBuffer` values directly from its host iterator. No trait-object lifetime erasure or callback-owned collection is required.
+
+`ChannelBufferSlice` is the compatibility source over the current flat slice. A core qualification test also implements a source by chaining two independent channel slices. That test exists specifically to establish that a legal process traversal does not require one contiguous/flat `ChannelBuffer` collection.
+
+`validate_frame_count()` is separate from traversal because all callback-varying dimensions still have to be checked before product DSP runs. A future CLAP source must validate all host port/channel dimensions and sample representation before yielding product-visible channel views.
+
+This source API is currently implemented but not yet qualified or wired into `ProcessBlock`. The next step is to make `ProcessBlock` and `Process<S>` generic over the source while retaining the current slice entry point as a compatibility wrapper.
+
 ## ProcessBlock
 
-`ProcessBlock<'buffers, 'samples, 'context, 'parameters, S>` is the first borrowed realtime call type. It contains:
+`ProcessBlock<'buffers, 'samples, 'context, 'parameters, S>` is the current borrowed realtime call type. It contains:
 
 - actual frame count;
 - per-call `ProcessContext` with `ProcessMode`;
 - block-start transport snapshot;
 - validated borrowed parameter event views;
 - a borrowed immutable view of the active base/control `ParameterStore`;
-- a borrowed mutable slice of safe `ChannelBuffer<S>` views.
+- currently, a borrowed mutable slice of safe `ChannelBuffer<S>` views.
 
 Its constructor is framework-private. `Activated::process()` first validates
 context, activation event bounds, and callback-varying dimensions, then checks
@@ -96,7 +125,7 @@ it never expands a ramp into one event per sample.
 
 It intentionally does **not** rescan the full stable endpoint/schema mapping every callback. That mapping should be resolved once by adapter/runtime setup so high-channel-count processing does not gain hidden allocation or O(n²) semantic validation work.
 
-The first CLAP adapter/conformance host must prove the exact setup-time representation used for this resolved mapping. Its current scalar parameter projection synchronizes the shared adapter projection into this borrowed base store before DSP; it does not add a second core authority.
+The source migration must preserve that rule: generic source traversal is not permission to redo stable semantic lookup each block. CLAP keeps stable port-key/ID/dense-index mapping in setup-owned state and uses those retained identities while generating callback channel views.
 
 ## Rust aliasing contract
 
@@ -108,9 +137,11 @@ Unexpected partial overlap, overlapping output channels, inconsistent lengths, i
 
 If a legal backend relationship is awkward to express with ordinary references, keep raw pointers/private unsafe machinery inside the adapter and expose a smaller safe accessor. Do not weaken the product-facing API to raw pointers for adapter convenience.
 
+The generic source does not change this rule. A lazy adapter iterator may defer construction of each `ChannelBuffer`, but every yielded view must already satisfy the same ordinary-reference aliasing guarantees as a materialized view.
+
 ## Port/bus ergonomics still open
 
-The endpoint-bearing channel list is sufficient to prove alias ownership without freezing the final higher-level DSP ergonomics.
+The endpoint-bearing channel traversal is sufficient to prove alias ownership without freezing the final higher-level DSP ergonomics.
 
 Before public API freeze, compare efficient views/helpers for:
 
@@ -123,11 +154,15 @@ Before public API freeze, compare efficient views/helpers for:
 
 Do not add a per-block map/allocation simply to make lookup convenient. Dense endpoint indices can be resolved at activation if real call sites justify them.
 
+The generic source intentionally solves storage/lifetime representation first. It does not yet assert that a flat endpoint traversal is the final author-facing bus API.
+
 ## Sample precision
 
 The buffer types are generic over `S`. Runtime processing uses a separate `Process<S>` capability rather than parameterizing `Processor` itself.
 
 The initial conformance processor implements `Process<f32>`. A future processor can additionally implement `Process<f64>` without a second lifecycle object.
+
+The buffer source is likewise parameterized over `S`; a format adapter chooses one source representation for the sample precision actually dispatched into the corresponding `Process<S>` implementation.
 
 This establishes a useful direction but does not yet freeze host precision advertisement/dispatch. The first CLAP/VST3 work must still prove how optional f64 support is declared and selected.
 
@@ -160,3 +195,5 @@ Future adapter tests add target-specific zero/null/inactive-buffer legality, cha
 No convenience available from `Process<S>` may allocate, block, perform I/O, or perform work whose upper bound is unrelated to the validated configuration/block.
 
 Stable validation and lookup work should be hoisted out of callbacks when possible. Controlled bounded copies are allowed; hidden dynamic memory growth is not.
+
+`ProcessBufferSource::channels()` is subject to the same rule. A source may traverse host-owned descriptors and construct safe borrowed views, but it may not grow owned storage merely to present those views to product DSP.
