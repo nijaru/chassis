@@ -164,27 +164,27 @@ impl ProcessChannel<f32> for ClapChannel<'_> {
 
     fn frame_count(&self) -> usize {
         match &self.pair {
-            ChannelPair::InputOnly(samples)
-            | ChannelPair::OutputOnly(samples)
-            | ChannelPair::InPlace(samples) => samples.len(),
+            ChannelPair::InputOnly(samples) => samples.len(),
+            ChannelPair::OutputOnly(samples) => samples.len(),
             ChannelPair::InputOutput(input, _) => input.len(),
+            ChannelPair::InPlace(samples) => samples.len(),
         }
     }
 
     fn input(&self) -> Option<&[f32]> {
         match &self.pair {
-            ChannelPair::InputOnly(samples)
-            | ChannelPair::InputOutput(samples, _)
-            | ChannelPair::InPlace(samples) => Some(samples),
+            ChannelPair::InputOnly(samples) => Some(samples),
+            ChannelPair::InputOutput(samples, _) => Some(samples),
+            ChannelPair::InPlace(samples) => Some(samples),
             ChannelPair::OutputOnly(_) => None,
         }
     }
 
     fn output_mut(&mut self) -> Option<&mut [f32]> {
         match &mut self.pair {
-            ChannelPair::OutputOnly(samples)
-            | ChannelPair::InputOutput(_, samples)
-            | ChannelPair::InPlace(samples) => Some(samples),
+            ChannelPair::OutputOnly(samples) => Some(samples),
+            ChannelPair::InputOutput(_, samples) => Some(samples),
+            ChannelPair::InPlace(samples) => Some(samples),
             ChannelPair::InputOnly(_) => None,
         }
     }
