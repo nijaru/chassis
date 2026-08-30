@@ -2,11 +2,13 @@
 //!
 //! Callback audio is validated before product DSP is entered, then exposed as a
 //! reiterable [`ProcessBufferSource`] whose channel items wrap Clack's safe
-//! [`ChannelPair`] relationship directly. No callback-owned `ChannelBuffer`
-//! collection is materialized.
+//! [`ChannelPair`] relationship directly. Setup-owned process slots distinguish
+//! true semantic in-place pairs from unrelated ports that merely share the same
+//! dense CLAP index. No callback-owned `ChannelBuffer` collection is materialized.
+
+use core::slice;
 
 use chassis_core::{
-    audio::{MAIN_INPUT, MAIN_OUTPUT, SIDECHAIN_INPUT},
     buffer::{BufferAccessError, BufferRelationship, InputEndpoint, OutputEndpoint},
     process::{ProcessBlockError, ProcessBufferSource, ProcessChannel},
 };
@@ -15,20 +17,27 @@ use clack_plugin::{
     process::audio::{PairedChannelsIter, PortPair, PortPairsIter},
 };
 
-pub(crate) struct ClapStereoBufferSource<'a> {
-    audio: Audio<'a>,
-    sidechain_enabled: bool,
+use crate::audio::{ClapProcessPort, ClapProcessSlot};
+
+/// One callback's validated, allocation-free CLAP buffer source.
+pub(crate) struct ClapBufferSource<'audio, 'plan> {
+    audio: Audio<'audio>,
+    slots: &'plan [ClapProcessSlot],
+    frame_count: usize,
 }
 
-impl<'a> ClapStereoBufferSource<'a> {
+impl<'audio, 'plan> ClapBufferSource<'audio, 'plan> {
     pub(crate) fn new(
-        mut audio: Audio<'a>,
-        sidechain_enabled: bool,
+        mut audio: Audio<'audio>,
+        slots: &'plan [ClapProcessSlot],
     ) -> Result<Self, PluginError> {
-        validate_audio(&mut audio, sidechain_enabled)?;
+        validate_audio(&mut audio, slots)?;
+        let frame_count = usize::try_from(audio.frames_count())
+            .map_err(|_| PluginError::Message("CLAP frame count is not representable"))?;
         Ok(Self {
             audio,
-            sidechain_enabled,
+            slots,
+            frame_count,
         })
     }
 
@@ -37,101 +46,97 @@ impl<'a> ClapStereoBufferSource<'a> {
     }
 }
 
-impl ProcessBufferSource<f32> for ClapStereoBufferSource<'_> {
+impl ProcessBufferSource<f32> for ClapBufferSource<'_, '_> {
     type Channel<'a>
         = ClapChannel<'a>
     where
         Self: 'a;
 
     type Channels<'a>
-        = ClapStereoChannels<'a>
+        = ClapChannels<'a>
     where
         Self: 'a;
 
     fn validate_frame_count(&mut self, expected: usize) -> Result<(), ProcessBlockError> {
-        let actual = usize::try_from(self.audio.frames_count())
-            .map_err(|_| ProcessBlockError::FrameCountNotRepresentable)?;
-        if actual != expected {
-            return Err(ProcessBlockError::BufferFrameCountMismatch { expected, actual });
+        if self.frame_count != expected {
+            return Err(ProcessBlockError::BufferFrameCountMismatch {
+                expected,
+                actual: self.frame_count,
+            });
         }
         Ok(())
     }
 
     fn channels(&mut self) -> Self::Channels<'_> {
-        ClapStereoChannels {
+        ClapChannels {
             ports: self.audio.port_pairs(),
+            slots: self.slots.iter(),
             current: None,
-            next_port: 0,
-            sidechain_enabled: self.sidechain_enabled,
+            pending: None,
+            frame_count: self.frame_count,
         }
     }
 }
 
-#[derive(Clone, Copy)]
-enum PortKind {
-    Main,
-    Sidechain,
-}
-
 struct CurrentPortChannels<'a> {
     channels: PairedChannelsIter<'a, f32>,
-    kind: PortKind,
+    slot: ClapProcessSlot,
     next_channel: u32,
 }
 
-pub(crate) struct ClapStereoChannels<'a> {
+/// Allocation-free traversal of every semantic Chassis channel in one callback.
+pub(crate) struct ClapChannels<'a> {
     ports: PortPairsIter<'a>,
+    slots: slice::Iter<'a, ClapProcessSlot>,
     current: Option<CurrentPortChannels<'a>>,
-    next_port: u8,
-    sidechain_enabled: bool,
+    pending: Option<ClapChannel<'a>>,
+    frame_count: usize,
 }
 
-impl<'a> Iterator for ClapStereoChannels<'a> {
+impl<'a> Iterator for ClapChannels<'a> {
     type Item = ClapChannel<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        if let Some(pending) = self.pending.take() {
+            return Some(pending);
+        }
+
         loop {
             if let Some(current) = self.current.as_mut() {
                 if let Some(pair) = current.channels.next() {
                     let channel = current.next_channel;
                     current.next_channel = current.next_channel.saturating_add(1);
-                    return Some(match current.kind {
-                        PortKind::Main => ClapChannel {
-                            pair,
-                            input: Some(InputEndpoint::new(MAIN_INPUT, channel)),
-                            output: Some(OutputEndpoint::new(MAIN_OUTPUT, channel)),
-                        },
-                        PortKind::Sidechain => ClapChannel {
-                            pair,
-                            input: Some(InputEndpoint::new(SIDECHAIN_INPUT, channel)),
-                            output: None,
-                        },
-                    });
+                    return Some(map_channel(
+                        current.slot,
+                        pair,
+                        channel,
+                        self.frame_count,
+                        &mut self.pending,
+                    ));
                 }
                 self.current = None;
             }
 
-            let kind = match self.next_port {
-                0 => PortKind::Main,
-                1 if self.sidechain_enabled => PortKind::Sidechain,
-                _ => return None,
-            };
-            self.next_port = self.next_port.saturating_add(1);
-            let mut port = self.ports.next()?;
+            let slot = *self.slots.next()?;
+            let mut port = self
+                .ports
+                .next()
+                .expect("validated CLAP process slot has a matching dense port");
             self.current = Some(CurrentPortChannels {
                 channels: validated_f32_channels(&mut port),
-                kind,
+                slot,
                 next_channel: 0,
             });
         }
     }
 }
 
-/// Safe Chassis process channel backed directly by one Clack channel pair.
+/// Safe Chassis process channel backed directly by one Clack channel relationship.
 pub(crate) struct ClapChannel<'a> {
     pair: ChannelPair<'a, f32>,
     input: Option<InputEndpoint>,
     output: Option<OutputEndpoint>,
+    frame_count: usize,
 }
 
 impl ProcessChannel<f32> for ClapChannel<'_> {
@@ -145,46 +150,32 @@ impl ProcessChannel<f32> for ClapChannel<'_> {
     }
 
     fn input_endpoint(&self) -> Option<InputEndpoint> {
-        match &self.pair {
-            ChannelPair::InputOnly(_) | ChannelPair::InputOutput(_, _) | ChannelPair::InPlace(_) => {
-                self.input
-            }
-            ChannelPair::OutputOnly(_) => None,
-        }
+        self.input
     }
 
     fn output_endpoint(&self) -> Option<OutputEndpoint> {
-        match &self.pair {
-            ChannelPair::OutputOnly(_) | ChannelPair::InputOutput(_, _) | ChannelPair::InPlace(_) => {
-                self.output
-            }
-            ChannelPair::InputOnly(_) => None,
-        }
+        self.output
     }
 
     fn frame_count(&self) -> usize {
-        match &self.pair {
-            ChannelPair::InputOnly(samples) => samples.len(),
-            ChannelPair::OutputOnly(samples) => samples.len(),
-            ChannelPair::InputOutput(input, _) => input.len(),
-            ChannelPair::InPlace(samples) => samples.len(),
-        }
+        self.frame_count
     }
 
     fn input(&self) -> Option<&[f32]> {
         match &self.pair {
-            ChannelPair::InputOnly(samples) => Some(samples),
-            ChannelPair::InputOutput(samples, _) => Some(samples),
-            ChannelPair::InPlace(samples) => Some(samples),
+            ChannelPair::InputOnly(samples) | ChannelPair::InputOutput(samples, _) => {
+                Some(*samples)
+            }
+            ChannelPair::InPlace(samples) => Some(&**samples),
             ChannelPair::OutputOnly(_) => None,
         }
     }
 
     fn output_mut(&mut self) -> Option<&mut [f32]> {
         match &mut self.pair {
-            ChannelPair::OutputOnly(samples) => Some(&mut **samples),
-            ChannelPair::InputOutput(_, samples) => Some(&mut **samples),
-            ChannelPair::InPlace(samples) => Some(&mut **samples),
+            ChannelPair::OutputOnly(samples)
+            | ChannelPair::InputOutput(_, samples)
+            | ChannelPair::InPlace(samples) => Some(&mut **samples),
             ChannelPair::InputOnly(_) => None,
         }
     }
@@ -202,73 +193,147 @@ impl ProcessChannel<f32> for ClapChannel<'_> {
     }
 }
 
-fn validate_audio(audio: &mut Audio<'_>, sidechain_enabled: bool) -> Result<(), PluginError> {
-    let expected_inputs = if sidechain_enabled { 2 } else { 1 };
-    if audio.input_port_count() != expected_inputs || audio.output_port_count() != 1 {
+fn map_channel<'a>(
+    slot: ClapProcessSlot,
+    pair: ChannelPair<'a, f32>,
+    channel: u32,
+    frame_count: usize,
+    pending: &mut Option<ClapChannel<'a>>,
+) -> ClapChannel<'a> {
+    if slot.paired {
+        return ClapChannel {
+            pair,
+            input: slot.input.map(|port| input_endpoint(port, channel)),
+            output: slot.output.map(|port| output_endpoint(port, channel)),
+            frame_count,
+        };
+    }
+
+    match pair {
+        ChannelPair::InputOutput(input, output) => {
+            *pending = Some(ClapChannel {
+                pair: ChannelPair::OutputOnly(output),
+                input: None,
+                output: slot.output.map(|port| output_endpoint(port, channel)),
+                frame_count,
+            });
+            ClapChannel {
+                pair: ChannelPair::InputOnly(input),
+                input: slot.input.map(|port| input_endpoint(port, channel)),
+                output: None,
+                frame_count,
+            }
+        }
+        ChannelPair::InputOnly(input) => ClapChannel {
+            pair: ChannelPair::InputOnly(input),
+            input: slot.input.map(|port| input_endpoint(port, channel)),
+            output: None,
+            frame_count,
+        },
+        ChannelPair::OutputOnly(output) => ClapChannel {
+            pair: ChannelPair::OutputOnly(output),
+            input: None,
+            output: slot.output.map(|port| output_endpoint(port, channel)),
+            frame_count,
+        },
+        ChannelPair::InPlace(_) => {
+            unreachable!("validation rejects in-place aliasing between unrelated CLAP ports")
+        }
+    }
+}
+
+fn input_endpoint(port: ClapProcessPort, channel: u32) -> InputEndpoint {
+    InputEndpoint::new(port.key, channel)
+}
+
+fn output_endpoint(port: ClapProcessPort, channel: u32) -> OutputEndpoint {
+    OutputEndpoint::new(port.key, channel)
+}
+
+fn validate_audio(audio: &mut Audio<'_>, slots: &[ClapProcessSlot]) -> Result<(), PluginError> {
+    let expected_inputs = slots.iter().filter(|slot| slot.input.is_some()).count();
+    let expected_outputs = slots.iter().filter(|slot| slot.output.is_some()).count();
+    if audio.input_port_count() != expected_inputs || audio.output_port_count() != expected_outputs {
         return Err(PluginError::Message(
-            "CLAP audio buffers do not match the activated Chassis stereo topology",
+            "CLAP audio buffers do not match the activated Chassis port mapping",
         ));
     }
 
     let mut ports = audio.port_pairs();
-    let mut main = ports
-        .next()
-        .ok_or(PluginError::Message("Missing CLAP main audio port pair"))?;
-    let main_channels = main.channels()?.into_f32().ok_or(PluginError::Message(
-        "Chassis stereo topology requires f32 main audio",
-    ))?;
-    if main_channels.input_channel_count() != 2 || main_channels.output_channel_count() != 2 {
-        return Err(PluginError::Message(
-            "Chassis stereo topology requires exactly two main input and output channels",
-        ));
-    }
-    for pair in main_channels {
-        if !matches!(pair, ChannelPair::InputOutput(_, _) | ChannelPair::InPlace(_)) {
-            return Err(PluginError::Message(
-                "Required CLAP main input/output channel is missing",
-            ));
-        }
-    }
-
-    if sidechain_enabled {
-        let mut sidechain = ports
+    for slot in slots {
+        let mut port = ports
             .next()
-            .ok_or(PluginError::Message("Missing CLAP sidechain input port"))?;
-        let sidechain_channels =
-            sidechain
-                .channels()?
-                .into_f32()
-                .ok_or(PluginError::Message(
-                    "Chassis stereo sidechain requires f32 audio",
-                ))?;
-        if sidechain_channels.input_channel_count() != 2
-            || sidechain_channels.output_channel_count() != 0
+            .ok_or(PluginError::Message("Missing mapped CLAP audio port"))?;
+        let channels = port.channels()?.into_f32().ok_or(PluginError::Message(
+            "Chassis CLAP processing currently requires f32 audio on every mapped port",
+        ))?;
+        let expected_input_channels = mapped_channel_count(slot.input)?;
+        let expected_output_channels = mapped_channel_count(slot.output)?;
+        if channels.input_channel_count() != expected_input_channels
+            || channels.output_channel_count() != expected_output_channels
         {
             return Err(PluginError::Message(
-                "Chassis stereo sidechain requires exactly two input-only channels",
+                "CLAP channel layout does not match the activated Chassis port mapping",
             ));
         }
-        for pair in sidechain_channels {
-            if !matches!(pair, ChannelPair::InputOnly(_)) {
-                return Err(PluginError::Message(
-                    "CLAP sidechain must be an input-only port",
-                ));
-            }
+        for pair in channels {
+            validate_channel_relationship(*slot, &pair)?;
         }
     }
 
     if ports.next().is_some() {
         return Err(PluginError::Message(
-            "CLAP supplied unexpected audio ports for the activated topology",
+            "CLAP supplied unexpected audio ports for the activated mapping",
         ));
     }
     Ok(())
 }
 
+fn mapped_channel_count(port: Option<ClapProcessPort>) -> Result<usize, PluginError> {
+    port.map_or(Ok(0), |port| {
+        usize::try_from(port.layout.channel_count())
+            .map_err(|_| PluginError::Message("Mapped CLAP channel count is not representable"))
+    })
+}
+
+fn validate_channel_relationship(
+    slot: ClapProcessSlot,
+    pair: &ChannelPair<'_, f32>,
+) -> Result<(), PluginError> {
+    if slot.paired {
+        if matches!(pair, ChannelPair::InputOutput(_, _) | ChannelPair::InPlace(_)) {
+            return Ok(());
+        }
+        return Err(PluginError::Message(
+            "Mapped CLAP in-place pair is missing an input or output channel",
+        ));
+    }
+
+    match pair {
+        ChannelPair::InPlace(_) => Err(PluginError::Message(
+            "CLAP host aliased audio ports that are not declared in-place partners",
+        )),
+        ChannelPair::InputOnly(_) if slot.input.is_none() => Err(PluginError::Message(
+            "CLAP supplied an unexpected input channel for this process slot",
+        )),
+        ChannelPair::OutputOnly(_) if slot.output.is_none() => Err(PluginError::Message(
+            "CLAP supplied an unexpected output channel for this process slot",
+        )),
+        ChannelPair::InputOutput(_, _) if slot.input.is_none() || slot.output.is_none() => {
+            Err(PluginError::Message(
+                "CLAP supplied an unexpected paired channel for this process slot",
+            ))
+        }
+        ChannelPair::InputOnly(_)
+        | ChannelPair::OutputOnly(_)
+        | ChannelPair::InputOutput(_, _) => Ok(()),
+    }
+}
+
 fn validated_f32_channels<'a>(port: &mut PortPair<'a>) -> PairedChannelsIter<'a, f32> {
-    // `ClapStereoBufferSource::new` validated this same immutable callback
-    // descriptor set before product processing. Chassis never mutates CLAP data
-    // pointers or sample-type fields between validation and traversal.
+    // `ClapBufferSource::new` validated this same callback descriptor set before
+    // product processing. Chassis never mutates CLAP data pointers or sample-type
+    // fields between validation and traversal.
     port.channels()
         .expect("validated CLAP port remains structurally valid")
         .into_f32()
