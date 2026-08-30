@@ -59,7 +59,7 @@ The qualified source after `73d7012` additionally:
 
 This follow-on is qualified through `3f18404`: the full local Rust gate passed, all five Loom tests passed, and the pending/synchronization handoff race is covered. The model is evidence for the current adapter-local scalar implementation, not a reason to extract it into `chassis-core`.
 
-## Slice 2 — finish publication protocol qualification
+## Slice 2 — publication protocol qualification
 
 Completed. The qualified evidence covers:
 
@@ -68,7 +68,7 @@ Completed. The qualified evidence covers:
 3. writer acquisition, coherent multi-value snapshots, stale-generation rejection, and the pending/synchronization handoff;
 4. bounded realtime operations while a writer is active;
 5. terminal generation exhaustion without ABA wraparound;
-6. keeps typed-value and reclamation work adapter-local until another client proves the need;
+6. typed-value and reclamation work remain adapter-local until another client proves the need;
 7. typed choice/string semantics remaining outside the CLAP scalar helper.
 
 Loom 0.7.2 is the current upstream release as of this checkpoint. Adding it should be a deliberate dev/test dependency with the resulting `Cargo.lock` update reviewed and committed; do not hand-edit the lockfile.
