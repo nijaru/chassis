@@ -1,6 +1,6 @@
 //! Format-independent processor activation and per-call process contracts.
 
-use core::{fmt, num::NonZeroU32};
+use core::{fmt, marker::PhantomData, num::NonZeroU32};
 
 use crate::{
     audio::AudioIoConfiguration,
@@ -476,27 +476,33 @@ impl<'samples, S> ProcessBufferSource<S> for ChannelBufferSlice<'_, 'samples, S>
 
 /// Borrowed realtime process call passed to product DSP.
 ///
-/// Buffer entries already contain safe Rust references whose aliasing has been
-/// proved by the adapter/runtime boundary. Construction validates only facts
-/// that can vary per callback: frame-count bounds, event bounds/context, and
-/// slice lengths. Stable endpoint/schema mapping should be resolved outside the
-/// hot path rather than rescanned with allocation or quadratic work every block.
-pub struct ProcessBlock<'buffers, 'samples, 'context, 'parameters, S> {
+/// The buffer source already contains or can lazily construct safe channel views
+/// whose aliasing has been proved by the adapter/runtime boundary. Construction
+/// validates only facts that can vary per callback: frame-count bounds, event
+/// bounds/context, and source dimensions. Stable endpoint/schema mapping should
+/// be resolved outside the hot path rather than rescanned with allocation or
+/// quadratic semantic lookup work every block.
+pub struct ProcessBlock<'source, 'context, 'parameters, S, B>
+where
+    B: ProcessBufferSource<S> + ?Sized,
+{
     frame_count: u32,
     context: ProcessContext<'context>,
     parameters: &'parameters ParameterStore,
-    buffers: &'buffers mut [ChannelBuffer<'samples, S>],
+    source: &'source mut B,
+    sample: PhantomData<fn() -> S>,
 }
 
-impl<'buffers, 'samples, 'context, 'parameters, S>
-    ProcessBlock<'buffers, 'samples, 'context, 'parameters, S>
+impl<'source, 'context, 'parameters, S, B> ProcessBlock<'source, 'context, 'parameters, S, B>
+where
+    B: ProcessBufferSource<S> + ?Sized,
 {
     pub(crate) fn new(
         config: &ActivationConfig<'_>,
         parameters: &'parameters ParameterStore,
         frame_count: u32,
         context: ProcessContext<'context>,
-        buffers: &'buffers mut [ChannelBuffer<'samples, S>],
+        source: &'source mut B,
     ) -> Result<Self, ProcessBlockError> {
         if context.parameter_events().frame_count() != frame_count {
             return Err(ProcessBlockError::ParameterEventFrameCountMismatch {
@@ -530,21 +536,14 @@ impl<'buffers, 'samples, 'context, 'parameters, S>
 
         let expected = usize::try_from(frame_count)
             .map_err(|_| ProcessBlockError::FrameCountNotRepresentable)?;
-
-        for buffer in &*buffers {
-            if buffer.frame_count() != expected {
-                return Err(ProcessBlockError::BufferFrameCountMismatch {
-                    expected,
-                    actual: buffer.frame_count(),
-                });
-            }
-        }
+        source.validate_frame_count(expected)?;
 
         Ok(Self {
             frame_count,
             context,
             parameters,
-            buffers,
+            source,
+            sample: PhantomData,
         })
     }
 
@@ -584,10 +583,10 @@ impl<'buffers, 'samples, 'context, 'parameters, S>
         self.parameters
     }
 
-    /// Borrow all safe channel views for processing.
+    /// Start an allocation-free traversal over all safe channel views.
     #[must_use]
-    pub fn buffers_mut(&mut self) -> &mut [ChannelBuffer<'samples, S>] {
-        self.buffers
+    pub fn channels(&mut self) -> B::Channels<'_> {
+        self.source.channels()
     }
 }
 
@@ -774,7 +773,11 @@ mod tests {
     }
 
     #[test]
-    fn process_buffer_source_does_not_require_one_flat_slice() {
+    fn process_block_does_not_require_one_flat_slice() {
+        let process =
+            ProcessConfig::new(48_000.0, None, maximum(8), 0).expect("test configuration is valid");
+        let activation = ActivationConfig::new(process, DEFAULT_EFFECT_CONFIGURATION);
+        let parameters = empty_parameters();
         let input_left = [1.0_f32, 2.0];
         let input_right = [3.0_f32, 4.0];
         let mut output_left = [0.0_f32; 2];
@@ -799,11 +802,15 @@ mod tests {
             first: &mut first,
             second: &mut second,
         };
+        let context = ProcessContext::new(
+            ProcessMode::Realtime,
+            TransportSnapshot::unknown(),
+            ParameterEvents::empty_for_block(2),
+        );
+        let mut block = ProcessBlock::new(&activation, &parameters, 2, context, &mut source)
+            .expect("split source forms a valid process block");
 
-        source
-            .validate_frame_count(2)
-            .expect("split source has coherent frame counts");
-        for channel in source.channels() {
+        for mut channel in block.channels() {
             channel
                 .make_in_place()
                 .expect("split source channels are paired")
@@ -833,6 +840,7 @@ mod tests {
             3,
         )
         .expect("test buffers are long enough")];
+        let mut source = ChannelBufferSlice::new(&mut buffers);
 
         let context = ProcessContext::new(
             ProcessMode::Realtime,
@@ -840,7 +848,7 @@ mod tests {
             ParameterEvents::empty_for_block(2),
         );
         assert!(matches!(
-            ProcessBlock::new(&activation, &parameters, 2, context, &mut buffers),
+            ProcessBlock::new(&activation, &parameters, 2, context, &mut source),
             Err(ProcessBlockError::BufferFrameCountMismatch { .. })
         ));
     }
@@ -880,9 +888,10 @@ mod tests {
             ParameterEvents::empty_for_block(1),
         );
         let mut buffers: [ChannelBuffer<'_, f32>; 0] = [];
+        let mut source = ChannelBufferSlice::new(&mut buffers);
 
         assert!(matches!(
-            ProcessBlock::new(&activation, &parameters, 2, context, &mut buffers),
+            ProcessBlock::new(&activation, &parameters, 2, context, &mut source),
             Err(ProcessBlockError::ParameterEventFrameCountMismatch {
                 expected: 2,
                 actual: 1,
@@ -898,7 +907,7 @@ mod tests {
         let context =
             ProcessContext::new(ProcessMode::Realtime, TransportSnapshot::unknown(), events);
         assert!(matches!(
-            ProcessBlock::new(&activation, &parameters, 2, context, &mut buffers),
+            ProcessBlock::new(&activation, &parameters, 2, context, &mut source),
             Err(ProcessBlockError::ParameterEventCountTooLarge {
                 actual: 1,
                 maximum: 0,
