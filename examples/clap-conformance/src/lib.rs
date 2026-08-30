@@ -5,7 +5,7 @@ use core::convert::Infallible;
 use chassis_clap::{ClapStereoEffect, SingleComponentEntry, clack_export_entry};
 use chassis_core::{
     buffer::BufferRelationship,
-    process::{ActivationConfig, ProcessBlock},
+    process::{ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessChannel},
     runtime::{Component, Process, Processor},
 };
 
@@ -34,8 +34,11 @@ struct ConformanceProcessor;
 impl Processor for ConformanceProcessor {}
 
 impl Process<f32> for ConformanceProcessor {
-    fn process(&mut self, block: &mut ProcessBlock<'_, '_, '_, '_, f32>) {
-        for buffer in block.buffers_mut() {
+    fn process<B>(&mut self, block: &mut ProcessBlock<'_, '_, '_, f32, B>)
+    where
+        B: ProcessBufferSource<f32> + ?Sized,
+    {
+        for mut buffer in block.channels() {
             match buffer.relationship() {
                 BufferRelationship::InPlace | BufferRelationship::Separate => {
                     for sample in buffer
