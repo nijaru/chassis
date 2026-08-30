@@ -1,11 +1,10 @@
 //! Initial CLAP deployment adapter for Chassis.
 //!
-//! This adapter currently proves the conventional stereo effect topology with
-//! an optional stereo sidechain plus a bounded parameter projection for scalar
-//! Chassis parameters. Stable CLAP IDs are supplied explicitly rather than
-//! derived from declaration order. Choice parameters, arbitrary process-time
-//! port topology, and richer note/event projections remain explicit follow-up
-//! work rather than being silently approximated.
+//! This adapter projects explicit stable audio/parameter IDs and a bounded scalar
+//! parameter publication into CLAP. Process-time audio is driven by the validated
+//! setup mapping rather than a hard-coded stereo buffer shape. The current audio
+//! path accepts f32 mapped ports; richer sample-precision, choice-parameter, and
+//! note/event projections remain explicit follow-up work.
 
 mod audio;
 mod parameters;
@@ -18,9 +17,9 @@ use std::{
     vec::Vec,
 };
 
-use audio::{AudioMappingError, ClapAudioConfiguration};
+use audio::{AudioMappingError, ClapAudioConfiguration, ClapProcessSlot};
 use chassis_core::{
-    audio::{ChannelLayout, MAIN_INPUT, MAIN_OUTPUT, PortDirection, SIDECHAIN_INPUT},
+    audio::PortDirection,
     automation::ParameterEvents,
     parameters::ParameterStore,
     process::{ProcessConfig, ProcessContext, ProcessMode, TransportSnapshot},
@@ -54,20 +53,19 @@ use parameters::{
     ClapParameterState, ParameterMappingError, ParameterStateError, ParameterSyncError,
     normalized_events,
 };
-use process_audio::ClapStereoBufferSource;
+use process_audio::ClapBufferSource;
 
 /// Explicit CLAP audio-port projection metadata.
 pub use audio::{ClapAudioPort, DEFAULT_CLAP_AUDIO_PORTS};
 /// Re-export of Clack's CLAP entry macro for Chassis export crates.
 pub use clack_plugin::clack_export_entry;
 
-/// Temporary CLAP metadata contract for the conventional stereo-effect adapter.
+/// Temporary CLAP metadata contract for the conventional effect export.
 ///
 /// Parameter and audio-port IDs are explicit because stable Chassis keys cannot
 /// be silently hashed or assigned from declaration order without creating a
-/// persistence compatibility hazard. The setup mapper already validates general
-/// declared layouts, while the current process bridge intentionally qualifies
-/// only stereo main input/output with zero or one stereo sidechain.
+/// persistence compatibility hazard. Audio layouts and in-place relationships
+/// are validated at setup and projected into an allocation-free process plan.
 pub trait ClapStereoEffect: Component + Default + 'static {
     /// Stable reverse-domain CLAP plugin identifier.
     const CLAP_ID: &'static str;
@@ -77,11 +75,11 @@ pub trait ClapStereoEffect: Component + Default + 'static {
 
     /// Stable CLAP audio-port IDs and layouts keyed by canonical Chassis port key.
     ///
-    /// The default projects the conventional stereo main input/output and stereo
-    /// sidechain. Products may omit the optional sidechain by overriding this
-    /// slice with only the main mappings. Other mappings are validated at setup
-    /// but are rejected by the current process bridge until arbitrary callback
-    /// topology has a no-allocation borrow representation.
+    /// The default projects conventional stereo main input/output plus an
+    /// optional stereo sidechain. Products may provide another mapping accepted
+    /// by their Chassis audio-port schema. Reciprocal in-place pairs are aligned
+    /// into one safe CLAP process slot when the dense host layout permits it;
+    /// unrelated ports sharing an index remain semantically independent.
     const CLAP_AUDIO_PORTS: &'static [ClapAudioPort] = &DEFAULT_CLAP_AUDIO_PORTS;
 
     /// Stable CLAP parameter IDs keyed by canonical Chassis parameter key.
@@ -137,7 +135,7 @@ where
     shared: &'a ChassisShared,
     normalized_events: Vec<chassis_core::automation::ParameterEvent<'static>>,
     control_values: Vec<f64>,
-    sidechain_enabled: bool,
+    process_slots: Vec<ClapProcessSlot>,
 }
 
 impl<C> Plugin for ChassisPlugin<C>
@@ -357,7 +355,6 @@ where
                 "CLAP component schema does not match its parameter projection",
             ));
         }
-        let sidechain_enabled = validate_stereo_process_mapping(&main_thread.audio)?;
         let process = map_process_config(audio_config, C::CLAP_MAX_PARAMETER_EVENTS)?;
         let runtime = InstanceRuntime::for_component(&main_thread.component)
             .map_err(|_| PluginError::Message("Invalid Chassis instance runtime"))?;
@@ -373,13 +370,18 @@ where
             .try_reserve_exact(shared.parameters.bindings().len())
             .map_err(PluginError::from)?;
         control_values.resize(shared.parameters.bindings().len(), 0.0);
+        let mut process_slots = Vec::new();
+        process_slots
+            .try_reserve_exact(main_thread.audio.process_slots().len())
+            .map_err(PluginError::from)?;
+        process_slots.extend_from_slice(main_thread.audio.process_slots());
 
         let mut processor = Self {
             runtime,
             shared,
             normalized_events,
             control_values,
-            sidechain_enabled,
+            process_slots,
         };
         processor.shared.parameters.request_sync();
         processor.sync_parameters()?;
@@ -402,7 +404,7 @@ where
     ) -> Result<ProcessStatus, PluginError> {
         self.sync_parameters()?;
         let transport = map_transport(process.transport)?;
-        let mut buffers = ClapStereoBufferSource::new(audio, self.sidechain_enabled)?;
+        let mut buffers = ClapBufferSource::new(audio, &self.process_slots)?;
         let frame_count = buffers.frame_count();
 
         normalized_events(
@@ -458,46 +460,6 @@ where
             .parameters
             .sync_into(self.runtime.parameters_mut(), &mut self.control_values)
             .map_err(sync_error)
-    }
-}
-
-fn validate_stereo_process_mapping(audio: &ClapAudioConfiguration) -> Result<bool, PluginError> {
-    let input_count = audio.count(PortDirection::Input);
-    let output_count = audio.count(PortDirection::Output);
-    if !(input_count == 1 || input_count == 2) || output_count != 1 {
-        return Err(PluginError::Message(
-            "Current CLAP process bridge supports stereo main plus at most one sidechain",
-        ));
-    }
-
-    let main_input = audio
-        .input(0)
-        .ok_or(PluginError::Message("Missing mapped Chassis main input"))?;
-    let main_output = audio
-        .output(0)
-        .ok_or(PluginError::Message("Missing mapped Chassis main output"))?;
-    if main_input.key != MAIN_INPUT
-        || main_output.key != MAIN_OUTPUT
-        || main_input.layout != ChannelLayout::Stereo
-        || main_output.layout != ChannelLayout::Stereo
-    {
-        return Err(PluginError::Message(
-            "Current CLAP process bridge requires stereo Chassis main ports",
-        ));
-    }
-
-    if input_count == 2 {
-        let sidechain = audio
-            .input(1)
-            .ok_or(PluginError::Message("Missing mapped Chassis sidechain"))?;
-        if sidechain.key != SIDECHAIN_INPUT || sidechain.layout != ChannelLayout::Stereo {
-            return Err(PluginError::Message(
-                "Current CLAP process bridge requires a stereo Chassis sidechain",
-            ));
-        }
-        Ok(true)
-    } else {
-        Ok(false)
     }
 }
 
@@ -672,32 +634,12 @@ mod tests {
         );
         let mapped = map_transport(Some(&event)).expect("transport is valid");
         assert_eq!(mapped.playing(), Some(true));
+        assert_eq!(mapped.recording(), Some(false).map(|_| true));
         assert_eq!(mapped.recording(), Some(true));
         assert_eq!(mapped.tempo_bpm(), Some(120.0));
         assert_eq!(mapped.sample_position(), None);
 
         let invalid = transport(TransportFlags::HAS_TEMPO, 0.0);
         assert!(map_transport(Some(&invalid)).is_err());
-    }
-
-    #[test]
-    fn current_process_mapping_accepts_main_only_or_default_sidechain() {
-        let main_only = [DEFAULT_CLAP_AUDIO_PORTS[0], DEFAULT_CLAP_AUDIO_PORTS[1]];
-        let main_only =
-            ClapAudioConfiguration::new(&chassis_core::audio::DEFAULT_EFFECT_PORTS, &main_only)
-                .expect("main-only mapping is valid");
-        assert!(
-            !validate_stereo_process_mapping(&main_only).expect("main-only process is supported")
-        );
-
-        let sidechain = ClapAudioConfiguration::new(
-            &chassis_core::audio::DEFAULT_EFFECT_PORTS,
-            &DEFAULT_CLAP_AUDIO_PORTS,
-        )
-        .expect("default mapping is valid");
-        assert!(
-            validate_stereo_process_mapping(&sidechain)
-                .expect("default sidechain process is supported")
-        );
     }
 }
