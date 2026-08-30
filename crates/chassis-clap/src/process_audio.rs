@@ -253,7 +253,8 @@ fn output_endpoint(port: ClapProcessPort, channel: u32) -> OutputEndpoint {
 fn validate_audio(audio: &mut Audio<'_>, slots: &[ClapProcessSlot]) -> Result<(), PluginError> {
     let expected_inputs = slots.iter().filter(|slot| slot.input.is_some()).count();
     let expected_outputs = slots.iter().filter(|slot| slot.output.is_some()).count();
-    if audio.input_port_count() != expected_inputs || audio.output_port_count() != expected_outputs {
+    if audio.input_port_count() != expected_inputs || audio.output_port_count() != expected_outputs
+    {
         return Err(PluginError::Message(
             "CLAP audio buffers do not match the activated Chassis port mapping",
         ));
@@ -301,7 +302,10 @@ fn validate_channel_relationship(
     pair: &ChannelPair<'_, f32>,
 ) -> Result<(), PluginError> {
     if slot.paired {
-        if matches!(pair, ChannelPair::InputOutput(_, _) | ChannelPair::InPlace(_)) {
+        if matches!(
+            pair,
+            ChannelPair::InputOutput(_, _) | ChannelPair::InPlace(_)
+        ) {
             return Ok(());
         }
         return Err(PluginError::Message(
@@ -324,9 +328,9 @@ fn validate_channel_relationship(
                 "CLAP supplied an unexpected paired channel for this process slot",
             ))
         }
-        ChannelPair::InputOnly(_)
-        | ChannelPair::OutputOnly(_)
-        | ChannelPair::InputOutput(_, _) => Ok(()),
+        ChannelPair::InputOnly(_) | ChannelPair::OutputOnly(_) | ChannelPair::InputOutput(_, _) => {
+            Ok(())
+        }
     }
 }
 

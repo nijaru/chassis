@@ -329,9 +329,8 @@ fn process_rank(binding: &PortBinding) -> u8 {
 
 fn process_pair_key(binding: &PortBinding) -> &str {
     match (binding.descriptor.direction, binding.mapping.in_place_pair) {
-        (PortDirection::Input, Some(_)) => binding.mapping.key.as_str(),
         (PortDirection::Output, Some(input)) => input.as_str(),
-        (_, None) => binding.mapping.key.as_str(),
+        (PortDirection::Input, Some(_)) | (_, None) => binding.mapping.key.as_str(),
     }
 }
 
@@ -703,10 +702,7 @@ mod tests {
         );
         assert!(slots[0].paired);
         assert_eq!(slots[1].input.expect("aux input exists").key, AUX_INPUT);
-        assert_eq!(
-            slots[1].output.expect("aux output exists").key,
-            AUX_OUTPUT
-        );
+        assert_eq!(slots[1].output.expect("aux output exists").key, AUX_OUTPUT);
         assert!(slots[1].paired);
     }
 
