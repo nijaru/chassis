@@ -733,8 +733,7 @@ where
         product_id: &str,
         product_schema: u32,
     ) -> Result<(), InstanceStateError> {
-        let candidate =
-            self.parameter_state_candidate(document, product_id, product_schema)?;
+        let candidate = self.parameter_state_candidate(document, product_id, product_schema)?;
         self.parameters = candidate;
         Ok(())
     }
@@ -775,9 +774,8 @@ where
             .filter(|entry| !entry.key().starts_with("parameter/"))
             .cloned()
             .collect();
-        candidate_custom.sort_unstable_by(|left, right| {
-            left.key().as_bytes().cmp(right.key().as_bytes())
-        });
+        candidate_custom
+            .sort_unstable_by(|left, right| left.key().as_bytes().cmp(right.key().as_bytes()));
         validate_product_state(&candidate_parameters, &candidate_custom)
             .map_err(InstanceSemanticStateError::Product)?;
 

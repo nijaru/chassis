@@ -96,10 +96,7 @@ fn complete_document(schema: u32, gain: f64, quality: bool) -> StateDocument {
         ))
         .expect("custom key is unique");
     document
-        .insert(StateEntry::new(
-            "parameter/gain",
-            StateValue::Float(gain),
-        ))
+        .insert(StateEntry::new("parameter/gain", StateValue::Float(gain)))
         .expect("parameter key is unique");
     document
 }
@@ -128,10 +125,7 @@ fn complete_state_is_committed_saved_and_visible_to_activation() {
             "com.example.semantic",
             2,
             |parameters, custom_state| -> Result<(), Infallible> {
-                assert_eq!(
-                    parameters.get("gain"),
-                    Some(&ParameterValue::Float(0.25))
-                );
+                assert_eq!(parameters.get("gain"), Some(&ParameterValue::Float(0.25)));
                 assert_eq!(quality(custom_state), Some(true));
                 Ok(())
             },
@@ -196,10 +190,7 @@ fn product_validation_failure_is_atomic_across_parameters_and_custom_state() {
         "com.example.semantic",
         2,
         |parameters, custom_state| {
-            assert_eq!(
-                parameters.get("gain"),
-                Some(&ParameterValue::Float(0.25))
-            );
+            assert_eq!(parameters.get("gain"), Some(&ParameterValue::Float(0.25)));
             assert_eq!(quality(custom_state), Some(true));
             Err(RejectState)
         },
@@ -261,10 +252,7 @@ fn migrated_byte_load_publishes_parameters_and_custom_state_together() {
         ))
         .expect("legacy parameter is unique");
     legacy
-        .insert(StateEntry::new(
-            "state/quality",
-            StateValue::Boolean(true),
-        ))
+        .insert(StateEntry::new("state/quality", StateValue::Boolean(true)))
         .expect("legacy custom key is unique");
     let bytes = legacy.encode().expect("legacy state encodes");
     let migration = RenameGain;

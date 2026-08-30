@@ -94,13 +94,11 @@ fn extreme_declared_lengths_are_rejected_without_backing_bytes() {
 
     let first_entry = 16 + PRODUCT_ID.len();
     let mut key_length = encoded.clone();
-    key_length[first_entry..first_entry + 2]
-        .copy_from_slice(&u16::MAX.to_le_bytes());
+    key_length[first_entry..first_entry + 2].copy_from_slice(&u16::MAX.to_le_bytes());
     assert!(StateDocument::decode(&key_length).is_err());
 
     let mut payload_length = encoded.clone();
-    payload_length[first_entry + 4..first_entry + 8]
-        .copy_from_slice(&u32::MAX.to_le_bytes());
+    payload_length[first_entry + 4..first_entry + 8].copy_from_slice(&u32::MAX.to_le_bytes());
     assert!(StateDocument::decode(&payload_length).is_err());
 }
 
@@ -141,8 +139,8 @@ impl StateMigration for NeverMigration {
 
 #[test]
 fn every_truncated_runtime_load_is_failure_atomic() {
-    let descriptor = ParameterDescriptor::float("gain", "Gain", 0.0, 2.0, 1.0)
-        .expect("test parameter is valid");
+    let descriptor =
+        ParameterDescriptor::float("gain", "Gain", 0.0, 2.0, 1.0).expect("test parameter is valid");
     let mut runtime =
         InstanceRuntime::<NoopProcessor>::new(&[descriptor]).expect("runtime schema is valid");
     runtime
@@ -153,10 +151,7 @@ fn every_truncated_runtime_load_is_failure_atomic() {
     let mut replacement =
         StateDocument::new("com.example.effect", 1).expect("product identity is valid");
     replacement
-        .insert(StateEntry::new(
-            "parameter/gain",
-            StateValue::Float(0.25),
-        ))
+        .insert(StateEntry::new("parameter/gain", StateValue::Float(0.25)))
         .expect("replacement parameter is unique");
     let encoded = replacement.encode().expect("replacement encodes");
     let migrations: [&NeverMigration; 0] = [];
