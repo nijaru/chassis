@@ -72,13 +72,13 @@ Grow the same semantics as parameters/state/events land instead of creating unre
 
 ## CLAP conformance export
 
-`examples/clap-conformance` is the first actual format export probe. It deliberately implements a deterministic 0.5 gain and uses the explicit Chassis `Component`/`Processor`/`Process<f32>` API.
+`examples/clap-conformance` is the first actual format export probe. It deliberately implements a deterministic 0.5 gain and uses the explicit Chassis `Component`/`Processor`/`Process<S>` API for both `f32` and `f64`.
 
-The current `chassis-clap` adapter attempts only the following semantic slice:
+The current `chassis-clap` adapter supports the following semantic slice:
 
 - Clack's safe plugin boundary from the pinned post-fix revision `c5975f9f89f0953b00768680357985d46178078a` (development workspace version 0.2.0);
 - one required stereo main input/output pair;
-- f32 processing;
+- f32 processing, with optional f64 processing through an explicit capability marker;
 - CLAP render-mode projection into realtime/offline process context;
 - exact in-place or separate paired channels;
 - Chassis activation/process/reset/deactivation;
@@ -87,9 +87,9 @@ The current `chassis-clap` adapter attempts only the following semantic slice:
 - bounded CHSS parameter state save/load with product/schema checks;
 - block-start CLAP transport play/record flags and tempo;
 - conservative `ProcessStatus::Continue`;
-- `ProcessMode::Realtime` only.
+- `ProcessMode::Realtime` and host-selected offline render mode.
 
-It does **not** yet claim choice/index parameters, modulation or gesture output, note/MIDI events, sidechain/multibus, f64, offline render semantics, latency/tail, GUI, packaging, or production host support. The existing native CLAP artifact was qualified before this parameter/state slice and must be rerun before making claims about the new extensions.
+It does **not** yet claim choice/index parameters, modulation or gesture output, note/MIDI events, sidechain/multibus, latency/tail, GUI, packaging, or production host support. F64 support is qualified at the adapter and validator level; expanded topology and real-host requalification remain open.
 
 ### First local adapter gate
 
@@ -111,7 +111,7 @@ Any compile/lint failure is adapter feedback. Fix the API/translation rather tha
 
 ## Realtime allocation/work checks
 
-The core process path and fixed-stereo CLAP translation are designed to avoid explicit process-time allocation: the adapter constructs a fixed `[ChannelBuffer; 2]` on the stack from Clack safe channel pairs and preallocates normalized parameter-event/control scratch during activation.
+The core process path and CLAP translation are designed to avoid explicit process-time allocation: the adapter traverses Clack safe channel pairs directly and preallocates normalized parameter-event/control scratch during activation.
 
 Design inspection is **not** an allocation-proof claim. Before promotion, add test/measurement evidence that both Chassis and the exact Clack path used do not allocate/block unexpectedly during process.
 
@@ -149,9 +149,9 @@ Chassis-level tests should verify translation/containment of:
 - required input-only/output-only main channel rejection;
 - wrong port count;
 - wrong main channel count;
-- unavailable f32 representation;
+- unavailable or mixed sample representations, including a host-supplied `Both` representation;
 - activation/callback frame-bound failures;
-- future sidechain/aux/asymmetric layouts only after that adapter model exists.
+- mapped sidechain/auxiliary and asymmetric layouts where the activated adapter mapping declares them;
 
 Separately audit Clack's internal unsafe implementation before production qualification; safe API consumption does not eliminate dependency trust review.
 
@@ -161,8 +161,8 @@ The first narrow adapter qualification has been exercised locally:
 
 1. the conformance `cdylib` was built in release mode;
 2. it was packaged as a macOS `.clap` bundle with a platform-correct `Contents/MacOS` executable and `Info.plist`;
-3. `clap-validator` 0.4.1 was built from source commit `b2f1d9b79b1d264a5747f46707d72b1aa40a02ef` and run with `validate --json` against the current artifact; it reported 21 passed, 0 failed, and 23 intentional skips;
-4. validator lifecycle, buffer, block-size, sample-rate, reset/reactivate, transport-null, and transport-fuzz cases completed without failures; a five-second, two-worker fuzz run also completed without errors, including malformed optional transport values;
+3. `clap-validator` 0.4.1 was built from source commit `b2f1d9b79b1d264a5747f46707d72b1aa40a02ef` and run with `validate --json` against the current f64 artifact; it reported 23 passed, 0 failed, and 21 intentional skips, including both double-precision process-audio cases;
+4. validator lifecycle, buffer, block-size, sample-rate, reset/reactivate, transport-null, and transport-fuzz cases completed without failures; both double-precision in-place and out-of-place process cases succeeded; a five-second, two-worker fuzz run also completed without errors, including malformed optional transport values;
 5. the earlier narrow bundle was loaded by REAPER 7.78/macOS-arm64 and rendered through a real project; a no-FX differential render confirmed the fixed 0.5 gain within 6e-8 absolute error;
 6. the environment was Apple Silicon macOS with Rust 1.98.0 and the stable toolchain named by `rust-toolchain.toml`.
 

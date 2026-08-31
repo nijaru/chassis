@@ -92,7 +92,7 @@ The first `chassis-clap` slice deliberately owns **no** unsafe code: Clack valid
 
 CLAP is the first native adapter. VST3/AU through `clap-wrapper` initially belong primarily to export/build integration; create native `chassis-vst3`/`chassis-au` crates only if Chassis actually owns those adapters later.
 
-The current adapter is intentionally limited to a single f32 stereo main pair. Do not mistake that validation slice for the eventual author-facing CLAP feature set.
+The current adapter provides the conventional stereo effect mapping with optional f64 capability and a generic lazy buffer source. Native host qualification remains narrower than the source mapping; do not mistake either validation slice for the eventual author-facing CLAP feature set.
 
 ### Conformance export
 

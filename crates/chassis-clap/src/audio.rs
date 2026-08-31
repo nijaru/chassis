@@ -69,12 +69,15 @@ struct PortBinding {
 }
 
 impl PortBinding {
-    fn info(self) -> AudioPortInfo<'static> {
-        let flags = if self.descriptor.role == PortRole::Main {
+    fn info(self, supports_f64: bool) -> AudioPortInfo<'static> {
+        let mut flags = if self.descriptor.role == PortRole::Main {
             AudioPortFlags::IS_MAIN
         } else {
             AudioPortFlags::empty()
         };
+        if supports_f64 {
+            flags |= AudioPortFlags::SUPPORTS_64BITS | AudioPortFlags::REQUIRES_COMMON_SAMPLE_SIZE;
+        }
         AudioPortInfo {
             id: ClapId::new(self.mapping.id),
             name: self.descriptor.name.as_bytes(),
@@ -113,6 +116,7 @@ pub(crate) struct ClapAudioConfiguration {
     outputs: Vec<PortBinding>,
     configured: Vec<ConfiguredAudioPort>,
     process_slots: Vec<ClapProcessSlot>,
+    supports_f64: bool,
 }
 
 impl ClapAudioConfiguration {
@@ -155,7 +159,13 @@ impl ClapAudioConfiguration {
             outputs,
             configured,
             process_slots,
+            supports_f64: false,
         })
+    }
+
+    pub(crate) fn with_f64_support(mut self) -> Self {
+        self.supports_f64 = true;
+        self
     }
 
     pub(crate) fn count(&self, direction: PortDirection) -> u32 {
@@ -176,7 +186,10 @@ impl ClapAudioConfiguration {
             PortDirection::Input => &self.inputs,
             PortDirection::Output => &self.outputs,
         };
-        ports.get(index).copied().map(PortBinding::info)
+        ports
+            .get(index)
+            .copied()
+            .map(|binding| binding.info(self.supports_f64))
     }
 
     pub(crate) fn audio_io(&self) -> AudioIoConfiguration<'_> {
@@ -550,6 +563,26 @@ mod tests {
             SIDECHAIN_INPUT
         );
         assert!(configuration.process_slots()[1].output.is_none());
+    }
+
+    #[test]
+    fn f64_support_advertises_common_sample_size() {
+        let configuration = ClapAudioConfiguration::new(
+            &chassis_core::audio::DEFAULT_EFFECT_PORTS,
+            &DEFAULT_CLAP_AUDIO_PORTS,
+        )
+        .expect("default mapping is valid")
+        .with_f64_support();
+        let main_input = configuration
+            .info(0, PortDirection::Input)
+            .expect("main input exists");
+        assert!(main_input.flags.contains(AudioPortFlags::SUPPORTS_64BITS));
+        assert!(
+            main_input
+                .flags
+                .contains(AudioPortFlags::REQUIRES_COMMON_SAMPLE_SIZE)
+        );
+        assert!(!main_input.flags.contains(AudioPortFlags::PREFERS_64BITS));
     }
 
     #[test]

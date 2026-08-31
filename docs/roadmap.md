@@ -8,9 +8,9 @@ Chassis currently spans **late Phase 1 / early Phase 2** deliberately.
 
 The format-independent lifecycle/buffer conformance path, typed parameter/state model, adjacent-schema migrations, complete semantic instance-state ownership, borrowed automation/context, and generic no-allocation process-buffer source are implemented. The whole-state path is locally qualified through `62b96cc`; the generic process-source boundary and arbitrary mapped f32 CLAP audio path are locally Rust-1.98-qualified through `dfc137c`.
 
-The CLAP adapter now owns explicit stable audio/parameter identity mapping, a weak-memory-model-qualified scalar publication bridge, setup-built process slots, and allocation-free lazy projection of arbitrary mapped f32 audio ports. The expanded I/O topology has not yet repeated the earlier native `clap-validator`/REAPER host qualification, so source qualification and native-host qualification remain distinct evidence levels.
+The CLAP adapter now owns explicit stable audio/parameter identity mapping, a weak-memory-model-qualified scalar publication bridge, setup-built process slots, and allocation-free lazy projection of arbitrary mapped f32/f64 audio ports. The expanded I/O topology has not yet repeated the earlier native `clap-validator`/REAPER host qualification, so source qualification and native-host qualification remain distinct evidence levels.
 
-CLAP render/offline mode projection is implemented and locally qualified. Broader precision, host semantics, active-state consistency, capabilities, and native requalification remain ahead. This is not a roadmap reversal: core semantic contracts continue to be proven before adapter conveniences are frozen.
+CLAP render/offline mode projection and optional f64 capability advertisement/dispatch are implemented and locally qualified. Active-state consistency, richer capabilities, and native requalification remain ahead. This is not a roadmap reversal: core semantic contracts continue to be proven before adapter conveniences are frozen.
 
 ## Phase 0 — semantic foundation
 
@@ -41,7 +41,7 @@ Implemented/validated through the current conformance path:
 - a non-flat source conformance test proving process traversal does not require one materialized channel collection;
 - deterministic external conformance component;
 - activation/reset/deactivation and malformed configuration/callback tests;
-- f32 processor proof without freezing the architecture to one sample precision;
+- f32/f64 processor capability proof without freezing the architecture to one sample precision;
 - typed parameters with stable keys and validated base values;
 - bounded deterministic canonical state documents;
 - adjacent-schema migrations with a checked-in legacy fixture;
@@ -73,7 +73,7 @@ Current adapter foundation:
 - setup-owned `ClapAudioConfiguration` plus `ClapProcessSlot` mapping from dense CLAP indices to stable Chassis endpoints;
 - reciprocal declared in-place partners aligned semantically while unrelated same-index input/output ports remain independent;
 - allocation-free `ClapBufferSource` traversal directly over safe Clack `ChannelPair` relationships;
-- arbitrary mapped f32 mono/stereo ports, auxiliary buses, asymmetric input/output tails, and input-only/output-only semantics within the current core layout model;
+- arbitrary mapped f32/f64 mono/stereo ports, auxiliary buses, asymmetric input/output tails, and input-only/output-only semantics within the current core layout model;
 - explicit rejection before product DSP when host channel shape/sample type does not match activation or when unrelated ports are illegally aliased;
 - activate/process/reset/deactivate lifecycle mapping;
 - bounded scalar parameter automation and state projection through CLAP params/state;
@@ -87,14 +87,14 @@ Qualification evidence is intentionally split:
 1. the earlier conventional stereo artifact regenerated/reviewed `Cargo.lock`, passed fmt/test/clippy/deny/machete, and built the conformance cdylib in release mode;
 2. that artifact was packaged as a platform-correct macOS `.clap`, passed `clap-validator` 0.4.1 (source commit `b2f1d9b79b1d264a5747f46707d72b1aa40a02ef`) lifecycle/buffer stress with 19 passes, 0 failures, and 25 intentional skips plus a five-second two-worker fuzz run, and rendered correctly in REAPER 7.78/macOS-arm64;
 3. the expanded generic-source/arbitrary-mapped-f32 implementation passed Rust 1.98 fmt, full workspace tests, strict all-feature/all-target Clippy, and release conformance build at `dfc137c`;
-4. the current adapter artifact passed `clap-validator` 0.4.1 with 21 passes, 0 failures, and 23 intentional skips, plus a five-second, two-worker fuzz run without errors;
+4. the current f64-capable adapter artifact passed `clap-validator` 0.4.1 with 23 passes, 0 failures, and 21 intentional skips, including both double-precision process-audio cases, plus a five-second, two-worker fuzz run without errors;
 5. the expanded topology still needs a new native validator/real-host qualification run before inheriting the earlier host evidence.
 
 Current/follow-on Phase 2 work:
 
 - native validator and real-host requalification of the expanded mapped-I/O path;
 - targeted native render/offline-mode qualification;
-- f64 capability advertisement/dispatch where a product actually implements `Process<f64>`;
+- native host requalification of the f64 capability where a product implements `Process<f64>`;
 - richer audio/event buffers and note/MIDI projections when a client requires them;
 - choice/modulation/gesture semantics and richer parameter events;
 - state save/load while active according to a documented consistency contract;

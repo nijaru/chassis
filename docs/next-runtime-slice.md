@@ -119,35 +119,13 @@ Qualified setup/process behavior now provides:
 7. stereo main input/output processing with zero or one stereo input-only sidechain;
 8. unsupported process topologies rejected during activation instead of reaching partial DSP code.
 
-The remaining blocker is representation rather than metadata. The current product-facing `ProcessBlock` still owns a borrowed flat `&mut [ChannelBuffer<'_, S>]`. An arbitrary runtime number of lifetime-bearing channel views cannot be retained in processor storage, and allocating a `Vec<ChannelBuffer>` in each callback is forbidden. Do not solve that by lifetime erasure or hidden callback allocation.
-
-### Buffer-source sub-slice
-
-A follow-on after `ad57f50` introduces the proposed no-allocation source shape in `chassis-core`:
-
-- `ProcessChannel<S>` abstracts only the already-proven `ChannelBuffer` operations;
-- `ProcessBufferSource<S>` uses generic associated channel/iterator types so an adapter can yield safe channel views lazily;
-- `ChannelBufferSlice` proves the existing materialized slice can act as a compatibility source;
-- a core test source chains two independent slices, proving one traversal does not require a single flat backing collection;
-- `validate_frame_count()` remains an explicit pre-DSP source responsibility.
-
-This source abstraction is implemented but **not yet qualified** and is not yet wired into `ProcessBlock`/`InstanceRuntime`. It exists to get the Rust lifetime/GAT shape through the local gate before replacing the established process path.
-
-After that source shape passes:
-
-1. make `ProcessBlock` generic over `ProcessBufferSource<S>` while retaining `ChannelBufferSlice` for existing callers;
-2. make `Process<S>::process` generic over the concrete buffer source so adapters remain allocation-free without type erasure;
-3. add `InstanceRuntime::process_buffers` and keep the current slice entry point as a compatibility wrapper;
-4. implement a CLAP source that traverses `PortPairsIter`/`PairedChannelsIter` lazily with setup-retained semantic endpoints;
-5. validate all host buffer dimensions/sample representation before product DSP;
-6. remove the stereo-specific callback materialization branches;
-7. add asymmetric/multi-bus/high-channel-count conformance cases.
+The generic representation is now implemented: `ProcessBlock` and `InstanceRuntime` accept a borrowed `ProcessBufferSource<S>`, while the existing slice source remains available. The CLAP adapter traverses `PortPairsIter`/`PairedChannelsIter` lazily with setup-retained semantic endpoints and validates dimensions, relationships, and sample representation before product DSP. It supports the mapped f32 path and optional f64 path without callback-owned channel collections.
 
 Required invariant: no callback-time owned `Vec<ChannelBuffer>` allocation.
 
 ## Slice 5 — native CLAP qualification
 
-Once current Rust semantics and general I/O are coherent, rebuild/package the conformance `.clap` and qualify the **current** artifact:
+The current Rust semantics and general I/O are coherent enough to rebuild/package the conformance `.clap` and qualify the **current** artifact:
 
 - `clap-validator` normal suite and bounded fuzzing;
 - audio-port enumeration, stable IDs, main/sidechain metadata, and in-place pairing;
@@ -161,18 +139,16 @@ Once current Rust semantics and general I/O are coherent, rebuild/package the co
 - REAPER render, automation, sidechain, save/load and reopen smoke tests;
 - Bitwig when available because it exercises relevant CLAP/reentrancy behavior.
 
-Do not treat an older validator artifact as evidence for current runtime/parameter/state/I/O code.
+The current f64-capable artifact passes the local validator and fuzz checks. Do not treat an older validator artifact as evidence for current runtime/parameter/state/I/O code; expanded topology and real-host requalification remain open.
 
 ## Slice 6 — CLAP capability expansion
 
 After current native semantics qualify:
 
-1. f64 advertisement/dispatch;
-2. render/offline mode;
-3. choice parameter projection;
-4. modulation and product-originated gesture output;
-5. note/MIDI/event ports;
-6. latency/tail/status metadata as required by real clients.
+1. choice parameter projection;
+2. modulation and product-originated gesture output;
+3. note/MIDI/event ports;
+4. latency/tail/status metadata as required by real clients.
 
 Each capability needs conformance plus native-host evidence rather than source support alone.
 

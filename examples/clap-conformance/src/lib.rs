@@ -2,7 +2,7 @@
 
 use core::convert::Infallible;
 
-use chassis_clap::{ClapStereoEffect, SingleComponentEntry, clack_export_entry};
+use chassis_clap::{ClapStereoEffect, SingleComponentEntryWithF64, clack_export_entry};
 use chassis_core::{
     buffer::BufferRelationship,
     process::{ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessChannel},
@@ -38,35 +38,57 @@ impl Process<f32> for ConformanceProcessor {
     where
         B: ProcessBufferSource<f32> + ?Sized,
     {
-        for mut buffer in block.channels() {
-            match buffer.relationship() {
-                BufferRelationship::InPlace | BufferRelationship::Separate => {
-                    for sample in buffer
-                        .make_in_place()
-                        .expect("paired main channel has input and output")
-                    {
-                        apply_gain(sample);
-                    }
+        process_gain(block, apply_gain);
+    }
+}
+
+impl Process<f64> for ConformanceProcessor {
+    fn process<B>(&mut self, block: &mut ProcessBlock<'_, '_, '_, f64, B>)
+    where
+        B: ProcessBufferSource<f64> + ?Sized,
+    {
+        process_gain(block, apply_gain_f64);
+    }
+}
+
+fn process_gain<S, B>(block: &mut ProcessBlock<'_, '_, '_, S, B>, apply_gain: fn(&mut S))
+where
+    S: Copy,
+    B: ProcessBufferSource<S> + ?Sized,
+{
+    for mut buffer in block.channels() {
+        match buffer.relationship() {
+            BufferRelationship::InPlace | BufferRelationship::Separate => {
+                for sample in buffer
+                    .make_in_place()
+                    .expect("paired main channel has input and output")
+                {
+                    apply_gain(sample);
                 }
-                BufferRelationship::InputOnly => {}
-                BufferRelationship::OutputOnly => {
-                    panic!("conformance effect does not declare output-only channels");
-                }
+            }
+            BufferRelationship::InputOnly => {}
+            BufferRelationship::OutputOnly => {
+                panic!("conformance effect does not declare output-only channels");
             }
         }
     }
 }
 
-clack_export_entry!(SingleComponentEntry<ConformanceEffect>);
+clack_export_entry!(SingleComponentEntryWithF64<ConformanceEffect>);
 
 fn apply_gain(sample: &mut f32) {
     let gained = *sample * 0.5;
     *sample = if gained.is_subnormal() { 0.0 } else { gained };
 }
 
+fn apply_gain_f64(sample: &mut f64) {
+    let gained = *sample * 0.5;
+    *sample = if gained.is_subnormal() { 0.0 } else { gained };
+}
+
 #[cfg(test)]
 mod tests {
-    use super::apply_gain;
+    use super::{apply_gain, apply_gain_f64};
 
     #[test]
     fn gain_flushes_subnormal_output() {
@@ -80,5 +102,12 @@ mod tests {
         let mut sample = 0.8;
         apply_gain(&mut sample);
         assert_eq!(sample.to_bits(), 0.4_f32.to_bits());
+    }
+
+    #[test]
+    fn f64_gain_preserves_normal_output() {
+        let mut sample = 0.8_f64;
+        apply_gain_f64(&mut sample);
+        assert_eq!(sample.to_bits(), 0.4_f64.to_bits());
     }
 }

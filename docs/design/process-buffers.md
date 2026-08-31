@@ -166,7 +166,7 @@ Do not add a per-block map/allocation merely for lookup convenience. Dense endpo
 
 The buffer/source types are generic over `S`. Runtime processing uses a separate `Process<S>` capability rather than parameterizing `Processor` itself.
 
-The current conformance processor and CLAP adapter are qualified for `f32`. A processor can independently implement `Process<f64>` without creating a second lifecycle object, but CLAP f64 advertisement/dispatch is not yet implemented.
+The conformance processor and CLAP adapter support `f32` and optional `f64`. F64 CLAP exports use an explicit capability marker and require one processor to implement both `Process<f32>` and `Process<f64>`; they do not create a second lifecycle object. A callback must use one precision across all mapped ports, so mixed or `Both` host representations are rejected before product DSP.
 
 Do not genericize unrelated control/state types over sample precision.
 

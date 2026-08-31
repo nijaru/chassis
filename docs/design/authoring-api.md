@@ -107,7 +107,7 @@ Process<f32>
 Process<f64>
 ```
 
-as supported. The current conformance effect proves only `f32`; optional host f64 advertisement/dispatch remains an adapter freeze gate.
+as supported. The conformance effect and CLAP adapter now exercise both precisions through the explicit f64 capability marker; other adapters may advertise only the precisions they implement.
 
 This is preferable to duplicating the whole processor architecture merely to support double precision.
 

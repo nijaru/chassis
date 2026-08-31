@@ -68,9 +68,9 @@ The pinned Clack safe audio API differentiates:
 - `ChannelPair::InputOutput` for disjoint input/output;
 - `ChannelPair::InPlace` for exact aliasing represented by one mutable slice.
 
-That maps directly to Chassis `ChannelBuffer` relationships without Chassis handling raw CLAP pointers in the current slice.
+That maps directly to Chassis process-channel relationships without Chassis handling raw CLAP pointers in the current slice.
 
-The first adapter intentionally supports only one required stereo main input/output pair. It turns two Clack `ChannelPair<f32>` values into a fixed `[ChannelBuffer; 2]` on the stack and calls the existing Chassis runtime. There is no explicit process-time heap allocation in Chassis's translation code.
+The adapter preserves Clack's safe `ChannelPair<f32>`/`ChannelPair<f64>` relationships through a generic lazy `ProcessBufferSource` and calls the Chassis runtime. It does not materialize a callback-owned channel collection or perform explicit process-time heap allocation in its translation code.
 
 This is a proof, not the general multibus solution. Arbitrary ports/channels must not be implemented by allocating a `Vec<ChannelBuffer>` every callback or by introducing lifetime-erasing unsafe scratch just to preserve the current `ProcessBlock` shape. Adapter evidence should determine whether that core borrowing shape needs refinement.
 
@@ -81,7 +81,7 @@ Implemented in the first slice:
 ```text
 CLAP factory/init            -> construct Chassis component on main thread
 CLAP activate                -> ProcessConfig + Chassis activate
-CLAP process (f32 stereo)    -> ChannelPair -> ChannelBuffer -> Activated::process
+CLAP process (f32/f64 mapped audio) -> ChannelPair -> ProcessBufferSource -> InstanceRuntime
 CLAP reset                   -> Activated::reset
 CLAP deactivate              -> Activated::deactivate
 CLAP audio-ports extension   -> one stereo main input + one stereo main output
@@ -91,18 +91,16 @@ Clack owns CLAP create/init/start/stop/destroy scaffolding. Chassis currently us
 
 Not implemented yet:
 
-- sidechain/aux/multiple buses;
-- configurable audio ports/layout negotiation;
-- f64 processing/advertisement;
-- render/offline extension;
+- sidechain/aux/multiple-bus native host qualification;
+- configurable audio-port/layout negotiation;
 - parameters, automation, modulation, events, MIDI/notes, transport;
 - state;
 - latency/tail/sleep/bypass semantics;
 - GUI;
 - bundle/install tooling;
-- CLAP validator or real-host qualification.
+- real-host qualification of the expanded adapter.
 
-The adapter returns `ProcessStatus::Continue` conservatively and maps each call to Chassis `ProcessMode::Realtime`. These are explicit temporary semantics.
+The adapter now advertises/dispatches optional f64 and maps the render extension into `ProcessMode::Offline`; it returns `ProcessStatus::Continue` conservatively. Native validator qualification exists for the current f64 artifact.
 
 ## Failure containment
 
@@ -111,7 +109,7 @@ The Chassis adapter rejects before product DSP when:
 - CLAP activation frame bounds are zero, exceed the CLAP signed 32-bit limit, or fail Chassis validation;
 - process data does not expose exactly one input and one output port for this proof;
 - the main port is not exactly stereo;
-- f32 buffers are unavailable;
+- required sample representations are unavailable, mixed, or supplied as `Both`;
 - a required main channel is input-only or output-only;
 - Chassis callback bounds reject the block.
 
@@ -129,5 +127,5 @@ Before this slice becomes the basis for real product exports:
 6. run `clap-validator` plus lifecycle/buffer stress;
 7. smoke-test at least Bitwig or another real CLAP host, with reentrant behavior in mind;
 8. decide the general port/channel borrowing model before arbitrary multibus support;
-9. add render-mode semantics and f64 only when their mappings are explicit;
+9. requalify render-mode and f64 mappings in native hosts when available;
 10. migrate back to a crates.io Clack release when a suitable safety-fixed release is published and validated.

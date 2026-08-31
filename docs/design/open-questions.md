@@ -24,7 +24,7 @@ Before promotion, still prove:
 - semantic whole-I/O policy beyond structural port presence;
 - how the eventual framework `InstanceRuntime` adds automation/event publication around the canonical parameter/state authority without turning into a giant shared object;
 - whether any additional lifecycle capability is genuinely required by CLAP/VST3/AU;
-- f32/f64 capability advertisement/dispatch using one processor architecture.
+- native host qualification of the f32/f64 capability projection using one processor architecture.
 
 Do not add derives/macros yet. The integration conformance effect and first CLAP export use this explicit API directly.
 
@@ -46,7 +46,7 @@ Remaining freeze gates:
 - general adapter setup representation for arbitrary ports/channels without per-callback allocation or lifetime-erasing unsafe scratch;
 - ergonomic higher-level port/bus views for stereo main, sidechain, multiple buses, and non-one-to-one routing;
 - target-specific null/inactive/zero-buffer legality;
-- f64 host dispatch/advertisement;
+- native host coverage for f64 dispatch/advertisement;
 - benchmark copy/conversion paths before adding ownership/unsafe complexity to remove them.
 
 Do **not** generalize the current proof by allocating `Vec<ChannelBuffer>` on every process call. If the current slice-shaped `ProcessBlock` makes a correct arbitrary-layout adapter awkward, revisit the core borrowing shape using adapter evidence rather than hiding the mismatch.
@@ -66,10 +66,11 @@ linear trajectories. `Activated::process()` validates event values against the
 active parameter schema before product DSP. It does not yet publish automation
 endpoints back into base state or provide a coherent active state-save snapshot.
 
-The initial CLAP adapter still emits only `ProcessMode::Realtime`, an unknown
-transport snapshot, and an empty parameter-event view; it does not register the
-CLAP render extension. This is an explicit limitation, not a claim that offline
-mode or CLAP event translation maps automatically.
+The CLAP adapter now maps the render extension into `ProcessMode`, translates
+block-start transport and bounded parameter events, and supports optional f64
+sample dispatch. These mappings remain adapter-local and must not be inferred
+for other formats. Active state-save consistency and richer event semantics
+remain open.
 
 Still to add only when the corresponding semantic layer is implemented:
 
@@ -187,17 +188,17 @@ The first proof intentionally supports exactly:
 
 - one stereo main input;
 - one stereo main output;
-- f32;
+- f32, with optional f64 through the explicit capability marker;
 - exact in-place or disjoint paired channels.
 
-It rejects missing/asymmetric required main channels, wrong port counts, non-stereo main data, non-f32 data, invalid frame bounds, and Chassis callback-bound failures before product DSP proceeds.
+It rejects missing/asymmetric required main channels, wrong port counts, non-stereo main data, unavailable or mixed sample representations (including `Both`), invalid frame bounds, and Chassis callback-bound failures before product DSP proceeds.
 
 Still required:
 
 - sidechain/aux/multiple buses;
 - stable setup-time endpoint mapping for arbitrary configurations;
 - CLAP audio-port activation/configuration negotiation;
-- f64;
+- native host qualification of f64 dispatch/advertisement;
 - silence/constant-mask semantics if useful;
 - synthetic malformed-buffer tests at the lowest safe boundary Clack exposes;
 - proof that generalization retains bounded no-allocation callback work.

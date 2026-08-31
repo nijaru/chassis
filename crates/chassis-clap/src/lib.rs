@@ -2,8 +2,8 @@
 //!
 //! This adapter projects explicit stable audio/parameter IDs and a bounded scalar
 //! parameter publication into CLAP. Process-time audio is driven by the validated
-//! setup mapping rather than a hard-coded stereo buffer shape. The current audio
-//! path accepts f32 mapped ports; richer sample-precision, choice-parameter, and
+//! setup mapping rather than a hard-coded stereo buffer shape. The audio path
+//! supports f32 exports and explicit f64-capable exports; choice-parameter and
 //! note/event projections remain explicit follow-up work.
 
 mod audio;
@@ -57,7 +57,7 @@ use parameters::{
     ClapParameterState, ParameterMappingError, ParameterStateError, ParameterSyncError,
     normalized_events,
 };
-use process_audio::ClapBufferSource;
+use process_audio::{ClapBufferSource, ClapSample, ClapSamplePrecision, sample_precision};
 
 /// Explicit CLAP audio-port projection metadata.
 pub use audio::{ClapAudioPort, DEFAULT_CLAP_AUDIO_PORTS};
@@ -105,11 +105,20 @@ pub trait ClapStereoEffect: Component + Default + 'static {
     const CLAP_STATE_SCHEMA: u32 = 1;
 }
 
-/// Clack plugin marker that exports one [`ClapStereoEffect`] through Chassis.
-pub struct ChassisPlugin<C>(PhantomData<fn() -> C>);
+/// Precision capability marker for a CLAP export that accepts only f32 audio.
+pub struct F32Only;
 
-/// Single-plugin CLAP entry type for a Chassis stereo effect.
-pub type SingleComponentEntry<C> = SinglePluginEntry<ChassisPlugin<C>>;
+/// Precision capability marker for a CLAP export that accepts f32 and f64 audio.
+pub struct F32AndF64;
+
+/// Clack plugin marker that exports one [`ClapStereoEffect`] through Chassis.
+pub struct ChassisPlugin<C, M = F32Only>(PhantomData<fn() -> (C, M)>);
+
+/// Single-plugin CLAP entry type for an f32-only Chassis stereo effect.
+pub type SingleComponentEntry<C> = SinglePluginEntry<ChassisPlugin<C, F32Only>>;
+
+/// Single-plugin CLAP entry type for a Chassis stereo effect with f64 support.
+pub type SingleComponentEntryWithF64<C> = SinglePluginEntry<ChassisPlugin<C, F32AndF64>>;
 
 #[derive(Default)]
 struct RenderState {
@@ -152,7 +161,7 @@ pub struct ChassisMainThread<C> {
 }
 
 /// CLAP audio-thread wrapper around an activated Chassis instance runtime.
-pub struct ChassisAudioProcessor<'a, P>
+pub struct ChassisAudioProcessor<'a, P, M = F32Only>
 where
     P: Processor,
 {
@@ -161,14 +170,15 @@ where
     normalized_events: Vec<chassis_core::automation::ParameterEvent<'static>>,
     control_values: Vec<f64>,
     process_slots: Vec<ClapProcessSlot>,
+    _precision: PhantomData<fn() -> M>,
 }
 
-impl<C> Plugin for ChassisPlugin<C>
+impl<C> Plugin for ChassisPlugin<C, F32Only>
 where
     C: ClapStereoEffect,
     C::Processor: ChassisProcess<f32> + Send + 'static,
 {
-    type AudioProcessor<'a> = ChassisAudioProcessor<'a, C::Processor>;
+    type AudioProcessor<'a> = ChassisAudioProcessor<'a, C::Processor, F32Only>;
     type Shared<'a> = ChassisShared;
     type MainThread<'a> = ChassisMainThread<C>;
 
@@ -192,48 +202,167 @@ where
     }
 
     fn new_shared(_host: HostSharedHandle) -> Result<ChassisShared, PluginError> {
-        let component = C::default();
-        ParameterStore::new(component.parameter_descriptors())
-            .map_err(|_| PluginError::Message("Invalid Chassis parameter schema"))?;
-        if !component.parameter_descriptors().is_empty() && C::CLAP_MAX_PARAMETER_EVENTS == 0 {
-            return Err(PluginError::Message(
-                "CLAP parameter projection requires a positive event bound",
-            ));
-        }
-        let parameters =
-            ClapParameterState::new(component.parameter_descriptors(), C::CLAP_PARAMETER_IDS)
-                .map_err(|error| parameter_mapping_error(&error))?;
-        Ok(ChassisShared {
-            parameters: Arc::new(parameters),
-            render: Arc::new(RenderState::default()),
-        })
+        new_shared::<C>()
     }
 
     fn new_main_thread<'a>(
         _host: HostMainThreadHandle<'a>,
         shared: &'a ChassisShared,
     ) -> Result<ChassisMainThread<C>, PluginError> {
-        let component = C::default();
-        if !shared
-            .parameters
-            .matches_descriptors(component.parameter_descriptors())
-        {
-            return Err(PluginError::Message(
-                "CLAP component schema changed between shared and main-thread construction",
-            ));
-        }
-        let audio = ClapAudioConfiguration::new(component.audio_ports(), C::CLAP_AUDIO_PORTS)
-            .map_err(|error| audio_mapping_error(&error))?;
-        Ok(ChassisMainThread {
-            component,
-            audio,
-            shared: Arc::clone(&shared.parameters),
-            render: Arc::clone(&shared.render),
-        })
+        new_main_thread::<C>(shared, false)
     }
 }
 
+impl<C> Plugin for ChassisPlugin<C, F32AndF64>
+where
+    C: ClapStereoEffect,
+    C::Processor: ChassisProcess<f32> + ChassisProcess<f64> + Send + 'static,
+{
+    type AudioProcessor<'a> = ChassisAudioProcessor<'a, C::Processor, F32AndF64>;
+    type Shared<'a> = ChassisShared;
+    type MainThread<'a> = ChassisMainThread<C>;
+
+    fn declare_extensions(builder: &mut PluginExtensions<Self>, shared: Option<&Self::Shared<'_>>) {
+        builder.register::<PluginAudioPorts>();
+        if shared.is_none_or(|shared| !shared.parameters.bindings().is_empty()) {
+            builder.register::<PluginParams>();
+        }
+        builder.register::<PluginRender>();
+        builder.register::<PluginState>();
+    }
+}
+
+impl<C> DefaultPluginFactory for ChassisPlugin<C, F32AndF64>
+where
+    C: ClapStereoEffect,
+    C::Processor: ChassisProcess<f32> + ChassisProcess<f64> + Send + 'static,
+{
+    fn get_descriptor() -> PluginDescriptor {
+        PluginDescriptor::new(C::CLAP_ID, C::CLAP_NAME).with_features([AUDIO_EFFECT, STEREO])
+    }
+
+    fn new_shared(_host: HostSharedHandle) -> Result<ChassisShared, PluginError> {
+        new_shared::<C>()
+    }
+
+    fn new_main_thread<'a>(
+        _host: HostMainThreadHandle<'a>,
+        shared: &'a ChassisShared,
+    ) -> Result<ChassisMainThread<C>, PluginError> {
+        new_main_thread::<C>(shared, true)
+    }
+}
+
+fn new_shared<C>() -> Result<ChassisShared, PluginError>
+where
+    C: ClapStereoEffect,
+{
+    let component = C::default();
+    ParameterStore::new(component.parameter_descriptors())
+        .map_err(|_| PluginError::Message("Invalid Chassis parameter schema"))?;
+    if !component.parameter_descriptors().is_empty() && C::CLAP_MAX_PARAMETER_EVENTS == 0 {
+        return Err(PluginError::Message(
+            "CLAP parameter projection requires a positive event bound",
+        ));
+    }
+    let parameters =
+        ClapParameterState::new(component.parameter_descriptors(), C::CLAP_PARAMETER_IDS)
+            .map_err(|error| parameter_mapping_error(&error))?;
+    Ok(ChassisShared {
+        parameters: Arc::new(parameters),
+        render: Arc::new(RenderState::default()),
+    })
+}
+
+fn new_main_thread<C>(
+    shared: &ChassisShared,
+    supports_f64: bool,
+) -> Result<ChassisMainThread<C>, PluginError>
+where
+    C: ClapStereoEffect,
+{
+    let component = C::default();
+    if !shared
+        .parameters
+        .matches_descriptors(component.parameter_descriptors())
+    {
+        return Err(PluginError::Message(
+            "CLAP component schema changed between shared and main-thread construction",
+        ));
+    }
+    let mut audio = ClapAudioConfiguration::new(component.audio_ports(), C::CLAP_AUDIO_PORTS)
+        .map_err(|error| audio_mapping_error(&error))?;
+    if supports_f64 {
+        audio = audio.with_f64_support();
+    }
+    Ok(ChassisMainThread {
+        component,
+        audio,
+        shared: Arc::clone(&shared.parameters),
+        render: Arc::clone(&shared.render),
+    })
+}
+
 impl<C> PluginMainThread<'_, ChassisShared> for ChassisMainThread<C> where C: ClapStereoEffect {}
+
+fn activate_processor<'a, C, P, M>(
+    main_thread: &ChassisMainThread<C>,
+    shared: &'a ChassisShared,
+    audio_config: PluginAudioConfiguration,
+) -> Result<ChassisAudioProcessor<'a, P, M>, PluginError>
+where
+    C: ClapStereoEffect<Processor = P>,
+    P: Processor,
+{
+    if !shared
+        .parameters
+        .matches_descriptors(main_thread.component.parameter_descriptors())
+    {
+        return Err(PluginError::Message(
+            "CLAP component schema does not match its parameter projection",
+        ));
+    }
+    let process = map_process_config(audio_config, C::CLAP_MAX_PARAMETER_EVENTS)?;
+    let runtime = InstanceRuntime::for_component(&main_thread.component)
+        .map_err(|_| PluginError::Message("Invalid Chassis instance runtime"))?;
+
+    let maximum_events = usize::try_from(C::CLAP_MAX_PARAMETER_EVENTS)
+        .map_err(|_| PluginError::Message("CLAP parameter event bound is not representable"))?;
+    let mut normalized_events = Vec::new();
+    normalized_events
+        .try_reserve_exact(maximum_events)
+        .map_err(PluginError::from)?;
+    let mut control_values = Vec::new();
+    control_values
+        .try_reserve_exact(shared.parameters.bindings().len())
+        .map_err(PluginError::from)?;
+    control_values.resize(shared.parameters.bindings().len(), 0.0);
+    let mut process_slots = Vec::new();
+    process_slots
+        .try_reserve_exact(main_thread.audio.process_slots().len())
+        .map_err(PluginError::from)?;
+    process_slots.extend_from_slice(main_thread.audio.process_slots());
+
+    let mut processor = ChassisAudioProcessor {
+        runtime,
+        shared,
+        normalized_events,
+        control_values,
+        process_slots,
+        _precision: PhantomData::<fn() -> M>,
+    };
+    processor.shared.parameters.request_sync();
+    processor.sync_parameters()?;
+    processor
+        .runtime
+        .activate(
+            &main_thread.component,
+            process,
+            main_thread.audio.audio_io(),
+        )
+        .map_err(|_| PluginError::Message("Chassis component activation failed"))?;
+    Ok(processor)
+}
 
 impl<C> PluginAudioPortsImpl for ChassisMainThread<C>
 where
@@ -377,7 +506,7 @@ where
 }
 
 impl<'a, C, P> PluginAudioProcessor<'a, ChassisShared, ChassisMainThread<C>>
-    for ChassisAudioProcessor<'a, P>
+    for ChassisAudioProcessor<'a, P, F32Only>
 where
     C: ClapStereoEffect<Processor = P>,
     P: ChassisProcess<f32> + Processor + Send + 'static,
@@ -388,53 +517,7 @@ where
         shared: &'a ChassisShared,
         audio_config: PluginAudioConfiguration,
     ) -> Result<Self, PluginError> {
-        if !shared
-            .parameters
-            .matches_descriptors(main_thread.component.parameter_descriptors())
-        {
-            return Err(PluginError::Message(
-                "CLAP component schema does not match its parameter projection",
-            ));
-        }
-        let process = map_process_config(audio_config, C::CLAP_MAX_PARAMETER_EVENTS)?;
-        let runtime = InstanceRuntime::for_component(&main_thread.component)
-            .map_err(|_| PluginError::Message("Invalid Chassis instance runtime"))?;
-
-        let maximum_events = usize::try_from(C::CLAP_MAX_PARAMETER_EVENTS)
-            .map_err(|_| PluginError::Message("CLAP parameter event bound is not representable"))?;
-        let mut normalized_events = Vec::new();
-        normalized_events
-            .try_reserve_exact(maximum_events)
-            .map_err(PluginError::from)?;
-        let mut control_values = Vec::new();
-        control_values
-            .try_reserve_exact(shared.parameters.bindings().len())
-            .map_err(PluginError::from)?;
-        control_values.resize(shared.parameters.bindings().len(), 0.0);
-        let mut process_slots = Vec::new();
-        process_slots
-            .try_reserve_exact(main_thread.audio.process_slots().len())
-            .map_err(PluginError::from)?;
-        process_slots.extend_from_slice(main_thread.audio.process_slots());
-
-        let mut processor = Self {
-            runtime,
-            shared,
-            normalized_events,
-            control_values,
-            process_slots,
-        };
-        processor.shared.parameters.request_sync();
-        processor.sync_parameters()?;
-        processor
-            .runtime
-            .activate(
-                &main_thread.component,
-                process,
-                main_thread.audio.audio_io(),
-            )
-            .map_err(|_| PluginError::Message("Chassis component activation failed"))?;
-        Ok(processor)
+        activate_processor::<C, P, F32Only>(main_thread, shared, audio_config)
     }
 
     fn process(
@@ -443,9 +526,95 @@ where
         audio: Audio,
         events: Events,
     ) -> Result<ProcessStatus, PluginError> {
+        self.process_block::<f32>(process, audio, &events, C::CLAP_MAX_PARAMETER_EVENTS)
+    }
+
+    fn deactivate(mut self, _main_thread: &ChassisMainThread<C>) {
+        let _ = self.runtime.deactivate();
+    }
+
+    fn reset(&mut self) {
+        let _ = self.runtime.reset();
+    }
+}
+
+impl<'a, C, P> PluginAudioProcessor<'a, ChassisShared, ChassisMainThread<C>>
+    for ChassisAudioProcessor<'a, P, F32AndF64>
+where
+    C: ClapStereoEffect<Processor = P>,
+    P: ChassisProcess<f32> + ChassisProcess<f64> + Processor + Send + 'static,
+{
+    fn activate(
+        _host: HostAudioProcessorHandle<'a>,
+        main_thread: &ChassisMainThread<C>,
+        shared: &'a ChassisShared,
+        audio_config: PluginAudioConfiguration,
+    ) -> Result<Self, PluginError> {
+        activate_processor::<C, P, F32AndF64>(main_thread, shared, audio_config)
+    }
+
+    fn process(
+        &mut self,
+        process: ClapProcess,
+        mut audio: Audio,
+        events: Events,
+    ) -> Result<ProcessStatus, PluginError> {
+        let precision = sample_precision(&mut audio, &self.process_slots)?;
+        match precision {
+            ClapSamplePrecision::F32 => {
+                self.process_block::<f32>(process, audio, &events, C::CLAP_MAX_PARAMETER_EVENTS)
+            }
+            ClapSamplePrecision::F64 => {
+                self.process_block::<f64>(process, audio, &events, C::CLAP_MAX_PARAMETER_EVENTS)
+            }
+        }
+    }
+
+    fn deactivate(mut self, _main_thread: &ChassisMainThread<C>) {
+        let _ = self.runtime.deactivate();
+    }
+
+    fn reset(&mut self) {
+        let _ = self.runtime.reset();
+    }
+}
+
+impl<P> PluginAudioProcessorParams for ChassisAudioProcessor<'_, P, F32Only>
+where
+    P: ChassisProcess<f32> + Processor + Send + 'static,
+{
+    fn flush(&mut self, input: &InputEvents, _output: &mut OutputEvents) {
+        self.shared.parameters.apply_input(input);
+    }
+}
+
+impl<P> PluginAudioProcessorParams for ChassisAudioProcessor<'_, P, F32AndF64>
+where
+    P: ChassisProcess<f32> + ChassisProcess<f64> + Processor + Send + 'static,
+{
+    fn flush(&mut self, input: &InputEvents, _output: &mut OutputEvents) {
+        self.shared.parameters.apply_input(input);
+    }
+}
+
+impl<P, M> ChassisAudioProcessor<'_, P, M>
+where
+    P: Processor,
+{
+    fn process_block<S>(
+        &mut self,
+        process: ClapProcess,
+        audio: Audio,
+        events: &Events,
+        maximum_parameter_events: u32,
+    ) -> Result<ProcessStatus, PluginError>
+    where
+        P: ChassisProcess<S>,
+        S: ClapSample,
+    {
         self.sync_parameters()?;
         let transport = map_transport(process.transport)?;
-        let mut buffers = ClapBufferSource::new(audio, &self.process_slots)?;
+        let mut buffers = ClapBufferSource::<S>::new(audio, &self.process_slots)?;
         let frame_count = buffers.frame_count();
 
         normalized_events(
@@ -457,7 +626,7 @@ where
         let parameter_events = ParameterEvents::new(
             &self.normalized_events,
             frame_count,
-            C::CLAP_MAX_PARAMETER_EVENTS,
+            maximum_parameter_events,
         )
         .map_err(|_| PluginError::Message("Invalid CLAP parameter event stream"))?;
         let context = ProcessContext::new(
@@ -478,28 +647,6 @@ where
         Ok(ProcessStatus::Continue)
     }
 
-    fn deactivate(mut self, _main_thread: &ChassisMainThread<C>) {
-        let _ = self.runtime.deactivate();
-    }
-
-    fn reset(&mut self) {
-        let _ = self.runtime.reset();
-    }
-}
-
-impl<P> PluginAudioProcessorParams for ChassisAudioProcessor<'_, P>
-where
-    P: ChassisProcess<f32> + Processor + Send + 'static,
-{
-    fn flush(&mut self, input: &InputEvents, _output: &mut OutputEvents) {
-        self.shared.parameters.apply_input(input);
-    }
-}
-
-impl<P> ChassisAudioProcessor<'_, P>
-where
-    P: Processor,
-{
     fn sync_parameters(&mut self) -> Result<(), PluginError> {
         self.shared
             .parameters
