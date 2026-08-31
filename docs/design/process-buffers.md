@@ -174,7 +174,7 @@ Do not genericize unrelated control/state types over sample precision.
 
 `ProcessContext` already distinguishes realtime-like modes from `ProcessMode::Offline`; format adapters should map an explicit host semantic signal rather than infer offline state from transport or timing.
 
-For CLAP, that signal is the render extension. The adapter's current render follow-on stores the host-selected realtime/offline mode in instance-local atomic adapter state and maps it into `ProcessContext` on each callback. The render setting is ephemeral host state, not persisted product state.
+For CLAP, that signal is the render extension. The adapter stores the host-selected realtime/offline mode in instance-local atomic adapter state and maps it into `ProcessContext` on each callback. The render setting is ephemeral host state, not persisted product state. Targeted native render qualification remains open.
 
 ## Layout and data movement
 

@@ -43,12 +43,12 @@ The first adapter gate is locally green on Apple Silicon macOS with Rust 1.98.0:
 
 - the Cargo-generated lockfile resolves every Clack package to the reviewed revision `c5975f9f89f0953b00768680357985d46178078a`;
 - workspace tests, fmt, Clippy, cargo-deny, and cargo-machete pass;
-- the release `cdylib` is packaged as a macOS `.clap` bundle and has a valid `Info.plist`;
-- `clap-validator` 0.4.1 (source commit `b2f1d9b79b1d264a5747f46707d72b1aa40a02ef`) reports 19 passed, 0 failed, and 25 skipped tests;
-- its five-second, two-worker fuzz run completed without errors after the conformance effect flushed subnormal gain results;
-- REAPER 7.78/macOS-arm64 loaded the bundle, activated it, and rendered a one-second stereo f32 fixture; the processed render matched the no-FX render at 0.5 gain within 6e-8 absolute error.
+- the current release `cdylib` is packaged as a macOS `.clap` bundle with a valid `Info.plist`;
+- `clap-validator` 0.4.1 (source commit `b2f1d9b79b1d264a5747f46707d72b1aa40a02ef`) reports 21 passed, 0 failed, and 23 intentional skips;
+- its five-second, two-worker fuzz run completed without errors, including malformed optional transport values;
+- REAPER 7.78/macOS-arm64 loaded the earlier narrow bundle, activated it, and rendered a one-second stereo f32 fixture; the processed render matched the no-FX render at 0.5 gain within 6e-8 absolute error.
 
-The existing native artifact predates the current scalar parameter/state extension slice, so its skipped validator tests cover parameters, state, events, GUI, and other optional extensions as absent from that artifact. The result proves the tested CLAP lifecycle/buffer path, not the new parameter/state projection, production host support, or the complete CLAP contract. Bitwig is not installed in the current validation environment.
+The current validator artifact includes scalar parameter/state and render extensions, although the conformance component has no parameters and therefore does not exercise parameter-value events or parameter conversion cases. The native result proves the tested CLAP lifecycle/buffer/transport path, not production host support or the complete CLAP contract. The expanded arbitrary mapped-I/O topology and render-mode behavior still need targeted native cases. Bitwig is not installed in the current validation environment.
 
 ## Core conformance component
 
@@ -65,7 +65,8 @@ The current processor applies deterministic fixed gain and exercises:
 - callback frame count above activated maximum rejected before product DSP;
 - callback below a guaranteed positive minimum rejected before product DSP;
 - zero-frame callback accepted when no positive minimum was promised;
-- realtime, buffered-realtime, and offline per-call mode values.
+- realtime, buffered-realtime, and offline per-call mode values;
+- CLAP render-mode projection into realtime/offline process context.
 
 Grow the same semantics as parameters/state/events land instead of creating unrelated product contracts for every layer.
 
@@ -78,6 +79,7 @@ The current `chassis-clap` adapter attempts only the following semantic slice:
 - Clack's safe plugin boundary from the pinned post-fix revision `c5975f9f89f0953b00768680357985d46178078a` (development workspace version 0.2.0);
 - one required stereo main input/output pair;
 - f32 processing;
+- CLAP render-mode projection into realtime/offline process context;
 - exact in-place or separate paired channels;
 - Chassis activation/process/reset/deactivation;
 - explicit scalar float, integer, and boolean parameter metadata/value mapping;
@@ -159,9 +161,9 @@ The first narrow adapter qualification has been exercised locally:
 
 1. the conformance `cdylib` was built in release mode;
 2. it was packaged as a macOS `.clap` bundle with a platform-correct `Contents/MacOS` executable and `Info.plist`;
-3. `clap-validator` 0.4.1 was built from source commit `b2f1d9b79b1d264a5747f46707d72b1aa40a02ef` and run with `validate --json`; it reported 19 passed, 0 failed, and 25 skipped tests;
-4. validator lifecycle, buffer, block-size, sample-rate, reset/reactivate, transport-null, and transport-fuzz cases completed without failures; a five-second, two-worker fuzz run also completed without errors;
-5. the same bundle was loaded by REAPER 7.78/macOS-arm64 and rendered through a real project; a no-FX differential render confirmed the fixed 0.5 gain within 6e-8 absolute error;
+3. `clap-validator` 0.4.1 was built from source commit `b2f1d9b79b1d264a5747f46707d72b1aa40a02ef` and run with `validate --json` against the current artifact; it reported 21 passed, 0 failed, and 23 intentional skips;
+4. validator lifecycle, buffer, block-size, sample-rate, reset/reactivate, transport-null, and transport-fuzz cases completed without failures; a five-second, two-worker fuzz run also completed without errors, including malformed optional transport values;
+5. the earlier narrow bundle was loaded by REAPER 7.78/macOS-arm64 and rendered through a real project; a no-FX differential render confirmed the fixed 0.5 gain within 6e-8 absolute error;
 6. the environment was Apple Silicon macOS with Rust 1.98.0 and the stable toolchain named by `rust-toolchain.toml`.
 
 Bitwig validation remains pending because it is not installed in this environment. A validator pass and one REAPER smoke test are additional evidence, not proof of production support.

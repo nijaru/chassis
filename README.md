@@ -98,7 +98,7 @@ examples/
     src/lib.rs      exported deterministic gain component for CLAP qualification
 ```
 
-The current CLAP slice maps factory/main-thread construction, activation, f32 stereo processing, reset, and deactivation onto the existing Chassis runtime. It also projects explicitly mapped scalar float, integer, and boolean parameters, bounded parameter-value events, block-start transport tempo/play/record flags, and bounded CHSS parameter state. Choice/modulation/gesture output, note/MIDI events, render mode, f64, sidechains/multibus, GUI, and packaging remain future adapter work. The parameter/state projection is locally unit-tested but is not yet production-qualified or validated by the existing native host artifact.
+The current CLAP slice maps factory/main-thread construction, activation, f32 stereo processing, reset, and deactivation onto the existing Chassis runtime. It also projects explicitly mapped scalar float, integer, and boolean parameters, bounded parameter-value events, block-start transport tempo/play/record flags, render mode, and bounded CHSS parameter state. Choice/modulation/gesture output, note/MIDI events, f64, sidechains/multibus, GUI, and packaging remain future adapter work. The current artifact passes the local Rust gate and CLAP validator; real-host requalification remains pending.
 
 `chassis-core` remains std-only. `chassis-clap` is the first crate with third-party dependencies and consumes one full-SHA pinned Clack source while the adapter contract is being qualified.
 
@@ -116,9 +116,7 @@ cargo deny check
 cargo machete
 ```
 
-Do not describe the current CLAP slice as fully green until those commands pass locally. In particular, confirm the lockfile resolves the exact Clack git revision and review its transitive source/license tree.
-
-After that, build/package the conformance export and run CLAP-native validation before treating the adapter as qualified.
+The current Rust 1.98 gate passes locally, with the lockfile resolving the exact pinned Clack revision. Build/package the conformance export and run CLAP-native validation before treating the adapter as fully qualified. The current validator run reports 21 passed and 23 intentional skips; a five-second, two-worker fuzz run completed without errors.
 
 Use Miri/model tests/sanitizers/native validators as the relevant unsafe/adapters are implemented. Do not describe an unexecuted check as passing.
 

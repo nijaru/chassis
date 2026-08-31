@@ -10,7 +10,7 @@ The format-independent lifecycle/buffer conformance path, typed parameter/state 
 
 The CLAP adapter now owns explicit stable audio/parameter identity mapping, a weak-memory-model-qualified scalar publication bridge, setup-built process slots, and allocation-free lazy projection of arbitrary mapped f32 audio ports. The expanded I/O topology has not yet repeated the earlier native `clap-validator`/REAPER host qualification, so source qualification and native-host qualification remain distinct evidence levels.
 
-CLAP render/offline mode projection is the current follow-on. Broader precision, host semantics, active-state consistency, capabilities, and native requalification remain ahead. This is not a roadmap reversal: core semantic contracts continue to be proven before adapter conveniences are frozen.
+CLAP render/offline mode projection is implemented and locally qualified. Broader precision, host semantics, active-state consistency, capabilities, and native requalification remain ahead. This is not a roadmap reversal: core semantic contracts continue to be proven before adapter conveniences are frozen.
 
 ## Phase 0 — semantic foundation
 
@@ -87,12 +87,13 @@ Qualification evidence is intentionally split:
 1. the earlier conventional stereo artifact regenerated/reviewed `Cargo.lock`, passed fmt/test/clippy/deny/machete, and built the conformance cdylib in release mode;
 2. that artifact was packaged as a platform-correct macOS `.clap`, passed `clap-validator` 0.4.1 (source commit `b2f1d9b79b1d264a5747f46707d72b1aa40a02ef`) lifecycle/buffer stress with 19 passes, 0 failures, and 25 intentional skips plus a five-second two-worker fuzz run, and rendered correctly in REAPER 7.78/macOS-arm64;
 3. the expanded generic-source/arbitrary-mapped-f32 implementation passed Rust 1.98 fmt, full workspace tests, strict all-feature/all-target Clippy, and release conformance build at `dfc137c`;
-4. the expanded topology still needs a new native validator/real-host qualification run before inheriting the earlier host evidence.
+4. the current adapter artifact passed `clap-validator` 0.4.1 with 21 passes, 0 failures, and 23 intentional skips, plus a five-second, two-worker fuzz run without errors;
+5. the expanded topology still needs a new native validator/real-host qualification run before inheriting the earlier host evidence.
 
 Current/follow-on Phase 2 work:
 
-- CLAP render-extension projection into `ProcessMode::{Realtime, Offline}`;
 - native validator and real-host requalification of the expanded mapped-I/O path;
+- targeted native render/offline-mode qualification;
 - f64 capability advertisement/dispatch where a product actually implements `Process<f64>`;
 - richer audio/event buffers and note/MIDI projections when a client requires them;
 - choice/modulation/gesture semantics and richer parameter events;
