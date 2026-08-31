@@ -172,12 +172,11 @@ where
     type Shared<'a> = ChassisShared;
     type MainThread<'a> = ChassisMainThread<C>;
 
-    fn declare_extensions(
-        builder: &mut PluginExtensions<Self>,
-        _shared: Option<&Self::Shared<'_>>,
-    ) {
+    fn declare_extensions(builder: &mut PluginExtensions<Self>, shared: Option<&Self::Shared<'_>>) {
         builder.register::<PluginAudioPorts>();
-        builder.register::<PluginParams>();
+        if shared.is_none_or(|shared| !shared.parameters.bindings().is_empty()) {
+            builder.register::<PluginParams>();
+        }
         builder.register::<PluginRender>();
         builder.register::<PluginState>();
     }
@@ -574,16 +573,18 @@ fn map_transport(transport: Option<&TransportEvent>) -> Result<TransportSnapshot
     let Some(transport) = transport else {
         return Ok(TransportSnapshot::unknown());
     };
+    let tempo = transport
+        .flags
+        .contains(TransportFlags::HAS_TEMPO)
+        .then_some(transport.tempo)
+        .filter(|tempo| tempo.is_finite() && *tempo > 0.0);
     TransportSnapshot::new(
         Some(transport.flags.contains(TransportFlags::IS_PLAYING)),
         Some(transport.flags.contains(TransportFlags::IS_RECORDING)),
-        transport
-            .flags
-            .contains(TransportFlags::HAS_TEMPO)
-            .then_some(transport.tempo),
+        tempo,
         None,
     )
-    .map_err(|_| PluginError::Message("Invalid CLAP transport tempo"))
+    .map_err(|_| PluginError::Message("Invalid CLAP transport metadata"))
 }
 
 fn map_process_config(
@@ -668,7 +669,7 @@ mod tests {
     }
 
     #[test]
-    fn maps_optional_transport_and_rejects_invalid_tempo() {
+    fn maps_optional_transport_and_ignores_invalid_tempo() {
         assert_eq!(
             map_transport(None).expect("missing transport is valid"),
             TransportSnapshot::unknown()
@@ -685,7 +686,12 @@ mod tests {
         assert_eq!(mapped.sample_position(), None);
 
         let invalid = transport(TransportFlags::HAS_TEMPO, 0.0);
-        assert!(map_transport(Some(&invalid)).is_err());
+        assert_eq!(
+            map_transport(Some(&invalid))
+                .expect("invalid optional tempo is ignored")
+                .tempo_bpm(),
+            None
+        );
     }
 
     #[test]
