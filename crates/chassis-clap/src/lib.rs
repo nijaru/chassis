@@ -13,7 +13,10 @@ mod process_audio;
 use core::{fmt::Write as _, marker::PhantomData, num::NonZeroU32};
 use std::{
     io::{Read as _, Write as _},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     vec::Vec,
 };
 
@@ -32,6 +35,7 @@ use clack_extensions::{
         ParamDisplayWriter, ParamInfo, PluginAudioProcessorParams, PluginMainThreadParams,
         PluginParams,
     },
+    render::{PluginRender, PluginRenderImpl, RenderMode},
     state::{PluginState, PluginStateImpl},
 };
 use clack_plugin::{
@@ -107,14 +111,34 @@ pub struct ChassisPlugin<C>(PhantomData<fn() -> C>);
 /// Single-plugin CLAP entry type for a Chassis stereo effect.
 pub type SingleComponentEntry<C> = SinglePluginEntry<ChassisPlugin<C>>;
 
-/// Thread-safe scalar parameter publication shared by CLAP domains.
+#[derive(Default)]
+struct RenderState {
+    offline: AtomicBool,
+}
+
+impl RenderState {
+    fn set(&self, mode: RenderMode) {
+        self.offline
+            .store(matches!(mode, RenderMode::Offline), Ordering::Release);
+    }
+
+    fn process_mode(&self) -> ProcessMode {
+        if self.offline.load(Ordering::Acquire) {
+            ProcessMode::Offline
+        } else {
+            ProcessMode::Realtime
+        }
+    }
+}
+
+/// Thread-safe adapter state shared across CLAP domains.
 ///
-/// This remains an adapter-local cross-domain bridge while the equivalent
-/// general framework publication primitive is model-tested. The audio-domain
-/// [`InstanceRuntime`] is rebuilt from this durable publication before every
-/// activation and remains the semantic runtime projection while active.
+/// Scalar parameter publication and the ephemeral host render-mode projection are
+/// independent adapter-local synchronization paths. The audio-domain
+/// [`InstanceRuntime`] remains the semantic runtime authority while active.
 pub struct ChassisShared {
     parameters: Arc<ClapParameterState>,
+    render: Arc<RenderState>,
 }
 
 impl PluginShared<'_> for ChassisShared {}
@@ -124,6 +148,7 @@ pub struct ChassisMainThread<C> {
     component: C,
     audio: ClapAudioConfiguration,
     shared: Arc<ClapParameterState>,
+    render: Arc<RenderState>,
 }
 
 /// CLAP audio-thread wrapper around an activated Chassis instance runtime.
@@ -153,6 +178,7 @@ where
     ) {
         builder.register::<PluginAudioPorts>();
         builder.register::<PluginParams>();
+        builder.register::<PluginRender>();
         builder.register::<PluginState>();
     }
 }
@@ -180,6 +206,7 @@ where
                 .map_err(|error| parameter_mapping_error(&error))?;
         Ok(ChassisShared {
             parameters: Arc::new(parameters),
+            render: Arc::new(RenderState::default()),
         })
     }
 
@@ -202,6 +229,7 @@ where
             component,
             audio,
             shared: Arc::clone(&shared.parameters),
+            render: Arc::clone(&shared.render),
         })
     }
 }
@@ -312,6 +340,20 @@ where
     }
 }
 
+impl<C> PluginRenderImpl for ChassisMainThread<C>
+where
+    C: ClapStereoEffect,
+{
+    fn has_hard_realtime_requirement(&self) -> bool {
+        false
+    }
+
+    fn set(&self, mode: RenderMode) -> Result<(), PluginError> {
+        self.render.set(mode);
+        Ok(())
+    }
+}
+
 impl<C> PluginStateImpl for ChassisMainThread<C>
 where
     C: ClapStereoEffect,
@@ -419,7 +461,11 @@ where
             C::CLAP_MAX_PARAMETER_EVENTS,
         )
         .map_err(|_| PluginError::Message("Invalid CLAP parameter event stream"))?;
-        let context = ProcessContext::new(ProcessMode::Realtime, transport, parameter_events);
+        let context = ProcessContext::new(
+            self.shared.render.process_mode(),
+            transport,
+            parameter_events,
+        );
         self.runtime
             .process_source(frame_count, context, &mut buffers)
             .map_err(|_| PluginError::Message("Invalid Chassis process block"))?;
@@ -640,5 +686,15 @@ mod tests {
 
         let invalid = transport(TransportFlags::HAS_TEMPO, 0.0);
         assert!(map_transport(Some(&invalid)).is_err());
+    }
+
+    #[test]
+    fn render_state_maps_clap_mode_to_process_mode() {
+        let render = RenderState::default();
+        assert_eq!(render.process_mode(), ProcessMode::Realtime);
+        render.set(RenderMode::Offline);
+        assert_eq!(render.process_mode(), ProcessMode::Offline);
+        render.set(RenderMode::Realtime);
+        assert_eq!(render.process_mode(), ProcessMode::Realtime);
     }
 }
