@@ -6,15 +6,11 @@ This roadmap is ordered by architectural proof, not feature count or release pro
 
 Chassis currently spans **late Phase 1 / early Phase 2** deliberately.
 
-The format-independent lifecycle/buffer conformance slice, typed parameter/state
-prototype, initial borrowed automation/context slice, and first narrow
-`chassis-clap` adapter are locally validated. The adapter passes the current CLAP
-validator and a REAPER render smoke test, but is not production-qualified.
+The format-independent lifecycle/buffer conformance path, typed parameter/state model, adjacent-schema migrations, complete semantic instance-state ownership, borrowed automation/context, and generic no-allocation process-buffer source are implemented. The whole-state path is locally qualified through `62b96cc`; the generic process-source boundary and arbitrary mapped f32 CLAP audio path are locally Rust-1.98-qualified through `dfc137c`.
 
-A narrow host-specific scalar parameter/event/state projection is now in
-progress; cross-domain automation publication and broader host semantics remain
-ahead. This is not a roadmap reversal: the core semantic contracts are being
-proven before adapters and synchronization layers are frozen.
+The CLAP adapter now owns explicit stable audio/parameter identity mapping, a weak-memory-model-qualified scalar publication bridge, setup-built process slots, and allocation-free lazy projection of arbitrary mapped f32 audio ports. The expanded I/O topology has not yet repeated the earlier native `clap-validator`/REAPER host qualification, so source qualification and native-host qualification remain distinct evidence levels.
+
+CLAP render/offline mode projection is the current follow-on. Broader precision, host semantics, active-state consistency, capabilities, and native requalification remain ahead. This is not a roadmap reversal: core semantic contracts continue to be proven before adapter conveniences are frozen.
 
 ## Phase 0 — semantic foundation
 
@@ -35,75 +31,78 @@ The initial core no longer encodes a CLAP dependency and remains usable outside 
 
 ## Phase 1 — conformance runtime without format complexity
 
-Status: lifecycle/buffer and initial typed parameter/state/automation/context
-slices implemented and validated; host translation and publication semantics
-remain future work.
+Status: lifecycle/buffer, typed parameter/state/migration, automation/context, and generic process-source slices are implemented and locally validated. Remaining Phase 1 work is primarily consistency/host-behavior evidence rather than missing state ownership.
 
-Implemented/validated before CLAP work:
+Implemented/validated through the current conformance path:
 
 - explicit `Component`/`Processor`/`Process<S>` lifecycle API;
-- default stereo effect + optional sidechain structural configuration;
-- safe planar process-buffer views for exact alias, disjoint, input-only, and output-only relationships;
+- safe planar channel views for exact alias, disjoint, input-only, and output-only relationships;
+- generic `ProcessBufferSource<S>`/`ProcessChannel<S>` traversal with `ChannelBufferSlice` compatibility;
+- a non-flat source conformance test proving process traversal does not require one materialized channel collection;
 - deterministic external conformance component;
 - activation/reset/deactivation and malformed configuration/callback tests;
-- f32 processor proof without freezing the architecture to one sample precision.
+- f32 processor proof without freezing the architecture to one sample precision;
+- typed parameters with stable keys and validated base values;
+- bounded deterministic canonical state documents;
+- adjacent-schema migrations with a checked-in legacy fixture;
+- bounded decode → migrate → validate → transactional apply;
+- complete semantic runtime state ownership for parameters plus canonical custom entries;
+- adversarial state truncation/resource-limit/mutation coverage and failure atomicity;
+- borrowed sample-sorted parameter events and lazy float set/linear trajectories;
+- optional block-start transport snapshots.
 
 Still to add through the same conformance path:
 
-- host gesture semantics and automation-to-base-state publication;
-- one state migration fixture and generation/replacement tests;
-- active state-save consistency contract;
-- realtime allocation/work-bound instrumentation.
-
-Implemented in the current path:
-
-- typed parameters with stable keys and validated base values;
-- bounded deterministic canonical state document prototype;
-- borrowed sample-sorted parameter sets and lazy float set/linear trajectories;
-- optional block-start transport snapshot.
+- host gesture semantics and automation-to-base-state publication policy;
+- active state-save consistency contract and qualification;
+- realtime allocation/work-bound instrumentation;
+- additional capability evidence where a real adapter/client requires it.
 
 Do not add background executors, generalized analyzers, voice allocation, immersive layouts, or elaborate tooling merely to make the conformance component look complete.
 
 ## Phase 2 — first real plugin boundary: CLAP
 
-Status: **initial source proof is locally validated and CLAP-qualified for the tested slice; broader host qualification remains**.
+Status: **the initial native stereo proof is CLAP/REAPER-qualified; the expanded arbitrary mapped-f32 source is locally Rust-qualified and awaits repeated native host qualification**.
 
-Current narrow slice:
+Current adapter foundation:
 
 - `chassis-clap` using the reviewed post-fix Clack revision `c5975f9f89f0953b00768680357985d46178078a` (development workspace version 0.2.0);
 - Clack types isolated from `chassis-core`;
 - `Send` required only at the CLAP processor deployment boundary;
-- one f32 stereo main input/output pair;
-- exact in-place/disjoint Clack `ChannelPair` -> Chassis `ChannelBuffer` translation using safe Rust on the Chassis side;
-- CLAP factory/main-thread construction -> Chassis component;
+- explicit stable CLAP audio-port and parameter IDs rather than declaration-order-derived identity;
+- setup-owned `ClapAudioConfiguration` plus `ClapProcessSlot` mapping from dense CLAP indices to stable Chassis endpoints;
+- reciprocal declared in-place partners aligned semantically while unrelated same-index input/output ports remain independent;
+- allocation-free `ClapBufferSource` traversal directly over safe Clack `ChannelPair` relationships;
+- arbitrary mapped f32 mono/stereo ports, auxiliary buses, asymmetric input/output tails, and input-only/output-only semantics within the current core layout model;
+- explicit rejection before product DSP when host channel shape/sample type does not match activation or when unrelated ports are illegally aliased;
 - activate/process/reset/deactivate lifecycle mapping;
-- exported `examples/clap-conformance` rlib/cdylib probe;
-- explicit rejection of unsupported port/sample configurations rather than silent semantic coercion.
+- bounded scalar parameter automation and state projection through CLAP params/state;
+- adapter-local generation-checked scalar publication with Loom-qualified publication/pending handoff;
+- exported `examples/clap-conformance` rlib/cdylib probe.
 
 Clack's repository has bumped its development workspace to 0.2.0, but that version is not currently published. Chassis uses the explicitly reviewed, full-SHA post-fix revision above rather than the affected crates.io 0.1.1 release; return to crates.io only after a suitable safety-fixed release is published and audited.
 
-Completed qualification work:
+Qualification evidence is intentionally split:
 
-1. regenerated/reviewed `Cargo.lock` and passed fmt/test/clippy/deny/machete;
-2. built the conformance cdylib in release mode;
-3. packaged a platform-correct macOS `.clap` artifact;
-4. ran `clap-validator` 0.4.1 (source commit `b2f1d9b79b1d264a5747f46707d72b1aa40a02ef`) lifecycle/buffer stress with 19 passes, 0 failures, and 25 intentional skips, plus a five-second two-worker fuzz run;
-5. loaded and rendered the same artifact in REAPER 7.78/macOS-arm64, verifying the fixed 0.5 gain against a no-FX render.
+1. the earlier conventional stereo artifact regenerated/reviewed `Cargo.lock`, passed fmt/test/clippy/deny/machete, and built the conformance cdylib in release mode;
+2. that artifact was packaged as a platform-correct macOS `.clap`, passed `clap-validator` 0.4.1 (source commit `b2f1d9b79b1d264a5747f46707d72b1aa40a02ef`) lifecycle/buffer stress with 19 passes, 0 failures, and 25 intentional skips plus a five-second two-worker fuzz run, and rendered correctly in REAPER 7.78/macOS-arm64;
+3. the expanded generic-source/arbitrary-mapped-f32 implementation passed Rust 1.98 fmt, full workspace tests, strict all-feature/all-target Clippy, and release conformance build at `dfc137c`;
+4. the expanded topology still needs a new native validator/real-host qualification run before inheriting the earlier host evidence.
 
-Bitwig is not installed in the current environment, so broader host qualification remains. Use these results to decide the general multibus/sidechain borrowing model before extending Phase 2 with:
+Current/follow-on Phase 2 work:
 
-- product/port/parameter identity mapping and frozen adapter fixtures;
-- general audio-port/configuration/optional sidechain support;
-- f64 capability advertisement/dispatch where useful;
-- render/offline mode semantics;
-- audio/event buffers;
-- scalar parameter automation and state projection through the CLAP params/state extensions;
-- choice/modulation/gesture semantics and richer events;
+- CLAP render-extension projection into `ProcessMode::{Realtime, Offline}`;
+- native validator and real-host requalification of the expanded mapped-I/O path;
+- f64 capability advertisement/dispatch where a product actually implements `Process<f64>`;
+- richer audio/event buffers and note/MIDI projections when a client requires them;
+- choice/modulation/gesture semantics and richer parameter events;
 - state save/load while active according to a documented consistency contract;
-- latency/tail/status metadata as required by the conformance path;
+- latency/tail/status metadata as required by conformance or the first real effect;
 - negative-space lifecycle/input tests and applicable Miri/sanitizer evidence.
 
-Exit condition: the conformance component behaves reproducibly as a CLAP plugin and survives negative-space lifecycle/state/buffer tests. The existence of `chassis-clap` source alone does not satisfy this condition.
+Bitwig is not installed in the current environment, so it is not part of the present host matrix.
+
+Exit condition: the conformance component behaves reproducibly as a CLAP plugin and survives negative-space lifecycle/state/buffer tests across the supported topology. The existence of `chassis-clap` source alone does not satisfy this condition.
 
 ## Phase 3 — desktop formats, editor boundary, and packaging
 
