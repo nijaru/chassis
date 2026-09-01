@@ -139,23 +139,23 @@ The current Rust semantics and general I/O are coherent enough to rebuild/packag
 - REAPER render, automation, sidechain, save/load and reopen smoke tests;
 - Bitwig when available because it exercises relevant CLAP/reentrancy behavior.
 
-Executed against the current f64-capable artifact:
+Executed against the current parametered f64-capable artifact (one `choice`, one `float`; DSP fixed 0.5 gain regardless of values):
 
-- `clap-validator` 0.4.1 normal suite: 23 passes, 0 failures, 21 intentional skips (validator has no parameters to exercise, and preset-discovery/note-events are not advertised); both double-precision process-audio cases pass;
+- `clap-validator` 0.4.1 normal suite: 35 passes, 0 failures, 9 intentional skips (preset-discovery/note-events not advertised); both double-precision process-audio cases, the full parameter set/flush/sample-accurate/modulation-fuzz/conversion matrix, and all three state-reproducibility cases pass;
 - five-second, two-worker validator fuzz: no errors;
-- REAPER 7.79/macOS-arm64 headless `-renderproject` requalification: scan, instantiate, state-chunk round trip through a saved project, and render; the f32 FX render is bit-identical to 0.5× the bypassed render, and a 2e-38 subnormal probe plus a bit-identical `f32(0.5×source)` comparison confirms f32 dispatch — expected, since the artifact advertises `SUPPORTS_64BITS` without `PREFERS_64BITS`; native `data64` dispatch remains unexercised by the available host matrix;
-- earlier narrow-artifact validator (19 passes/25 skips) and REAPER 7.78 render evidence remains superseded by the above.
+- REAPER 7.79/macOS-arm64 headless `-renderproject` requalification: scan, instantiate, two-parameter state-chunk round trip through a saved project (`parameter/mode` = `Choice("clean")`, `parameter/trim` = `Float(0.5)`), and render; the f32 FX render is bit-identical to 0.5× the bypassed render, and a 2e-38 subnormal probe plus a bit-identical `f32(0.5×source)` comparison confirms f32 dispatch — expected, since the artifact advertises `SUPPORTS_64BITS` without `PREFERS_64BITS`; native `data64` dispatch remains unexercised by the available host matrix;
+- earlier narrow-artifact (19 passes/25 skips) and parameterless-f64 (23 passes/21 skips) evidence remains superseded by the above;
+- REAPER in this environment is unlicensed (interactive launches show an evaluation nag); all evidence above was gathered through batch `-renderproject` runs, which complete without interaction.
 
-Still open for this slice: parameter automation through a real host (the conformance component exposes no parameters yet), active-state save during automation, and Bitwig reentrancy coverage when that host is available. Do not treat older artifacts as evidence for current code.
+Still open for this slice: audible automation response through a real host (the conformance parameters are process-inert by design), active-state save during automation, and Bitwig reentrancy coverage when that host is available. Do not treat older artifacts as evidence for current code.
 
 ## Slice 6 — CLAP capability expansion
 
-After current native semantics qualify:
+Executed: choice parameter projection (dense option-index plain values, option-name/value round trips, host value rescan after state load; validator conversion + state-reproducibility matrices pass natively). Remaining, in order:
 
-1. choice parameter projection;
-2. modulation and product-originated gesture output;
-3. note/MIDI/event ports;
-4. latency/tail/status metadata as required by real clients.
+1. modulation and product-originated gesture output;
+2. note/MIDI/event ports;
+3. latency/tail/status metadata as required by real clients.
 
 Each capability needs conformance plus native-host evidence rather than source support alone.
 

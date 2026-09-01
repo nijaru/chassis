@@ -24,7 +24,7 @@ use audio::{AudioMappingError, ClapAudioConfiguration, ClapProcessSlot};
 use chassis_core::{
     audio::PortDirection,
     automation::ParameterEvents,
-    parameters::ParameterStore,
+    parameters::{ChoiceOption, ParameterKind, ParameterStore},
     process::{ProcessConfig, ProcessContext, ProcessMode, TransportSnapshot},
     runtime::{Component, InstanceRuntime, Process as ChassisProcess, Processor},
     state::{StateDocument, StateLimits},
@@ -32,8 +32,8 @@ use chassis_core::{
 use clack_extensions::{
     audio_ports::{AudioPortInfoWriter, PluginAudioPorts, PluginAudioPortsImpl},
     params::{
-        ParamDisplayWriter, ParamInfo, PluginAudioProcessorParams, PluginMainThreadParams,
-        PluginParams,
+        HostParams, ParamDisplayWriter, ParamInfo, ParamRescanFlags, PluginAudioProcessorParams,
+        PluginMainThreadParams, PluginParams,
     },
     render::{PluginRender, PluginRenderImpl, RenderMode},
     state::{PluginState, PluginStateImpl},
@@ -153,11 +153,12 @@ pub struct ChassisShared {
 impl PluginShared<'_> for ChassisShared {}
 
 /// Main-thread owner of the format-independent Chassis component definition.
-pub struct ChassisMainThread<C> {
+pub struct ChassisMainThread<'host, C> {
     component: C,
     audio: ClapAudioConfiguration,
     shared: Arc<ClapParameterState>,
     render: Arc<RenderState>,
+    host: HostMainThreadHandle<'host>,
 }
 
 /// CLAP audio-thread wrapper around an activated Chassis instance runtime.
@@ -167,7 +168,7 @@ where
 {
     runtime: InstanceRuntime<P>,
     shared: &'a ChassisShared,
-    normalized_events: Vec<chassis_core::automation::ParameterEvent<'static>>,
+    normalized_events: Vec<chassis_core::automation::ParameterEvent<'a>>,
     control_values: Vec<f64>,
     process_slots: Vec<ClapProcessSlot>,
     _precision: PhantomData<fn() -> M>,
@@ -180,7 +181,7 @@ where
 {
     type AudioProcessor<'a> = ChassisAudioProcessor<'a, C::Processor, F32Only>;
     type Shared<'a> = ChassisShared;
-    type MainThread<'a> = ChassisMainThread<C>;
+    type MainThread<'a> = ChassisMainThread<'a, C>;
 
     fn declare_extensions(builder: &mut PluginExtensions<Self>, shared: Option<&Self::Shared<'_>>) {
         builder.register::<PluginAudioPorts>();
@@ -206,10 +207,10 @@ where
     }
 
     fn new_main_thread<'a>(
-        _host: HostMainThreadHandle<'a>,
+        host: HostMainThreadHandle<'a>,
         shared: &'a ChassisShared,
-    ) -> Result<ChassisMainThread<C>, PluginError> {
-        new_main_thread::<C>(shared, false)
+    ) -> Result<ChassisMainThread<'a, C>, PluginError> {
+        new_main_thread::<C>(shared, false, host)
     }
 }
 
@@ -220,7 +221,7 @@ where
 {
     type AudioProcessor<'a> = ChassisAudioProcessor<'a, C::Processor, F32AndF64>;
     type Shared<'a> = ChassisShared;
-    type MainThread<'a> = ChassisMainThread<C>;
+    type MainThread<'a> = ChassisMainThread<'a, C>;
 
     fn declare_extensions(builder: &mut PluginExtensions<Self>, shared: Option<&Self::Shared<'_>>) {
         builder.register::<PluginAudioPorts>();
@@ -246,10 +247,10 @@ where
     }
 
     fn new_main_thread<'a>(
-        _host: HostMainThreadHandle<'a>,
+        host: HostMainThreadHandle<'a>,
         shared: &'a ChassisShared,
-    ) -> Result<ChassisMainThread<C>, PluginError> {
-        new_main_thread::<C>(shared, true)
+    ) -> Result<ChassisMainThread<'a, C>, PluginError> {
+        new_main_thread::<C>(shared, true, host)
     }
 }
 
@@ -274,10 +275,11 @@ where
     })
 }
 
-fn new_main_thread<C>(
+fn new_main_thread<'a, C>(
     shared: &ChassisShared,
     supports_f64: bool,
-) -> Result<ChassisMainThread<C>, PluginError>
+    host: HostMainThreadHandle<'a>,
+) -> Result<ChassisMainThread<'a, C>, PluginError>
 where
     C: ClapStereoEffect,
 {
@@ -300,13 +302,17 @@ where
         audio,
         shared: Arc::clone(&shared.parameters),
         render: Arc::clone(&shared.render),
+        host,
     })
 }
 
-impl<C> PluginMainThread<'_, ChassisShared> for ChassisMainThread<C> where C: ClapStereoEffect {}
+impl<'host, C> PluginMainThread<'host, ChassisShared> for ChassisMainThread<'host, C> where
+    C: ClapStereoEffect
+{
+}
 
 fn activate_processor<'a, C, P, M>(
-    main_thread: &ChassisMainThread<C>,
+    main_thread: &ChassisMainThread<'_, C>,
     shared: &'a ChassisShared,
     audio_config: PluginAudioConfiguration,
 ) -> Result<ChassisAudioProcessor<'a, P, M>, PluginError>
@@ -364,7 +370,7 @@ where
     Ok(processor)
 }
 
-impl<C> PluginAudioPortsImpl for ChassisMainThread<C>
+impl<C> PluginAudioPortsImpl for ChassisMainThread<'_, C>
 where
     C: ClapStereoEffect,
 {
@@ -388,7 +394,7 @@ where
     }
 }
 
-impl<C> PluginMainThreadParams for ChassisMainThread<C>
+impl<C> PluginMainThreadParams for ChassisMainThread<'_, C>
 where
     C: ClapStereoEffect,
 {
@@ -445,6 +451,14 @@ where
         else {
             return Err(core::fmt::Error);
         };
+        if let ParameterKind::Choice { options, .. } = binding.descriptor().kind() {
+            // Stepped parameters must convert any in-range plain value; hosts
+            // legitimately present fractional positions between options.
+            let Some(option) = options.get(nearest_option_index(options, value)) else {
+                return Err(core::fmt::Error);
+            };
+            return write!(writer, "{}", option.name());
+        }
         if binding.parameter_value(value).is_none() {
             return Err(core::fmt::Error);
         }
@@ -457,10 +471,16 @@ where
             .bindings()
             .iter()
             .position(|binding| binding.id() == param_id)?;
-        let value = text.to_str().ok()?.trim().parse().ok()?;
-        self.shared.bindings()[index]
-            .parameter_value(value)
-            .map(|_| value)
+        let binding = &self.shared.bindings()[index];
+        let text = text.to_str().ok()?.trim();
+        // Choice parameters primarily accept their option display names.
+        if let ParameterKind::Choice { options, .. } = binding.descriptor().kind() {
+            let plain = options.iter().position(|option| option.name() == text)?;
+            let plain = f64::from(u32::try_from(plain).ok()?);
+            return binding.parameter_value(plain).map(|_| plain);
+        }
+        let value = text.parse().ok()?;
+        binding.parameter_value(value).map(|_| value)
     }
 
     fn flush(&self, input: &InputEvents, _output: &mut OutputEvents) {
@@ -468,7 +488,7 @@ where
     }
 }
 
-impl<C> PluginRenderImpl for ChassisMainThread<C>
+impl<C> PluginRenderImpl for ChassisMainThread<'_, C>
 where
     C: ClapStereoEffect,
 {
@@ -482,7 +502,7 @@ where
     }
 }
 
-impl<C> PluginStateImpl for ChassisMainThread<C>
+impl<C> PluginStateImpl for ChassisMainThread<'_, C>
 where
     C: ClapStereoEffect,
 {
@@ -501,11 +521,19 @@ where
             StateDocument::decode_with_limits(&encoded, limits).map_err(PluginError::from)?;
         self.shared
             .apply_state(&document, C::CLAP_ID, C::CLAP_STATE_SCHEMA)
-            .map_err(|error| state_error(&error))
+            .map_err(|error| state_error(&error))?;
+        // A loaded state replaces host-visible plain values; CLAP requires the
+        // plugin to request a value rescan rather than assuming hosts poll.
+        if !self.shared.bindings().is_empty()
+            && let Some(params) = self.host.get_extension::<HostParams>()
+        {
+            params.rescan(&self.host, ParamRescanFlags::VALUES);
+        }
+        Ok(())
     }
 }
 
-impl<'a, C, P> PluginAudioProcessor<'a, ChassisShared, ChassisMainThread<C>>
+impl<'a, C, P> PluginAudioProcessor<'a, ChassisShared, ChassisMainThread<'a, C>>
     for ChassisAudioProcessor<'a, P, F32Only>
 where
     C: ClapStereoEffect<Processor = P>,
@@ -513,7 +541,7 @@ where
 {
     fn activate(
         _host: HostAudioProcessorHandle<'a>,
-        main_thread: &ChassisMainThread<C>,
+        main_thread: &ChassisMainThread<'_, C>,
         shared: &'a ChassisShared,
         audio_config: PluginAudioConfiguration,
     ) -> Result<Self, PluginError> {
@@ -529,7 +557,7 @@ where
         self.process_block::<f32>(process, audio, &events, C::CLAP_MAX_PARAMETER_EVENTS)
     }
 
-    fn deactivate(mut self, _main_thread: &ChassisMainThread<C>) {
+    fn deactivate(mut self, _main_thread: &ChassisMainThread<'_, C>) {
         let _ = self.runtime.deactivate();
     }
 
@@ -538,7 +566,7 @@ where
     }
 }
 
-impl<'a, C, P> PluginAudioProcessor<'a, ChassisShared, ChassisMainThread<C>>
+impl<'a, C, P> PluginAudioProcessor<'a, ChassisShared, ChassisMainThread<'a, C>>
     for ChassisAudioProcessor<'a, P, F32AndF64>
 where
     C: ClapStereoEffect<Processor = P>,
@@ -546,7 +574,7 @@ where
 {
     fn activate(
         _host: HostAudioProcessorHandle<'a>,
-        main_thread: &ChassisMainThread<C>,
+        main_thread: &ChassisMainThread<'_, C>,
         shared: &'a ChassisShared,
         audio_config: PluginAudioConfiguration,
     ) -> Result<Self, PluginError> {
@@ -570,7 +598,7 @@ where
         }
     }
 
-    fn deactivate(mut self, _main_thread: &ChassisMainThread<C>) {
+    fn deactivate(mut self, _main_thread: &ChassisMainThread<'_, C>) {
         let _ = self.runtime.deactivate();
     }
 
@@ -657,6 +685,17 @@ where
 
 fn audio_mapping_error(_error: &AudioMappingError) -> PluginError {
     PluginError::Message("Invalid CLAP audio-port mapping")
+}
+
+/// Index of the option nearest a possibly fractional plain position.
+fn nearest_option_index(options: &[ChoiceOption], value: f64) -> usize {
+    if !value.is_finite() || value <= 0.0 {
+        return 0;
+    }
+    let last = options.len().saturating_sub(1);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let rounded = (value + 0.5) as usize;
+    rounded.min(last)
 }
 
 fn parameter_mapping_error(_error: &ParameterMappingError) -> PluginError {

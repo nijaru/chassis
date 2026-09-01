@@ -8,7 +8,7 @@ Chassis currently spans **late Phase 1 / early Phase 2** deliberately.
 
 The format-independent lifecycle/buffer conformance path, typed parameter/state model, adjacent-schema migrations, complete semantic instance-state ownership, borrowed automation/context, and generic no-allocation process-buffer source are implemented. The whole-state path is locally qualified through `62b96cc`; the generic process-source boundary and arbitrary mapped f32 CLAP audio path are locally Rust-1.98-qualified through `dfc137c`.
 
-The CLAP adapter now owns explicit stable audio/parameter identity mapping, a weak-memory-model-qualified scalar publication bridge, setup-built process slots, and allocation-free lazy projection of arbitrary mapped f32/f64 audio ports. The expanded I/O topology has now repeated the native qualification path: current `clap-validator` results plus a bit-exact headless REAPER render of the f64-capable artifact.
+The CLAP adapter now owns explicit stable audio/parameter identity mapping, a weak-memory-model-qualified scalar publication bridge, setup-built process slots, allocation-free lazy projection of arbitrary mapped f32/f64 audio ports, and dense choice projection (option-index plain values, option-name display round trips, host value rescan after state load). The expanded I/O topology has now repeated the native qualification path twice: current `clap-validator` results plus bit-exact headless REAPER renders, most recently with a parametered artifact.
 
 CLAP render/offline mode projection and optional f64 capability advertisement/dispatch are implemented and locally qualified, with native requalification recorded for the host matrix available in this environment. Active-state consistency and richer capabilities remain ahead. This is not a roadmap reversal: core semantic contracts continue to be proven before adapter conveniences are frozen.
 
@@ -62,7 +62,7 @@ Do not add background executors, generalized analyzers, voice allocation, immers
 
 ## Phase 2 — first real plugin boundary: CLAP
 
-Status: **the current f64-capable artifact is CLAP-qualified and requalified through a bit-exact headless REAPER render; native `data64` host dispatch is unexercised because no available host was observed to choose it**.
+Status: **the current parametered f64-capable artifact is CLAP-qualified (35 validator passes including the full parameter/state matrix) and requalified through a bit-exact headless REAPER render; native `data64` host dispatch is unexercised because no available host was observed to choose it**.
 
 Current adapter foundation:
 
@@ -87,13 +87,13 @@ Qualification evidence is intentionally split:
 1. the earlier conventional stereo artifact regenerated/reviewed `Cargo.lock`, passed fmt/test/clippy/deny/machete, and built the conformance cdylib in release mode;
 2. that artifact was packaged as a platform-correct macOS `.clap`, passed `clap-validator` 0.4.1 (source commit `b2f1d9b79b1d264a5747f46707d72b1aa40a02ef`) lifecycle/buffer stress with 19 passes, 0 failures, and 25 intentional skips plus a five-second two-worker fuzz run, and rendered correctly in REAPER 7.78/macOS-arm64;
 3. the expanded generic-source/arbitrary-mapped-f32 implementation passed Rust 1.98 fmt, full workspace tests, strict all-feature/all-target Clippy, and release conformance build at `dfc137c`;
-4. the current f64-capable adapter artifact passed `clap-validator` 0.4.1 with 23 passes, 0 failures, and 21 intentional skips, including both double-precision process-audio cases, plus a five-second, two-worker fuzz run without errors;
-5. the same artifact was requalified headlessly in REAPER 7.79/macOS-arm64 via `-renderproject`: the host scanned the bundle, instantiated the FX, round-tripped its state chunk through a saved project, and rendered 44.1 kHz float fixtures; the f32 FX render was bit-identical to 0.5× the bypassed render, the bypassed 64-bit float fixture passed through bit-identically, and a 2e-38 subnormal probe plus a bit-identical `f32(0.5×source)` comparison confirmed f32 dispatch — expected, since the artifact advertises `SUPPORTS_64BITS` without `PREFERS_64BITS` — so native `data64` dispatch remains unexercised by the available host matrix.
+4. the earlier f64-capable (parameterless) adapter artifact passed `clap-validator` 0.4.1 with 23 passes, 0 failures, and 21 intentional skips, including both double-precision process-audio cases, plus a five-second, two-worker fuzz run without errors, and was requalified headlessly in REAPER 7.79/macOS-arm64 via `-renderproject` with a bit-identical f32 0.5-gain differential and a 2e-38 subnormal probe confirming expected f32 dispatch (the artifact advertises `SUPPORTS_64BITS` without `PREFERS_64BITS`, so native `data64` dispatch remains unexercised);
+5. the current parametered artifact (one `choice` and one `float` parameter) passed `clap-validator` 0.4.1 with 35 passes, 0 failures, and 9 intentional skips — the full parameter set/flush/sample-accurate/modulation-fuzz/conversion matrix and all three state-reproducibility cases now run and pass — plus a clean five-second two-worker fuzz; it was requalified headlessly in REAPER 7.79/macOS-arm64: the host round-tripped a two-parameter state chunk (`parameter/mode` = `Choice("clean")`, `parameter/trim` = `Float(0.5)`) through a saved project and rendered 44.1 kHz float fixtures with the f32 FX render bit-identical to 0.5× the bypassed render.
 
 Current/follow-on Phase 2 work:
 
 - richer audio/event buffers and note/MIDI projections when a client requires them;
-- choice/modulation/gesture semantics and richer parameter events;
+- modulation/gesture semantics and richer parameter events;
 - state save/load while active according to a documented consistency contract;
 - latency/tail/status metadata as required by conformance or the first real effect;
 - negative-space lifecycle/input tests and applicable Miri/sanitizer evidence.

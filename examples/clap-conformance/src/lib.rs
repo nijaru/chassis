@@ -5,16 +5,48 @@ use core::convert::Infallible;
 use chassis_clap::{ClapStereoEffect, SingleComponentEntryWithF64, clack_export_entry};
 use chassis_core::{
     buffer::BufferRelationship,
+    parameters::{ChoiceOption, ParameterDescriptor},
     process::{ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessChannel},
     runtime::{Component, Process, Processor},
 };
 
-#[derive(Default)]
-struct ConformanceEffect;
+struct ConformanceEffect {
+    parameters: Vec<ParameterDescriptor>,
+}
+
+impl Default for ConformanceEffect {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ConformanceEffect {
+    fn new() -> Self {
+        let mode = ParameterDescriptor::choice(
+            "mode",
+            "Mode",
+            vec![
+                ChoiceOption::new("clean", "Clean").expect("choice option is valid"),
+                ChoiceOption::new("warm", "Warm").expect("choice option is valid"),
+            ],
+            "clean",
+        )
+        .expect("choice parameter is valid");
+        let trim = ParameterDescriptor::float("trim", "Trim", 0.0, 1.0, 0.5)
+            .expect("float parameter is valid");
+        Self {
+            parameters: vec![mode, trim],
+        }
+    }
+}
 
 impl Component for ConformanceEffect {
     type Processor = ConformanceProcessor;
     type ActivationError = Infallible;
+
+    fn parameter_descriptors(&self) -> &[ParameterDescriptor] {
+        &self.parameters
+    }
 
     fn activate(
         &self,
@@ -27,6 +59,8 @@ impl Component for ConformanceEffect {
 impl ClapStereoEffect for ConformanceEffect {
     const CLAP_ID: &'static str = "com.nijaru.chassis.conformance";
     const CLAP_NAME: &'static str = "Chassis Conformance";
+    const CLAP_PARAMETER_IDS: &'static [(&'static str, u32)] = &[("mode", 7001), ("trim", 7002)];
+    const CLAP_MAX_PARAMETER_EVENTS: u32 = 512;
 }
 
 struct ConformanceProcessor;

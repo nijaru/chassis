@@ -6,7 +6,10 @@
 //! borrowed process events are validated here against the active schema.
 
 use core::fmt;
-use std::{string::String, vec::Vec};
+use std::{
+    sync::Arc,
+    {string::String, vec::Vec},
+};
 
 use crate::{
     automation::{ParameterEventChange, ParameterEventValue, ParameterEvents},
@@ -87,8 +90,12 @@ impl ParameterIndex {
 }
 
 /// Stable identity of one choice option.
+///
+/// The identity text is shared: schemas own the options they declare, so cloning
+/// a [`ChoiceId`](Self) a realtime path receives is a reference-count bump that
+/// allocates nothing and never runs a string destructor.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ChoiceId(String);
+pub struct ChoiceId(Arc<str>);
 
 impl ChoiceId {
     /// Construct a non-empty choice identity.
@@ -100,7 +107,7 @@ impl ChoiceId {
     pub fn new(value: impl Into<String>) -> Result<Self, ChoiceIdError> {
         let value = value.into();
         validate_identifier(&value).map_err(|reason| ChoiceIdError { reason })?;
-        Ok(Self(value))
+        Ok(Self(Arc::from(value)))
     }
 
     /// Return the stable choice identity text.
@@ -110,9 +117,12 @@ impl ChoiceId {
     }
 
     /// Consume the choice identity and return its text.
+    ///
+    /// Shared identities are not uniquely owned once a schema references them,
+    /// so this conversion may copy the text rather than reusing one allocation.
     #[must_use]
     pub fn into_string(self) -> String {
-        self.0
+        self.0.as_ref().to_owned()
     }
 }
 

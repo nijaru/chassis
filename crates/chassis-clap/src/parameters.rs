@@ -3,7 +3,7 @@ use std::{fmt, string::String, vec::Vec};
 use chassis_core::{
     automation::{ParameterEvent, ParameterEventChange, ParameterEventValue},
     parameters::{
-        ParameterDescriptor, ParameterIndex, ParameterKind, ParameterStore, ParameterType,
+        ChoiceId, ChoiceOption, ParameterDescriptor, ParameterIndex, ParameterKind, ParameterStore,
         ParameterValue,
     },
     state::{
@@ -28,11 +28,8 @@ pub(crate) enum ParameterMappingError {
     InvalidId(String),
     DuplicateId(u32),
     ParameterIndexUnrepresentable(usize),
-    UnsupportedType {
-        parameter: String,
-        parameter_type: ParameterType,
-    },
     IntegerRangeNotRepresentable(String),
+    ChoiceCountNotRepresentable(String),
 }
 
 impl fmt::Display for ParameterMappingError {
@@ -55,16 +52,13 @@ impl fmt::Display for ParameterMappingError {
                 formatter,
                 "CLAP parameter index {index} cannot fit the Chassis runtime index"
             ),
-            Self::UnsupportedType {
-                parameter,
-                parameter_type,
-            } => write!(
-                formatter,
-                "parameter {parameter} has unsupported CLAP type {parameter_type}"
-            ),
             Self::IntegerRangeNotRepresentable(parameter) => write!(
                 formatter,
                 "integer parameter {parameter} exceeds the exactly representable CLAP range"
+            ),
+            Self::ChoiceCountNotRepresentable(parameter) => write!(
+                formatter,
+                "choice parameter {parameter} has more options than CLAP plain values represent"
             ),
         }
     }
@@ -97,7 +91,7 @@ impl ClapParameterBinding {
             ParameterKind::Float { default, .. } => *default,
             ParameterKind::Integer { default, .. } => integer_to_plain(*default),
             ParameterKind::Boolean { default } => f64::from(u8::from(*default)),
-            ParameterKind::Choice { .. } => 0.0,
+            ParameterKind::Choice { options, default } => choice_plain(options, default),
         }
     }
 
@@ -110,7 +104,7 @@ impl ClapParameterBinding {
                 minimum, maximum, ..
             } => (integer_to_plain(*minimum), integer_to_plain(*maximum)),
             ParameterKind::Boolean { .. } => (0.0, 1.0),
-            ParameterKind::Choice { .. } => (0.0, 0.0),
+            ParameterKind::Choice { options, .. } => (0.0, choice_plain_max(options)),
         }
     }
 
@@ -120,27 +114,28 @@ impl ClapParameterBinding {
         let mut flags = ParamInfoFlags::IS_AUTOMATABLE | ParamInfoFlags::REQUIRES_PROCESS;
         if matches!(
             self.descriptor.kind(),
-            ParameterKind::Integer { .. } | ParameterKind::Boolean { .. }
+            ParameterKind::Integer { .. }
+                | ParameterKind::Boolean { .. }
+                | ParameterKind::Choice { .. }
         ) {
             flags |= ParamInfoFlags::IS_STEPPED;
         }
         flags
     }
 
-    pub(crate) fn event_value(&self, value: f64) -> ParameterEventValue<'static> {
+    pub(crate) fn event_value(&self, value: f64) -> Option<ParameterEventValue<'_>> {
         match self.descriptor.kind() {
-            ParameterKind::Float { .. } | ParameterKind::Choice { .. } => {
-                ParameterEventValue::Float(value)
+            ParameterKind::Float { .. } => Some(ParameterEventValue::Float(value)),
+            ParameterKind::Integer { .. } => {
+                integer_from_plain(value).map(ParameterEventValue::Integer)
             }
-            ParameterKind::Integer { .. } => integer_from_plain(value).map_or(
-                ParameterEventValue::Float(value),
-                ParameterEventValue::Integer,
-            ),
             ParameterKind::Boolean { .. } => match value {
-                0.0 => ParameterEventValue::Boolean(false),
-                1.0 => ParameterEventValue::Boolean(true),
-                _ => ParameterEventValue::Float(value),
+                0.0 => Some(ParameterEventValue::Boolean(false)),
+                1.0 => Some(ParameterEventValue::Boolean(true)),
+                _ => None,
             },
+            ParameterKind::Choice { options, .. } => choice_option(options, value)
+                .map(|option| ParameterEventValue::Choice(option.id().as_str())),
         }
     }
 
@@ -151,7 +146,7 @@ impl ClapParameterBinding {
             } if value.is_finite() && (*minimum..=*maximum).contains(&value) => {
                 Some(ParameterValue::Float(value))
             }
-            ParameterKind::Float { .. } | ParameterKind::Choice { .. } => None,
+            ParameterKind::Float { .. } => None,
             ParameterKind::Integer {
                 minimum, maximum, ..
             } => integer_from_plain(value)
@@ -162,6 +157,8 @@ impl ClapParameterBinding {
                 1.0 => Some(ParameterValue::Boolean(true)),
                 _ => None,
             },
+            ParameterKind::Choice { options, .. } => choice_option(options, value)
+                .map(|option| ParameterValue::Choice(option.id().clone())),
         }
     }
 
@@ -174,7 +171,8 @@ impl ClapParameterBinding {
                 1.0 => Some(StateValue::Boolean(true)),
                 _ => None,
             },
-            ParameterKind::Choice { .. } => None,
+            ParameterKind::Choice { options, .. } => choice_option(options, value)
+                .map(|option| StateValue::Choice(option.id().as_str().to_owned())),
         }
     }
 
@@ -183,14 +181,14 @@ impl ClapParameterBinding {
             ParameterEventValue::Float(value) => value,
             ParameterEventValue::Integer(value) => integer_to_plain(value),
             ParameterEventValue::Boolean(value) => f64::from(u8::from(value)),
-            ParameterEventValue::Choice(_) => return None,
+            ParameterEventValue::Choice(value) => self.choice_plain(value)?,
         };
         let value = self.parameter_value(plain)?;
         Some(match value {
             ParameterValue::Float(value) => value,
             ParameterValue::Integer(value) => integer_to_plain(value),
             ParameterValue::Boolean(value) => f64::from(u8::from(value)),
-            ParameterValue::Choice(_) => return None,
+            ParameterValue::Choice(_) => plain,
         })
     }
 
@@ -205,9 +203,21 @@ impl ClapParameterBinding {
             (ParameterKind::Boolean { .. }, StateValue::Boolean(value)) => {
                 Some(f64::from(u8::from(*value)))
             }
+            (ParameterKind::Choice { .. }, StateValue::Choice(value)) => self.choice_plain(value),
             _ => None,
         }
         .filter(|value| self.parameter_value(*value).is_some())
+    }
+
+    fn choice_plain(&self, value: &str) -> Option<f64> {
+        let ParameterKind::Choice { options, .. } = self.descriptor.kind() else {
+            return None;
+        };
+        options
+            .iter()
+            .position(|option| option.id().as_str() == value)
+            .and_then(|position| u32::try_from(position).ok())
+            .map(f64::from)
     }
 }
 
@@ -225,6 +235,36 @@ fn integer_from_plain(value: f64) -> Option<i64> {
     }
     #[allow(clippy::cast_possible_truncation)]
     Some(value as i64)
+}
+
+/// Dense option index of a schema's default choice.
+fn choice_plain(options: &[ChoiceOption], default: &ChoiceId) -> f64 {
+    options
+        .iter()
+        .position(|option| option.id() == default)
+        .map_or(0.0, |position| {
+            u32::try_from(position).map_or(0.0, f64::from)
+        })
+}
+
+/// Highest dense option index of a schema's choice set.
+fn choice_plain_max(options: &[ChoiceOption]) -> f64 {
+    options
+        .len()
+        .checked_sub(1)
+        .and_then(|last| u32::try_from(last).ok())
+        .map_or(0.0, f64::from)
+}
+
+/// The option at one dense plain index, rejecting negative, fractional, or
+/// out-of-range plain values.
+fn choice_option(options: &[ChoiceOption], plain: f64) -> Option<&ChoiceOption> {
+    if !plain.is_finite() || plain < 0.0 || plain.fract() != 0.0 {
+        return None;
+    }
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let index = plain as usize;
+    options.get(index)
 }
 
 pub(crate) struct ClapParameterState {
@@ -269,11 +309,11 @@ impl ClapParameterState {
                         descriptor.key().as_str().to_owned(),
                     ));
                 }
+                ParameterKind::Choice { options, .. } if u32::try_from(options.len()).is_ok() => {}
                 ParameterKind::Choice { .. } => {
-                    return Err(ParameterMappingError::UnsupportedType {
-                        parameter: descriptor.key().as_str().to_owned(),
-                        parameter_type: ParameterType::Choice,
-                    });
+                    return Err(ParameterMappingError::ChoiceCountNotRepresentable(
+                        descriptor.key().as_str().to_owned(),
+                    ));
                 }
             }
             bindings.push(ClapParameterBinding {
@@ -397,7 +437,7 @@ impl ClapParameterState {
             ParameterValue::Float(value) => value,
             ParameterValue::Integer(value) => integer_to_plain(value),
             ParameterValue::Boolean(value) => f64::from(u8::from(value)),
-            ParameterValue::Choice(_) => return None,
+            ParameterValue::Choice(value) => self.bindings[index].choice_plain(value.as_str())?,
         };
         Some((index, value))
     }
@@ -629,20 +669,20 @@ pub(crate) fn normalized_event(
     id: ClapId,
     time: u32,
     value: f64,
-) -> Option<ParameterEvent<'static>> {
+) -> Option<ParameterEvent<'_>> {
     let index = state.index_for_id(id)?;
     let binding = &state.bindings[index];
     Some(ParameterEvent::set(
         time,
         binding.index(),
-        binding.event_value(value),
+        binding.event_value(value)?,
     ))
 }
 
-pub(crate) fn normalized_events(
-    state: &ClapParameterState,
+pub(crate) fn normalized_events<'a>(
+    state: &'a ClapParameterState,
     input: &InputEvents<'_>,
-    output: &mut Vec<ParameterEvent<'static>>,
+    output: &mut Vec<ParameterEvent<'a>>,
 ) -> Result<(), &'static str> {
     output.clear();
     for event in input {
@@ -668,7 +708,8 @@ mod tests {
     use super::*;
     use chassis_core::{
         automation::{ParameterEventChange, ParameterEvents},
-        parameters::{ChoiceOption, ParameterDescriptor},
+        parameters::{ChoiceId, ChoiceOption, ParameterDescriptor},
+        state::StateEntry,
     };
     use clack_plugin::events::Pckn;
 
@@ -684,18 +725,22 @@ mod tests {
     }
 
     #[test]
-    fn mapping_requires_stable_ids_and_rejects_unsupported_choices() {
+    fn mapping_accepts_choices_and_requires_representable_option_counts() {
         let choice = ParameterDescriptor::choice(
             "mode",
             "Mode",
-            vec![ChoiceOption::new("clean", "Clean").expect("choice is valid")],
-            "clean",
+            vec![
+                ChoiceOption::new("clean", "Clean").expect("choice is valid"),
+                ChoiceOption::new("warm", "Warm").expect("choice is valid"),
+            ],
+            "warm",
         )
         .expect("choice parameter is valid");
-        assert!(matches!(
-            ClapParameterState::new(&[choice], &[("mode", 1)]),
-            Err(ParameterMappingError::UnsupportedType { .. })
-        ));
+        let state =
+            ClapParameterState::new(&[choice], &[("mode", 1)]).expect("choice parameters map");
+        let binding = &state.bindings()[0];
+        assert_eq!(binding.plain_range(), (0.0, 1.0));
+        assert!((binding.default_plain() - 1.0).abs() <= f64::EPSILON);
 
         let descriptors = descriptors();
         assert!(matches!(
@@ -878,5 +923,149 @@ mod tests {
             .expect("state applies");
         assert!((restored.value(0) - 0.75).abs() <= f64::EPSILON);
         assert!((restored.value(2) - 1.0).abs() <= f64::EPSILON);
+    }
+
+    fn choice_descriptors() -> Vec<ParameterDescriptor> {
+        vec![
+            ParameterDescriptor::float("gain", "Gain", 0.0, 1.0, 0.5)
+                .expect("float parameter is valid"),
+            ParameterDescriptor::choice(
+                "mode",
+                "Mode",
+                vec![
+                    ChoiceOption::new("clean", "Clean").expect("choice is valid"),
+                    ChoiceOption::new("warm", "Warm").expect("choice is valid"),
+                    ChoiceOption::new("driven", "Driven").expect("choice is valid"),
+                ],
+                "warm",
+            )
+            .expect("choice parameter is valid"),
+        ]
+    }
+
+    #[test]
+    fn choice_events_normalize_to_borrowed_schema_identities() {
+        let descriptors = choice_descriptors();
+        let state = ClapParameterState::new(&descriptors, &[("gain", 1), ("mode", 2)])
+            .expect("parameter mapping is valid");
+        let raw = [ParamValueEvent::new(
+            0,
+            ClapId::new(2),
+            Pckn::match_all(),
+            0.0,
+        )];
+        let input = InputEvents::from_buffer(&raw);
+        let mut normalized = Vec::with_capacity(1);
+        normalized_events(&state, &input, &mut normalized).expect("events normalize");
+        let events = ParameterEvents::new(&normalized, 4, 2).expect("events are valid");
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events.iter().next().expect("first event").change(),
+            ParameterEventChange::Set(ParameterEventValue::Choice("clean"))
+        );
+
+        // Out-of-range option indices are dropped before core validation.
+        let bad = [ParamValueEvent::new(
+            0,
+            ClapId::new(2),
+            Pckn::match_all(),
+            7.0,
+        )];
+        let bad_input = InputEvents::from_buffer(&bad);
+        let mut bad_normalized = Vec::with_capacity(1);
+        normalized_events(&state, &bad_input, &mut bad_normalized).expect("events normalize");
+        assert!(bad_normalized.is_empty());
+    }
+
+    #[test]
+    fn choice_control_and_automation_sync_into_the_store() {
+        let descriptors = choice_descriptors();
+        let state = ClapParameterState::new(&descriptors, &[("gain", 1), ("mode", 2)])
+            .expect("parameter mapping is valid");
+        assert!(state.apply_plain_value(ClapId::new(2), 2.0));
+        let mut store = ParameterStore::new(&descriptors).expect("schema is valid");
+        let mut scratch = vec![0.0; 2];
+        state
+            .sync_into(&mut store, &mut scratch)
+            .expect("control choice syncs");
+        assert_eq!(
+            store.get("mode"),
+            Some(&ParameterValue::Choice(
+                ChoiceId::new("driven").expect("choice id is valid")
+            ))
+        );
+
+        // Automation publishes the final choice event as the next base value.
+        let events = [
+            ParameterEvent::set(
+                0,
+                ParameterIndex::new(1),
+                ParameterEventValue::Choice("clean"),
+            ),
+            ParameterEvent::set(
+                3,
+                ParameterIndex::new(1),
+                ParameterEventValue::Choice("warm"),
+            ),
+        ];
+        state
+            .publish_events(&events, &mut scratch)
+            .expect("automation publication succeeds");
+        state
+            .sync_into(&mut store, &mut scratch)
+            .expect("automation choice syncs");
+        assert_eq!(
+            store.get("mode"),
+            Some(&ParameterValue::Choice(
+                ChoiceId::new("warm").expect("choice id is valid")
+            ))
+        );
+        assert!((state.value(1) - 1.0).abs() <= f64::EPSILON);
+    }
+
+    #[test]
+    fn choice_state_round_trips_through_stable_identities() {
+        let descriptors = choice_descriptors();
+        let state = ClapParameterState::new(&descriptors, &[("gain", 1), ("mode", 2)])
+            .expect("parameter mapping is valid");
+        assert!(state.apply_plain_value(ClapId::new(2), 2.0));
+        let encoded = state
+            .encode_state("com.example.test", 1, StateLimits::default())
+            .expect("state encodes");
+        let document = StateDocument::decode(&encoded).expect("state decodes");
+
+        assert_eq!(
+            document
+                .entries()
+                .iter()
+                .find(|entry| entry.key() == "parameter/mode")
+                .map(StateEntry::value),
+            Some(&StateValue::Choice("driven".to_owned()))
+        );
+
+        let restored = ClapParameterState::new(&descriptors, &[("gain", 1), ("mode", 2)])
+            .expect("parameter mapping is valid");
+        restored
+            .apply_state(&document, "com.example.test", 1)
+            .expect("state applies");
+        assert!((restored.value(1) - 2.0).abs() <= f64::EPSILON);
+
+        // Unknown choice identities are rejected transactionally.
+        let mut corrupt = StateDocument::new("com.example.test", 1).expect("document is valid");
+        corrupt
+            .insert(StateEntry::new("parameter/gain", StateValue::Float(0.5)))
+            .expect("entry is structurally valid");
+        corrupt
+            .insert(StateEntry::new(
+                "parameter/mode",
+                StateValue::Choice("mystery".to_owned()),
+            ))
+            .expect("entry is structurally valid");
+        assert!(matches!(
+            restored.apply_state(&corrupt, "com.example.test", 1),
+            Err(ParameterStateError::InvalidValue)
+        ));
+        assert!((restored.value(1) - 2.0).abs() <= f64::EPSILON);
     }
 }

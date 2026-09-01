@@ -1,6 +1,6 @@
 # Parameters, Automation, and State
 
-Status: typed parameter schema/store, dense schema-local process identity, borrowed process automation, durable core `InstanceRuntime` parameter ownership, complete runtime parameter-state replacement, dense CLAP projection, and generation-checked CLAP scalar publication are implemented. The checkpoint through `3f18404` passed the full local Rust gate, including the five-test Loom publication model. Native CLAP qualification is still pending. Public API and persistence wire format are not frozen.
+Status: typed parameter schema/store, dense schema-local process identity, borrowed process automation, durable core `InstanceRuntime` parameter ownership, complete runtime parameter-state replacement, dense CLAP projection (float, integer, boolean, and choice) including choice plain-value/option-name display round trips and host rescan-on-state-load, and generation-checked CLAP scalar publication are implemented. The current parametered artifact passes the full local Rust gate plus `clap-validator` 0.4.1 (35 passes, 0 failures, 9 intentional skips) with a clean five-second two-worker fuzz and a bit-exact headless REAPER 7.79 differential render. Public API and persistence wire format are not frozen.
 
 ## Identity and schema
 

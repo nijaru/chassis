@@ -226,16 +226,13 @@ Still required before calling native CLAP support usable in production:
 
 The first CLAP adapter slice now translates bounded CLAP `ParamValueEvent`s into
 borrowed core set events, maps block-start transport flags/tempo, and exposes
-explicitly mapped scalar float, integer, and boolean parameters through the
-CLAP params/state extensions. The mapping is unit-tested, but native CLAP
-parameter/state qualification is still pending.
+explicitly mapped scalar float, integer, boolean, and choice parameters through
+the CLAP params/state extensions, including dense choice projection and a host
+value rescan after state load.
 
-Choice/index projection, modulation, gesture output, note/event ports, broader
-state publication semantics, and optional render mode remain unimplemented.
-Prove each without forcing CLAP-specific semantics into core. In particular,
-define how a timestamped automation set becomes the next block's base value and
-what consistency a state save has while processing is active before freezing
-this API.
+Native CLAP parameter/state qualification has now run: the parametered artifact passes the full validator parameter/conversion/state-reproducibility matrix and a headless REAPER two-parameter state round trip.
+
+Choice/index projection is implemented as dense schema option indices on the CLAP plain-value wire with option-name display round trips and a host value rescan after state load; `ChoiceId` shares its text so realtime choice sets do not allocate. Modulation, gesture output, note/event ports, and broader state publication semantics remain unimplemented. Prove each without forcing CLAP-specific semantics into core. In particular, define what consistency a state save has while processing is active before freezing this API.
 
 ## Blocks VST3/AU claims
 
