@@ -139,7 +139,14 @@ The current Rust semantics and general I/O are coherent enough to rebuild/packag
 - REAPER render, automation, sidechain, save/load and reopen smoke tests;
 - Bitwig when available because it exercises relevant CLAP/reentrancy behavior.
 
-The current f64-capable artifact passes the local validator and fuzz checks. Do not treat an older validator artifact as evidence for current runtime/parameter/state/I/O code; expanded topology and real-host requalification remain open.
+Executed against the current f64-capable artifact:
+
+- `clap-validator` 0.4.1 normal suite: 23 passes, 0 failures, 21 intentional skips (validator has no parameters to exercise, and preset-discovery/note-events are not advertised); both double-precision process-audio cases pass;
+- five-second, two-worker validator fuzz: no errors;
+- REAPER 7.79/macOS-arm64 headless `-renderproject` requalification: scan, instantiate, state-chunk round trip through a saved project, and render; the f32 FX render is bit-identical to 0.5× the bypassed render, and a 2e-38 subnormal probe plus a bit-identical `f32(0.5×source)` comparison confirms f32 dispatch — expected, since the artifact advertises `SUPPORTS_64BITS` without `PREFERS_64BITS`; native `data64` dispatch remains unexercised by the available host matrix;
+- earlier narrow-artifact validator (19 passes/25 skips) and REAPER 7.78 render evidence remains superseded by the above.
+
+Still open for this slice: parameter automation through a real host (the conformance component exposes no parameters yet), active-state save during automation, and Bitwig reentrancy coverage when that host is available. Do not treat older artifacts as evidence for current code.
 
 ## Slice 6 — CLAP capability expansion
 

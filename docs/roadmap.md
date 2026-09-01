@@ -8,9 +8,9 @@ Chassis currently spans **late Phase 1 / early Phase 2** deliberately.
 
 The format-independent lifecycle/buffer conformance path, typed parameter/state model, adjacent-schema migrations, complete semantic instance-state ownership, borrowed automation/context, and generic no-allocation process-buffer source are implemented. The whole-state path is locally qualified through `62b96cc`; the generic process-source boundary and arbitrary mapped f32 CLAP audio path are locally Rust-1.98-qualified through `dfc137c`.
 
-The CLAP adapter now owns explicit stable audio/parameter identity mapping, a weak-memory-model-qualified scalar publication bridge, setup-built process slots, and allocation-free lazy projection of arbitrary mapped f32/f64 audio ports. The expanded I/O topology has not yet repeated the earlier native `clap-validator`/REAPER host qualification, so source qualification and native-host qualification remain distinct evidence levels.
+The CLAP adapter now owns explicit stable audio/parameter identity mapping, a weak-memory-model-qualified scalar publication bridge, setup-built process slots, and allocation-free lazy projection of arbitrary mapped f32/f64 audio ports. The expanded I/O topology has now repeated the native qualification path: current `clap-validator` results plus a bit-exact headless REAPER render of the f64-capable artifact.
 
-CLAP render/offline mode projection and optional f64 capability advertisement/dispatch are implemented and locally qualified. Active-state consistency, richer capabilities, and native requalification remain ahead. This is not a roadmap reversal: core semantic contracts continue to be proven before adapter conveniences are frozen.
+CLAP render/offline mode projection and optional f64 capability advertisement/dispatch are implemented and locally qualified, with native requalification recorded for the host matrix available in this environment. Active-state consistency and richer capabilities remain ahead. This is not a roadmap reversal: core semantic contracts continue to be proven before adapter conveniences are frozen.
 
 ## Phase 0 — semantic foundation
 
@@ -62,7 +62,7 @@ Do not add background executors, generalized analyzers, voice allocation, immers
 
 ## Phase 2 — first real plugin boundary: CLAP
 
-Status: **the initial native stereo proof is CLAP/REAPER-qualified; the expanded arbitrary mapped-f32 source is locally Rust-qualified and awaits repeated native host qualification**.
+Status: **the current f64-capable artifact is CLAP-qualified and requalified through a bit-exact headless REAPER render; native `data64` host dispatch is unexercised because no available host was observed to choose it**.
 
 Current adapter foundation:
 
@@ -88,13 +88,10 @@ Qualification evidence is intentionally split:
 2. that artifact was packaged as a platform-correct macOS `.clap`, passed `clap-validator` 0.4.1 (source commit `b2f1d9b79b1d264a5747f46707d72b1aa40a02ef`) lifecycle/buffer stress with 19 passes, 0 failures, and 25 intentional skips plus a five-second two-worker fuzz run, and rendered correctly in REAPER 7.78/macOS-arm64;
 3. the expanded generic-source/arbitrary-mapped-f32 implementation passed Rust 1.98 fmt, full workspace tests, strict all-feature/all-target Clippy, and release conformance build at `dfc137c`;
 4. the current f64-capable adapter artifact passed `clap-validator` 0.4.1 with 23 passes, 0 failures, and 21 intentional skips, including both double-precision process-audio cases, plus a five-second, two-worker fuzz run without errors;
-5. the expanded topology still needs a new native validator/real-host qualification run before inheriting the earlier host evidence.
+5. the same artifact was requalified headlessly in REAPER 7.79/macOS-arm64 via `-renderproject`: the host scanned the bundle, instantiated the FX, round-tripped its state chunk through a saved project, and rendered 44.1 kHz float fixtures; the f32 FX render was bit-identical to 0.5× the bypassed render, the bypassed 64-bit float fixture passed through bit-identically, and a 2e-38 subnormal probe plus a bit-identical `f32(0.5×source)` comparison confirmed f32 dispatch — expected, since the artifact advertises `SUPPORTS_64BITS` without `PREFERS_64BITS` — so native `data64` dispatch remains unexercised by the available host matrix.
 
 Current/follow-on Phase 2 work:
 
-- native validator and real-host requalification of the expanded mapped-I/O path;
-- targeted native render/offline-mode qualification;
-- native host requalification of the f64 capability where a product implements `Process<f64>`;
 - richer audio/event buffers and note/MIDI projections when a client requires them;
 - choice/modulation/gesture semantics and richer parameter events;
 - state save/load while active according to a documented consistency contract;

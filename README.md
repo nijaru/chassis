@@ -98,7 +98,7 @@ examples/
     src/lib.rs      exported deterministic gain component for CLAP qualification
 ```
 
-The current CLAP slice maps factory/main-thread construction, activation, f32 stereo processing, optional f64 processing, reset, and deactivation onto the existing Chassis runtime. F64 exports use an explicit `SingleComponentEntryWithF64` marker and require the same processor to implement both `Process<f32>` and `Process<f64>`. The adapter also projects explicitly mapped scalar float, integer, and boolean parameters, bounded parameter-value events, block-start transport tempo/play/record flags, render mode, and bounded CHSS parameter state. Choice/modulation/gesture output, note/MIDI events, sidechains/multibus, GUI, and install tooling remain future adapter work. The current f64 artifact passes the local Rust gate and CLAP validator; real-host requalification remains pending.
+The current CLAP slice maps factory/main-thread construction, activation, f32 stereo processing, optional f64 processing, reset, and deactivation onto the existing Chassis runtime. F64 exports use an explicit `SingleComponentEntryWithF64` marker and require the same processor to implement both `Process<f32>` and `Process<f64>`. The adapter also projects explicitly mapped scalar float, integer, and boolean parameters, bounded parameter-value events, block-start transport tempo/play/record flags, render mode, and bounded CHSS parameter state. Choice/modulation/gesture output, note/MIDI events, sidechains/multibus, GUI, and install tooling remain future adapter work. The current f64 artifact passes the local Rust gate and CLAP validator, and has been requalified through a bit-exact headless REAPER 7.79 render (f32 dispatch, which the host chooses because the artifact advertises `SUPPORTS_64BITS` without `PREFERS_64BITS`).
 
 `chassis-core` remains std-only. `chassis-clap` is the first crate with third-party dependencies and consumes one full-SHA pinned Clack source while the adapter contract is being qualified.
 
@@ -116,7 +116,7 @@ cargo deny check
 cargo machete
 ```
 
-The current Rust 1.98 gate passes locally, with the lockfile resolving the exact pinned Clack revision. Build/package the conformance export and run CLAP-native validation before treating the adapter as fully qualified. The current f64 validator run reports 23 passed and 21 intentional skips, including both double-precision process-audio cases; a five-second, two-worker fuzz run completed without errors.
+The current Rust 1.98 gate passes locally, with the lockfile resolving the exact pinned Clack revision. Build/package the conformance export and run CLAP-native validation before treating the adapter as fully qualified. The current f64 validator run reports 23 passed and 21 intentional skips, including both double-precision process-audio cases; a five-second, two-worker fuzz run completed without errors. REAPER 7.79/macOS-arm64 headless render evidence is recorded in `docs/design/validation.md`.
 
 Use Miri/model tests/sanitizers/native validators as the relevant unsafe/adapters are implemented. Do not describe an unexecuted check as passing.
 
