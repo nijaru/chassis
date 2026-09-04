@@ -110,6 +110,31 @@ pub trait Component {
     }
 }
 
+/// Processing latency reported by one successfully activated processor.
+///
+/// Latency is measured in samples at the active sample rate. The runtime
+/// snapshots this value during activation so host-visible latency cannot drift
+/// while the same activation remains live.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct LatencySamples(u32);
+
+impl LatencySamples {
+    /// No processing latency.
+    pub const ZERO: Self = Self(0);
+
+    /// Construct a latency value from a sample count.
+    #[must_use]
+    pub const fn new(samples: u32) -> Self {
+        Self(samples)
+    }
+
+    /// Return the latency in samples.
+    #[must_use]
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
+
 /// Mutable realtime DSP/runtime-history owner while a component is active.
 ///
 /// The format-independent core does not require [`Send`] because a Chassis
@@ -126,6 +151,17 @@ pub trait Processor {
     ///
     /// Stateless processors may use the default no-op implementation.
     fn reset(&mut self) {}
+
+    /// Return the latency established by this activation.
+    ///
+    /// Products that allocate lookahead, oversampling, convolution, or other
+    /// delayed processing resources during activation override this method.
+    /// Chassis snapshots the returned value when activation succeeds; changing
+    /// processor internals later does not change the active runtime's latency.
+    #[must_use]
+    fn latency(&self) -> LatencySamples {
+        LatencySamples::ZERO
+    }
 }
 
 /// Processing capability for one sample representation.
@@ -395,6 +431,7 @@ where
 struct ActiveRuntime<P> {
     process: ProcessConfig,
     audio_ports: Vec<ConfiguredAudioPort>,
+    latency: LatencySamples,
     processor: P,
 }
 
@@ -408,10 +445,10 @@ impl<P> ActiveRuntime<P> {
 ///
 /// The runtime owns canonical base parameter state and validated custom semantic
 /// state across activation cycles, and optionally owns the active processor plus
-/// its accepted I/O configuration. The component definition itself remains
-/// outside this object and is borrowed only while activating, so deployment
-/// boundaries need to transfer only the concrete processor/runtime state rather
-/// than requiring `Component: Send`.
+/// its accepted I/O configuration and activation-scoped latency. The component
+/// definition itself remains outside this object and is borrowed only while
+/// activating, so deployment boundaries need to transfer only the concrete
+/// processor/runtime state rather than requiring `Component: Send`.
 ///
 /// The accepted port list is copied once while inactive. Dynamically negotiated
 /// layouts therefore do not create self-referential lifetimes and require no
@@ -497,12 +534,19 @@ where
         self.active.as_ref().map(ActiveRuntime::config)
     }
 
+    /// Return the latency captured for the current activation.
+    #[must_use]
+    pub fn active_latency(&self) -> Option<LatencySamples> {
+        self.active.as_ref().map(|active| active.latency)
+    }
+
     /// Activate this instance after validating and owning its accepted I/O layout.
     ///
     /// The component receives the runtime's current complete validated semantic
     /// state during preparation, so state loaded before activation can affect
     /// precomputed DSP resources without moving persistent authority into the
-    /// processor.
+    /// processor. The processor's reported latency is captured after successful
+    /// construction and remains fixed for the lifetime of this activation.
     ///
     /// # Errors
     ///
@@ -535,9 +579,11 @@ where
         let processor = component
             .activate_with_state(&config, &self.parameters, &self.custom_state)
             .map_err(ActivateError::Product)?;
+        let latency = processor.latency();
         self.active = Some(ActiveRuntime {
             process,
             audio_ports,
+            latency,
             processor,
         });
         Ok(())
@@ -610,6 +656,7 @@ where
         let ActiveRuntime {
             process,
             audio_ports,
+            latency: _,
             processor,
         } = active;
         let config = ActivationConfig::new(*process, AudioIoConfiguration::new(audio_ports));
@@ -627,7 +674,8 @@ where
     ///
     /// The processor is destroyed in the caller's domain only after the caller
     /// has ended all process/reset borrows. The owned inactive I/O configuration
-    /// is dropped with the active resources and can be replaced on reactivation.
+    /// and activation-scoped latency are dropped with the active resources and
+    /// can be replaced on reactivation.
     ///
     /// # Errors
     ///
