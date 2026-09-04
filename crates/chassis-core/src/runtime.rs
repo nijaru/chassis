@@ -1,9 +1,7 @@
 //! Explicit component/processor lifecycle contracts.
 //!
 //! The framework-owned [`InstanceRuntime`] is the durable authority for one
-//! component instance's base parameter state and active lifecycle. The older
-//! [`Activated`] shell remains temporarily for adapter migration; it is an
-//! activation-local projection rather than the long-lived state authority.
+//! component instance's base parameter state, semantic state, and active lifecycle.
 
 use core::fmt;
 use std::vec::Vec;
@@ -170,11 +168,6 @@ pub enum ActivateError<E> {
     ParameterSchemaMismatch,
     /// The proposed whole-component I/O configuration failed structural validation.
     InvalidAudioIo(AudioIoConfigurationError),
-    /// The component's immutable parameter schema failed validation.
-    ///
-    /// This variant remains for the temporary [`activate`] convenience path.
-    /// [`InstanceRuntime::new`] validates the schema before activation instead.
-    InvalidParameters(ParameterStoreError),
     /// Product activation failed after the framework configuration was validated.
     Product(E),
 }
@@ -189,7 +182,6 @@ where
             Self::ParameterSchemaMismatch => formatter
                 .write_str("component parameter schema does not match its instance runtime"),
             Self::InvalidAudioIo(error) => write!(formatter, "invalid audio I/O: {error}"),
-            Self::InvalidParameters(error) => write!(formatter, "invalid parameters: {error}"),
             Self::Product(error) => write!(formatter, "product activation failed: {error}"),
         }
     }
@@ -203,7 +195,6 @@ where
         match self {
             Self::AlreadyActive | Self::ParameterSchemaMismatch => None,
             Self::InvalidAudioIo(error) => Some(error),
-            Self::InvalidParameters(error) => Some(error),
             Self::Product(error) => Some(error),
         }
     }
@@ -888,132 +879,4 @@ where
         )
         .map_err(InstanceSemanticStateLoadError::Apply)
     }
-}
-
-/// Temporary activation-local processor shell retained while adapters migrate.
-///
-/// Unlike [`InstanceRuntime`], this type recreates its base store for every
-/// activation. It must therefore be treated as an active projection rather than
-/// the durable instance authority. New format-independent clients should prefer
-/// [`InstanceRuntime`].
-pub struct Activated<'a, P> {
-    config: ActivationConfig<'a>,
-    processor: P,
-    parameters: ParameterStore,
-}
-
-impl<'a, P> Activated<'a, P>
-where
-    P: Processor,
-{
-    /// Return the immutable activation configuration.
-    #[must_use]
-    pub const fn config(&self) -> ActivationConfig<'a> {
-        self.config
-    }
-
-    /// Return the activation-local base parameter projection.
-    #[must_use]
-    pub const fn parameters(&self) -> &ParameterStore {
-        &self.parameters
-    }
-
-    /// Mutably access the activation-local base projection.
-    pub fn parameters_mut(&mut self) -> &mut ParameterStore {
-        &mut self.parameters
-    }
-
-    /// Reset transient realtime processor history.
-    pub fn reset(&mut self) {
-        self.processor.reset();
-    }
-
-    /// Process one materialized channel slice after validating dimensions,
-    /// automation, and context.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ProcessBlockError`] before product DSP runs if the callback
-    /// dimensions, event context, or parameter values violate the activation
-    /// contract.
-    pub fn process<S>(
-        &mut self,
-        frame_count: u32,
-        context: ProcessContext<'_>,
-        buffers: &mut [ChannelBuffer<'_, S>],
-    ) -> Result<(), ProcessBlockError>
-    where
-        P: Process<S>,
-    {
-        let mut source = ChannelBufferSlice::new(buffers);
-        self.process_source(frame_count, context, &mut source)
-    }
-
-    /// Process one allocation-free buffer source after validating dimensions,
-    /// automation, and context.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ProcessBlockError`] before product DSP runs if the callback
-    /// dimensions, event context, source dimensions, or parameter values violate
-    /// the activation contract.
-    pub fn process_source<S, B>(
-        &mut self,
-        frame_count: u32,
-        context: ProcessContext<'_>,
-        source: &mut B,
-    ) -> Result<(), ProcessBlockError>
-    where
-        P: Process<S>,
-        B: ProcessBufferSource<S> + ?Sized,
-    {
-        let mut block =
-            ProcessBlock::new(&self.config, &self.parameters, frame_count, context, source)?;
-        self.parameters
-            .validate_events(context.parameter_events())
-            .map_err(ProcessBlockError::InvalidParameterEvents)?;
-        self.processor.process(&mut block);
-        Ok(())
-    }
-
-    /// Consume the active lifecycle shell and destroy its processor in the caller's domain.
-    pub fn deactivate(self) {
-        let Self { processor, .. } = self;
-        drop(processor);
-    }
-}
-
-/// Temporary convenience activation path retained while adapters migrate to
-/// [`InstanceRuntime`].
-///
-/// # Errors
-///
-/// Returns [`ActivateError::InvalidAudioIo`] before calling product activation
-/// for malformed configurations, [`ActivateError::InvalidParameters`] for an
-/// invalid component schema, or [`ActivateError::Product`] when the product
-/// rejects activation.
-pub fn activate<'a, C>(
-    component: &C,
-    process: ProcessConfig,
-    audio_io: AudioIoConfiguration<'a>,
-) -> Result<Activated<'a, C::Processor>, ActivateError<C::ActivationError>>
-where
-    C: Component,
-{
-    audio_io
-        .validate(component.audio_ports())
-        .map_err(ActivateError::InvalidAudioIo)?;
-
-    let parameters = ParameterStore::new(component.parameter_descriptors())
-        .map_err(ActivateError::InvalidParameters)?;
-    let config = ActivationConfig::new(process, audio_io);
-    let processor = component
-        .activate_with_parameters(&config, &parameters)
-        .map_err(ActivateError::Product)?;
-
-    Ok(Activated {
-        config,
-        processor,
-        parameters,
-    })
 }
