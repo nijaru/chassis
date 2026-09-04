@@ -31,9 +31,7 @@ static ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
 static DEALLOCATIONS: AtomicU64 = AtomicU64::new(0);
 
 fn counting_this_thread() -> bool {
-    COUNT_THIS_THREAD
-        .try_with(Cell::get)
-        .unwrap_or(false)
+    COUNT_THIS_THREAD.try_with(Cell::get).unwrap_or(false)
 }
 
 // This allocator is test instrumentation only. It delegates every operation to
