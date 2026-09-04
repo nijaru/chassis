@@ -32,7 +32,7 @@ impl HostHandlers for TestHostHandlers {
     type AudioProcessor<'a> = TestHostAudioProcessor;
 }
 
-fn host_info() -> HostInfo<'static> {
+fn host_info() -> HostInfo {
     HostInfo::new("chassis-test", "", "", "").expect("host info is valid")
 }
 
