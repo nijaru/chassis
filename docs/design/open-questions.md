@@ -28,7 +28,7 @@ Freeze gates:
 
 ## Parameters and automation
 
-Implemented: typed schema/store, dense realtime indices, borrowed sample-accurate events, CLAP float/integer/boolean/choice projection, generation-checked scalar publication, state value rescan after load, and exported `trim` DSP that follows sample-accurate automation for f32/f64 processing.
+Implemented: typed schema/store, dense realtime indices, borrowed sample-accurate events, CLAP float/integer/boolean/choice projection, generation-checked scalar publication, state value rescan after load, and exported `trim` DSP following sample-accurate automation for f32/f64.
 
 Freeze gates:
 
@@ -47,7 +47,7 @@ The CLAP consistency contract is implemented and executable:
 - a newer control edit/state load wins over stale realtime publication by generation check;
 - state load remains transactional and requests host value rescan after successful publication.
 
-Direct tests, Loom, and an in-process CLAP host scenario now cover this behavior while audio processing is active. Remaining freeze gates are production-DAW confirmation and cross-format round trips once VST3/AU exist.
+Direct tests, Loom, and an in-process CLAP host scenario cover this behavior while audio processing is active. Remaining freeze gates are production-DAW confirmation and cross-format round trips once VST3/AU exist.
 
 The CHSS wire envelope remains pre-v1 until production-host and cross-format state behavior is established.
 
@@ -70,22 +70,46 @@ Still open:
 
 ## Realtime guarantees
 
-Core and full CLAP adapter callback allocation/deallocation evidence are now executable. The adapter test covers stereo main + stereo sidechain, the configured 64-event maximum, f32 and f64, and repeated callbacks without measured callback-thread allocation/deallocation. Frame-count minimum/maximum and over-bound rejection are also covered.
+Core and full CLAP adapter callback allocation/deallocation evidence are executable. The adapter test covers stereo main + stereo sidechain, the configured 64-event maximum, f32/f64, and repeated callbacks without measured callback-thread allocation/deallocation. Frame-count minimum/maximum and over-bound rejection are covered.
+
+A manual adapter benchmark now exercises 32/64/128/512 frames, f32/f64, and zero/max events through the actual adapter.
 
 Remaining promotion work:
 
-- measure adapter-only overhead on representative stable hardware at relevant block sizes/event loads;
+- run that benchmark on representative stable hardware and record CPU/OS/toolchain/workload;
 - verify replaced-object reclamation cannot fall onto the callback when larger snapshot/telemetry facilities appear.
 
 Do not introduce custom allocators, lock-free infrastructure, SIMD, padding, or unsafe zero-copy machinery merely to make benchmarks look sophisticated.
 
+## Re-entrancy
+
+The exact Clack pin includes the v0.2 main-thread re-entrancy fixes. Chassis now has an in-process plugin -> host -> plugin test through both parameter-rescan and latency-change callbacks.
+
+The semantic re-entrancy assumption is therefore executable rather than inferred from dependency source alone. Bitwig remains useful production-host confirmation when available, especially because it was one of the motivating real-world re-entrant hosts.
+
+Any Clack revision/source change remains an audit + conformance event.
+
+## Panic boundary
+
+Pinned Clack catches plugin callback panics at its FFI wrapper.
+
+Executable Chassis behavior:
+
+- product activation panic -> activation failure, plugin remains inactive, same instance can activate again;
+- product process panic -> host-visible processing failure, then clean stop/deactivation.
+
+Do not promise that arbitrary DSP state is valid for continued processing after a process panic. The production contract should treat that callback failure as terminal for the current processing run. Real-host logging/restart behavior remains host qualification rather than a core semantic gap.
+
 ## CLAP production qualification
 
-Current Linux headless qualification is current:
+Current three-platform headless qualification is current:
 
-- `clap-validator` 0.4.1: 35 passed, 0 failed, 9 intentional skips;
-- bounded five-second two-worker fuzz: clean;
-- in-process Clack host exercises allocation/work bounds, activation failure/retry, repeated instances, reactivation, thread transfer, active state save, latency notification, and delayed audio.
+- Linux/macOS/Windows workspace portability tests/checks;
+- Linux/macOS/Windows packaged `.clap` artifacts;
+- pinned `clap-validator` 0.4.1: 35 passed, 0 failed, 9 intentional skips;
+- bounded five-second two-worker fuzz on each platform;
+- in-process Clack host exercises allocation/work bounds, activation failure/retry, panic containment, repeated instances, reactivation, thread transfer, re-entrancy, active state save, latency notification, and delayed audio;
+- dependency advisory/license/source/dead-dependency policy gates are automated.
 
 Open production-host work:
 
@@ -93,13 +117,11 @@ Open production-host work:
 - actual automated `trim` render differential against expected sample offsets in a production DAW;
 - active state save during DAW automation;
 - real-host PDC/alignment;
-- additional OS/architecture/host coverage;
 - native host f64 dispatch when a production host can be induced to choose it;
-- Bitwig/reentrancy coverage where available.
+- additional release architectures/hosts as targets become concrete;
+- Bitwig confirmation when available.
 
 The historical REAPER 7.79/macOS-arm64 baseline predates current head and remains regression history only.
-
-Clack remains pinned to reviewed revision `c5975f9f89f0953b00768680357985d46178078a`. Any revision/release change is an audit and conformance event.
 
 ## Export metadata/API
 

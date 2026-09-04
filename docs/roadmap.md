@@ -8,7 +8,7 @@ Chassis is in **Phase 2: native CLAP qualification**.
 
 The format-independent runtime/state/parameter architecture, generic process-buffer source, mapped f32/f64 CLAP audio path, render-mode projection, typed parameter/state projection, audible exported automation, activation-scoped latency, active-save publication, and adapter realtime/lifecycle semantics are implemented.
 
-Current head is qualified on the portable Rust + Linux headless CLAP matrix. Real-DAW/platform qualification remains intentionally separate.
+Current head is qualified through the automated Linux/macOS/Windows Rust and CLAP headless matrix. Production DAW behavior and representative hardware performance remain separate gates.
 
 ## Phase 0 — semantic foundation
 
@@ -49,7 +49,7 @@ Remaining promotion work:
 
 ## Phase 2 — native CLAP
 
-Status: current implementation is qualified on the Linux headless validator + in-process host matrix; production DAW coverage remains incomplete.
+Status: current implementation is qualified on the three-platform headless validator + in-process host matrix; production DAW coverage remains incomplete.
 
 Implemented and executable:
 
@@ -59,7 +59,7 @@ Implemented and executable:
 - arbitrary mapped f32/f64 mono/stereo ports supported by current core layout semantics;
 - exact alias, separate, input-only, output-only/asymmetric paths;
 - render/offline mode projection;
-- bounded parameter event normalization;
+- bounded parameter-event normalization;
 - float/integer/boolean/choice parameter projection;
 - exported `trim` automation driving deterministic f32/f64 DSP at sample offsets;
 - generation-checked scalar publication with direct concurrency and Loom evidence;
@@ -69,27 +69,31 @@ Implemented and executable:
 - deliberate nonzero-latency probe whose reported latency matches its actual delayed impulse;
 - full adapter-path allocation/deallocation probe at the configured maximum event count for f32/f64 and main + sidechain topology;
 - CLAP minimum/maximum frame-count processing and over-bound rejection;
-- product activation failure + retry on the same instance;
+- result-based product activation failure + retry on the same instance;
+- activation panic containment + same-instance retry;
+- process panic containment as host-visible processing failure;
 - repeated inactive instance construction/destruction;
 - sample-rate/block-size reactivation;
 - audio-thread transfer without simultaneous processor mutation;
-- current Linux `clap-validator` 0.4.1: 35 passed, 0 failed, 9 intentional skips;
-- five-second two-worker validator fuzz: clean.
+- plugin -> host -> plugin main-thread re-entry through parameter-rescan and latency-change callbacks;
+- full workspace tests/checks on Linux, macOS, and Windows;
+- dependency advisory/license/source/dead-dependency policy gates;
+- packaged Linux/macOS/Windows CLAP artifacts passing pinned `clap-validator` 0.4.1 and bounded fuzz;
+- validator suite: 35 passed, 0 failed, 9 intentional skips.
 
 Remaining, in order:
 
-1. Refresh real-DAW current-head evidence when a suitable host is available: scan/instantiate, state save/reopen, and actual automated `trim` render against the deterministic trajectory.
-2. Verify real-host PDC/alignment for delayed DSP; the in-process probe already proves metadata and DSP delay agree.
+1. Measure adapter-only overhead on representative stable hardware with the existing benchmark harness.
+2. Refresh real-DAW current-head evidence when a suitable host is available: scan/instantiate, state save/reopen, actual automated `trim` render, active-save, and PDC alignment.
 3. Exercise native host f64 dispatch when a production host can be induced to select it.
-4. Measure adapter-only overhead on representative stable hardware rather than a shared CI runner.
-5. Add further OS/architecture/host coverage as release targets become concrete.
-6. Start the first real FX client and implement only capabilities its product semantics require.
+4. Add further host/architecture coverage when release targets make it useful; Bitwig remains valuable real-world re-entrancy coverage even though re-entrant semantics are now executable in-process.
+5. Start the first real FX client and implement only capabilities its product semantics require.
 
 The historical REAPER 7.79/macOS-arm64 result remains regression history, not current-head production qualification.
 
 ## Phase 3 — first real FX client
 
-Start the mastering-limiter class of client before broadening the framework speculatively. Do not duplicate or migrate an existing Truce product unless that product explicitly opts into Chassis.
+Start a mastering-limiter class of client before broadening the framework speculatively. Do not duplicate or migrate an existing Truce product unless that product explicitly opts into Chassis.
 
 The first real delayed/dynamics client should pressure-test:
 

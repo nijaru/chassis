@@ -4,31 +4,52 @@ This file tracks the next implementation order on `main`. It is not an API compa
 
 ## Current checkpoint
 
-Current Rust checkpoint: `c6aa54f2022d456e89329fd969ba993eb8d76e52`.
+The format-independent runtime/state/parameter model and current native CLAP semantics are executable under the automated headless matrix.
 
-Rust CI is green for fmt, workspace tests, strict Clippy, and Loom. The Linux CLAP conformance workflow builds/packages the current artifact, runs pinned `clap-validator` 0.4.1, and runs bounded fuzzing.
+Current automated evidence includes:
 
-Current executable evidence includes:
-
-- current Linux `clap-validator`: 35 passed, 0 failed, 9 intentional skips;
-- five-second two-worker validator fuzz: clean;
+- Rust fmt, Linux workspace tests, strict Clippy, and Loom;
+- full workspace tests plus all-target/all-feature checks on macOS and Windows;
+- `cargo-deny` and `cargo-machete` policy gates;
+- packaged CLAP validation and five-second two-worker fuzzing on Linux, macOS, and Windows with pinned `clap-validator` 0.4.1;
+- validator result: 35 passed, 0 failed, 9 intentional skips;
 - f32/f64 exported sample-accurate `trim` DSP;
-- full CLAP adapter callback allocation/deallocation probe at the configured 64-event bound, stereo main + stereo sidechain, 1,000 f32 and 1,000 f64 callbacks: zero measured allocation/deallocation on the callback thread;
+- full CLAP adapter callback allocation/deallocation probe at the configured 64-event bound, stereo main + stereo sidechain, 1,000 f32 and 1,000 f64 callbacks: zero measured callback-thread allocation/deallocation;
 - CLAP minimum/maximum frame-count processing plus over-bound rejection;
-- product activation failure leaves the same CLAP instance inactive and reusable;
-- repeated inactive instance construction/destruction;
-- sample-rate/block-size reactivation and audio-thread transfer;
-- CLAP latency-change callback on activation;
+- result-based activation failure and panic-based activation failure both leave the same CLAP instance reusable;
+- process panic is caught at the Clack FFI boundary and appears to the host as processing failure;
+- repeated inactive instance construction/destruction, sample-rate/block-size reactivation, and audio-thread transfer;
+- plugin -> host -> plugin main-thread re-entry through parameter-rescan and latency-change callbacks;
 - deliberate delayed probe: reported 64-sample latency matches an impulse delayed by exactly 64 samples;
-- active CLAP state save during a paused audio callback returns the coherent pre-publication generation; after callback completion it returns both new automation endpoints.
+- active CLAP state save during processing linearizes to a coherent completed generation.
 
 The historical REAPER 7.79/macOS-arm64 baseline predates current observable behavior and remains regression history only.
 
-## Slice 1 — real-DAW qualification when available
+## Slice 1 — representative performance evidence
 
-This is externally blocked until a suitable DAW is available; do not stall code work on it.
+This is the remaining code-side Phase-2 measurement that can be performed without a DAW, but it requires stable representative hardware rather than a shared CI runner.
 
-When available, verify current head in a production host:
+Use:
+
+```text
+cargo bench -p chassis-clap --bench adapter_overhead
+```
+
+The harness exercises the actual in-process CLAP adapter with:
+
+- 32/64/128/512-frame blocks;
+- no-event and configured 64-event load;
+- f32 and f64;
+- stereo main + stereo sidechain;
+- trivial product DSP to expose adapter cost.
+
+Record CPU, OS/architecture, Rust version, release profile, sample rate, topology, event load, and benchmark output. Treat the result as a distribution/throughput measurement, not a universal constant. Optimize only if a material cost appears.
+
+## Slice 2 — real-DAW qualification when available
+
+This is externally blocked until a suitable production DAW is available.
+
+Verify current head in at least one real host:
 
 1. scan and instantiate;
 2. save/reopen state;
@@ -37,22 +58,7 @@ When available, verify current head in a production host:
 5. verify PDC/alignment with delayed DSP;
 6. exercise native f64 dispatch if the host can select it.
 
-The in-process host tests already cover the semantic contracts; this slice establishes production-host behavior.
-
-## Slice 2 — representative performance evidence
-
-The zero-allocation callback claim now has both core and full-adapter executable evidence. The remaining performance question is quantitative adapter overhead.
-
-Measure on stable representative hardware, not a shared CI runner:
-
-- adapter-only processing with trivial DSP;
-- representative block sizes such as 32/64/128/512;
-- no-event and maximum configured event load;
-- f32 and f64;
-- main-only and main + auxiliary/sidechain topology;
-- release build, fixed toolchain, recorded CPU/OS.
-
-Report distribution/throughput rather than one noisy timing. Do not optimize before measurements identify a material cost.
+The in-process host and three-platform validator matrix establish format semantics; this slice establishes production-host behavior.
 
 ## Slice 3 — first real FX client
 
