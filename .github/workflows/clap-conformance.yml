@@ -13,7 +13,7 @@ env:
   CLAP_VALIDATOR_REV: b2f1d9b79b1d264a5747f46707d72b1aa40a02ef
 
 jobs:
-  validate:
+  validate-linux:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -40,4 +40,85 @@ jobs:
         run: clap-validator validate target/release/chassis-clap-conformance.clap
 
       - name: Bounded CLAP fuzz
+        run: clap-validator fuzz -j2 -d5s target/release/chassis-clap-conformance.clap
+
+  validate-macos:
+    runs-on: macos-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust 1.98.0
+        run: rustup toolchain install 1.98.0 --profile minimal
+
+      - name: Build conformance plugin
+        run: cargo +1.98.0 build --release -p chassis-clap-conformance --locked
+
+      - name: Package macOS CLAP bundle
+        run: |
+          bundle=target/release/chassis-clap-conformance.clap
+          mkdir -p "$bundle/Contents/MacOS"
+          cp target/release/libchassis_clap_conformance.dylib "$bundle/Contents/MacOS/chassis-clap-conformance"
+          chmod +x "$bundle/Contents/MacOS/chassis-clap-conformance"
+          cat > "$bundle/Contents/Info.plist" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleDevelopmentRegion</key><string>en</string>
+            <key>CFBundleExecutable</key><string>chassis-clap-conformance</string>
+            <key>CFBundleIdentifier</key><string>org.nijaru.chassis.conformance</string>
+            <key>CFBundleName</key><string>Chassis CLAP Conformance</string>
+            <key>CFBundlePackageType</key><string>BNDL</string>
+            <key>CFBundleShortVersionString</key><string>0.0.0</string>
+            <key>CFBundleVersion</key><string>1</string>
+          </dict>
+          </plist>
+          PLIST
+
+      - name: Build pinned clap-validator
+        run: >-
+          cargo +1.98.0 install
+          --git https://github.com/free-audio/clap-validator
+          --rev "$CLAP_VALIDATOR_REV"
+          --locked
+          clap-validator
+
+      - name: Validate CLAP
+        run: clap-validator validate target/release/chassis-clap-conformance.clap
+
+      - name: Bounded CLAP fuzz
+        run: clap-validator fuzz -j2 -d5s target/release/chassis-clap-conformance.clap
+
+  validate-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust 1.98.0
+        run: rustup toolchain install 1.98.0 --profile minimal
+
+      - name: Build conformance plugin
+        run: cargo +1.98.0 build --release -p chassis-clap-conformance --locked
+
+      - name: Package Windows CLAP
+        shell: bash
+        run: cp target/release/chassis_clap_conformance.dll target/release/chassis-clap-conformance.clap
+
+      - name: Build pinned clap-validator
+        shell: bash
+        run: >-
+          cargo +1.98.0 install
+          --git https://github.com/free-audio/clap-validator
+          --rev "$CLAP_VALIDATOR_REV"
+          --locked
+          clap-validator
+
+      - name: Validate CLAP
+        shell: bash
+        run: clap-validator validate target/release/chassis-clap-conformance.clap
+
+      - name: Bounded CLAP fuzz
+        shell: bash
         run: clap-validator fuzz -j2 -d5s target/release/chassis-clap-conformance.clap
