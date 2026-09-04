@@ -20,7 +20,9 @@ use chassis_core::{
     runtime::{Component, LatencySamples, Process, Processor},
 };
 use clack_extensions::latency::{HostLatency, HostLatencyImpl, PluginLatency};
-use clack_host::{events::event_types::ParamValueEvent, factory::plugin::PluginFactory, prelude::*};
+use clack_host::{
+    events::event_types::ParamValueEvent, factory::plugin::PluginFactory, prelude::*,
+};
 
 const TRIM_CLAP_ID: u32 = 7;
 const MAX_PARAMETER_EVENTS: u32 = 64;
