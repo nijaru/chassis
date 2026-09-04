@@ -47,6 +47,22 @@ jobs:
       - name: Check all targets and features
         run: cargo +1.98.0 check --workspace --all-features --all-targets --locked
 
+  dependency-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Install Rust 1.98.0
+        run: rustup toolchain install 1.98.0 --profile minimal
+      - name: Install dependency policy tools
+        run: |
+          cargo +1.98.0 install cargo-deny --version 0.20.2 --locked
+          cargo +1.98.0 install cargo-machete --version 0.9.2 --locked
+      - name: Audit advisories, licenses, bans, and sources
+        run: cargo deny check
+      - name: Detect unused dependencies
+        run: cargo machete
+
   loom:
     runs-on: ubuntu-latest
     steps:
