@@ -127,7 +127,7 @@ fn clap_process_accepts_activation_frame_extremes_and_rejects_over_bound_blocks(
     let host_info = HostInfo::new("chassis-test", "", "", "").expect("host info is valid");
     let mut plugin = PluginInstance::<TestHostHandlers>::new(
         |()| TestHostShared,
-        |()| TestHostMainThread,
+        |_| TestHostMainThread,
         &entry,
         descriptor.id().expect("frame probe id is valid"),
         &host_info,
