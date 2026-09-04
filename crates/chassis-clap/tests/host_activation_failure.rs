@@ -75,7 +75,7 @@ fn failed_product_activation_leaves_clap_instance_reusable() {
     let host_info = HostInfo::new("chassis-test", "", "", "").expect("host info is valid");
     let mut plugin = PluginInstance::<TestHostHandlers>::new(
         |()| TestHostShared,
-        |()| TestHostMainThread,
+        |_| TestHostMainThread,
         &entry,
         descriptor.id().expect("activation probe id is valid"),
         &host_info,
