@@ -56,9 +56,10 @@ impl Component for ActivationPanicProbe {
         &self,
         _config: &ActivationConfig<'_>,
     ) -> Result<Self::Processor, Self::ActivationError> {
-        if self.panic_next_activation.swap(false, Ordering::Relaxed) {
-            panic!("intentional activation panic");
-        }
+        assert!(
+            !self.panic_next_activation.swap(false, Ordering::Relaxed),
+            "intentional activation panic"
+        );
         Ok(NoopProcessor)
     }
 }
