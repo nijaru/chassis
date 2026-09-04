@@ -13,10 +13,12 @@ InstanceRuntime<P>
   durable validated custom semantic state
   active/inactive lifecycle
   accepted active I/O configuration
+  activation-scoped LatencySamples
   optional active Processor
 
 Processor
   exclusive mutable realtime DSP history/resources while active
+  reports latency established by this activation
 
 Process<S>
   sample-representation-specific processing over borrowed ProcessBlock<S>
@@ -36,11 +38,24 @@ Each mutable semantic guarantee has one authority. A host/shared/editor represen
 3. copies accepted configured ports while non-realtime;
 4. constructs `ActivationConfig` from runtime-owned data;
 5. calls `Component::activate_with_state()` with the current complete semantic state;
-6. publishes the resulting processor as the active child only after success.
+6. reads `Processor::latency()` from the successfully constructed processor;
+7. publishes the processor, accepted configuration, and latency snapshot together as the active child.
 
 `Component::activate()`, `activate_with_parameters()`, and `activate_with_state()` are layered product hooks. Products override the narrowest one they need.
 
 The component definition is not stored inside `InstanceRuntime`. A deployment may therefore transfer the active runtime/processor according to its own thread contract without forcing `Component: Send` in core.
+
+Activation failure does not publish a partial active child. Executable negative-space coverage verifies a failed activation leaves the runtime inactive, preserves durable state, and permits a later successful activation.
+
+## Activation-scoped latency
+
+`LatencySamples` is a sample-count newtype. `Processor::latency()` defaults to zero and is queried once after successful processor construction.
+
+The runtime deliberately snapshots latency rather than querying mutable processor state during processing. This gives deployment adapters a stable value for one active lifetime and prevents host-visible latency from drifting without the lifecycle transition required by plugin formats.
+
+A processor whose lookahead, convolution, oversampling path, or other activation resource changes latency must establish the new value during the next activation. The CLAP adapter exposes the latency extension, updates its main-thread latency value after successful activation, and calls the host latency `changed` callback when that activation produces a different value.
+
+The current conformance processor reports zero. Nonzero PDC qualification must use DSP that actually delays output by the declared number of samples.
 
 ## Durable state
 
@@ -75,6 +90,8 @@ Persistent state is semantic, versioned data rather than Rust object layout or t
 
 Adapters prove host pointer/alias facts before safe channel views enter core. Setup owns stable endpoint-to-dense-slot translation. Callback code consumes those pre-resolved mappings without callback-owned channel vectors.
 
+`crates/chassis-core/tests/realtime_alloc.rs` provides a mechanical post-activation allocation/deallocation check on the callback test thread. That is core-path evidence; full adapter-path allocation/work and performance evidence remains separate.
+
 ## Parameter publication
 
 Persistent/authoring identity is `ParameterKey`; realtime identity is schema-local `ParameterIndex`.
@@ -97,11 +114,11 @@ State save uses the same publication authority:
 - it cannot accept a mixed cross-parameter generation;
 - a newer control/state generation defeats stale realtime completion.
 
-Local executable publication tests cover coherent completed snapshots, an in-progress multi-value write, and stale-generation rejection. Native active-save host qualification remains a separate Phase-2 gate.
+Local executable publication tests cover coherent completed snapshots, an in-progress multi-value write, stale-generation rejection, bounded realtime attempts, and terminal generation behavior. Native active-save host qualification remains a separate Phase-2 gate.
 
 ## Deactivation and teardown
 
-Deactivation removes and destroys active processor/resources only after the deployment contract has ended process/reset access. Durable semantic state remains for later activation; active I/O storage may be replaced on the next activation.
+Deactivation removes and destroys active processor/resources only after the deployment contract has ended process/reset access. Durable semantic state remains for later activation; active I/O and latency disappear with the active child and are recomputed on the next activation.
 
 Future background tasks, callbacks, editors, deferred reclamation, and module unload require explicit fencing/shutdown owners before they enter common runtime infrastructure.
 
@@ -110,14 +127,16 @@ Future background tasks, callbacks, editors, deferred reclamation, and module un
 - invalid parameter schema fails at runtime construction;
 - malformed structural I/O or component/runtime schema mismatch fails before product activation;
 - product activation error remains distinct from framework validation error;
+- failed activation publishes neither processor nor latency;
 - callback dimensions/events are validated before product DSP;
 - complete state replacement is failure-atomic;
 - no panic may unwind through a format FFI boundary.
 
 ## Remaining freeze gates
 
-- remove the temporary activation-local `Activated<P>` / free `runtime::activate()` compatibility surface after source cleanup;
-- finish semantic whole-I/O policy for products with multiple accepted layouts;
-- add mechanical realtime allocation/work-bound evidence;
+- decide final authoring ergonomics for constructing a runtime from a component as real clients accumulate;
+- finish semantic whole-I/O policy for products with multiple accepted layouts when a real client requires it;
+- extend mechanical realtime evidence through the full CLAP adapter and representative workloads;
 - qualify active save and automated rendered output through a real CLAP host;
-- let real FX clients determine any higher-level runtime conveniences.
+- qualify nonzero latency/PDC with actual delayed DSP;
+- let real FX clients determine higher-level runtime conveniences.

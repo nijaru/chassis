@@ -34,38 +34,37 @@ Use the repository's named stable toolchain. Review lockfile/dependency-source c
 
 ## Current evidence boundary
 
-The current parametered f64-capable CLAP artifact has recorded evidence on Apple Silicon macOS / Rust 1.98.0:
+Current Rust code checkpoint `081caccadaca8c8038efa53f1fbbb41695143321` is green for GitHub Actions fmt, workspace tests, strict Clippy, and Loom.
 
-- workspace fmt/test/strict Clippy/deny/machete/release build green at the qualified checkpoint;
-- every Clack package resolved to reviewed revision `c5975f9f89f0953b00768680357985d46178078a`;
+Since the last native CLAP qualification checkpoint, current head has changed observable behavior and lifecycle evidence:
+
+- exported `trim` now drives deterministic f32/f64 DSP sample by sample from base state plus automation events;
+- the temporary activation-local runtime path was removed in favor of `InstanceRuntime`;
+- scalar publication tests now cover coherent completed snapshots, in-progress multi-value writes, stale realtime publication, bounded realtime attempts, and generation exhaustion;
+- core activation failure is tested to leave the runtime inactive, preserve state, and remain reusable;
+- a callback-thread allocation detector covers repeated post-activation core processing;
+- core latency is activation-scoped and CLAP now projects the latency extension.
+
+The last recorded **native** baseline predates those changes:
+
 - `clap-validator` 0.4.1 (source commit `b2f1d9b79b1d264a5747f46707d72b1aa40a02ef`) reported **35 passed, 0 failed, 9 intentional skips**;
-- validator coverage includes f64 process-audio cases, parameter set/flush/sample-accurate/fuzz/conversion cases, and all state reproducibility cases;
+- validator coverage included f64 process-audio cases, parameter set/flush/sample-accurate/fuzz/conversion cases, and state reproducibility cases;
 - five-second two-worker validator fuzz completed without errors;
 - REAPER 7.79/macOS-arm64 scanned, instantiated, round-tripped the choice + float state chunk through a saved project, and rendered the component deterministically;
-- REAPER selected f32 processing for the current capability flags, so native host `data64` dispatch remains unexercised despite validator-qualified f64 processing.
+- REAPER selected f32 processing for the advertised capability set, so native host `data64` dispatch remained unexercised.
 
-The conformance artifact at that checkpoint used a process-inert parameter set with fixed 0.5 gain. The next qualification makes `trim` audibly control DSP so host automation can be checked against expected sample output.
-
-Bitwig is not installed in the current environment and is not part of current evidence.
+Treat those results as regression history, not qualification of current head. Current-head native qualification requires rebuilding the artifact and rerunning validator/fuzz/REAPER after the automation and latency changes.
 
 ## Core conformance
 
-`crates/chassis-core/tests/conformance.rs` is the external public-API proof for format-independent semantics.
+The format-independent proof is split by concern while exercising the same public runtime model:
 
-It should exercise through `InstanceRuntime`, not the temporary activation-local compatibility path:
+- `crates/chassis-core/tests/conformance.rs` covers schema rejection, lifecycle, safe buffer relationships, process bounds/context, base parameters, sample-accurate automation, invalid events, and generic non-flat buffer-source traversal through `InstanceRuntime`;
+- `crates/chassis-core/tests/lifecycle_negative.rs` covers product activation failure, state preservation, inactive post-failure state, and successful reuse;
+- `crates/chassis-core/tests/realtime_alloc.rs` checks repeated post-activation process calls for allocation/deallocation on the callback test thread;
+- `crates/chassis-core/tests/latency.rs` proves latency is absent while inactive, snapshotted on successful activation, stable during that active lifetime, removed on deactivation, and recomputed on reactivation.
 
-- construction/schema rejection;
-- activation/reset/deactivation;
-- separate and exact in-place buffers;
-- malformed I/O rejected before product activation;
-- frame-count bounds and legal zero-frame callbacks;
-- realtime/buffered/offline process context;
-- base parameter edits;
-- sample-accurate automation trajectories;
-- invalid events rejected before product DSP;
-- generic non-flat `ProcessBufferSource` traversal.
-
-Grow this same product contract as semantics are added; do not create a separate conceptual runtime for each adapter.
+Grow these public-contract tests as semantics are added; do not create a second conceptual runtime for adapters.
 
 ## CLAP conformance export
 
@@ -80,17 +79,21 @@ Current adapter surface includes:
 - render realtime/offline mode;
 - float/integer/boolean/choice parameter metadata and values;
 - bounded parameter-event normalization;
+- `trim` base state + sample-accurate automation driving exported f32/f64 samples;
 - generation-checked scalar publication;
 - bounded CHSS state save/load;
+- CLAP latency extension backed by activation-scoped runtime latency;
 - transport play/record/tempo snapshot.
 
-Next export evidence must make `trim` affect DSP and compare an automated host render against a deterministic reference trajectory.
+The conformance processor currently reports zero latency. This can qualify extension presence and zero-latency behavior, but it cannot establish nonzero PDC correctness. A nonzero latency test must delay audio by exactly the reported amount, either in a deliberate delayed conformance product or the first real lookahead client.
+
+Current native export evidence must be refreshed by rendering actual `trim` automation and comparing samples against the deterministic reference trajectory.
 
 ## Active state-save contract
 
 CLAP scalar state save is a non-realtime operation over the publication bridge.
 
-Required/target contract:
+Implemented contract:
 
 - audio processing never waits for state save;
 - save waits only as needed to obtain one coherent **completed** scalar generation;
@@ -99,33 +102,33 @@ Required/target contract:
 - newer control/state publication prevents stale realtime completion from overwriting it;
 - state load is transactional and requests host value rescan after publication.
 
-Add direct concurrency/unit evidence for this contract and then a reproducible active-save host scenario. Do not call active-save production-qualified until both exist.
+Direct executable publication tests cover the coherence and ordering rules, including an in-progress multi-value writer. Loom covers the atomic publication protocol. The remaining production gate is a reproducible real-host active-save-during-automation scenario, followed by equivalent cross-format evidence once VST3/AU exist.
 
 ## Realtime allocation/work checks
 
-The code is designed to avoid explicit process-time allocation: audio mapping/process slots, normalized-event storage, and control scratch are built before processing.
+A core integration test now mechanically checks repeated post-activation `InstanceRuntime::process` calls for allocation/deallocation on the callback test thread. The thread-local gate avoids counting unrelated Rust test-harness activity while still intercepting allocations made by that callback path.
 
-Design inspection is not allocation proof. Add instrumentation that fails when allocation/deallocation occurs after activation during representative process callbacks.
+That result is deliberately narrow. It does **not** prove the complete CLAP adapter path allocation-free or quantify its cost.
 
-Stress at least:
+Next stress/evidence should cover:
 
-- minimum/maximum/legal zero frame counts;
 - configured maximum parameter-event count;
-- main + auxiliary/sidechain mapped topology;
+- representative mapped main + auxiliary/sidechain topology;
+- minimum/maximum/legal zero frame counts;
 - f32 and f64 adapter paths where executable;
-- separate and in-place relationships.
+- allocation/deallocation across the adapter process path;
+- adapter-only overhead separate from product DSP.
 
-Measure adapter-only overhead separately from product DSP and record CPU/architecture, build mode, sample rate, block size, channel/layout, event count, and toolchain.
+Record CPU/architecture, build mode, sample rate, block size, channel/layout, event count, and toolchain for performance results.
 
 ## Lifecycle / negative space
 
-Keep executable coverage for:
+Core activation failure cleanup is executable and covered. Keep/extend deployment coverage for:
 
 - create/init/destroy without activation;
 - activate/start/process/stop/deactivate;
 - repeated activation/deactivation;
 - reset/reactivate;
-- activation failure cleanup;
 - sample-rate/block-size reactivation;
 - malformed host data at the lowest safe synthetic boundary available;
 - processor transfer between host audio threads without simultaneous mutation;
@@ -135,11 +138,30 @@ Keep executable coverage for:
 
 Every introduced resource needs a named final owner and testable cleanup path.
 
+## Latency / PDC evidence
+
+Core latency semantics are now explicit:
+
+- one processor establishes a `LatencySamples` value during activation;
+- `InstanceRuntime` snapshots that value for the active lifetime;
+- deactivation removes it and reactivation may compute another value;
+- CLAP exposes that snapshot through `PluginLatency` and calls the host latency-change hook when a new activation changes it.
+
+Current Rust tests establish those ownership/lifecycle facts. Production PDC evidence additionally requires:
+
+- a processor whose output is actually delayed by the declared count;
+- host observation of that latency;
+- alignment/differential evidence with compensation enabled;
+- restart/reactivation behavior if product configuration changes the required latency;
+- cross-format latency parity once VST3/AU exist.
+
+Do not use metadata-only nonzero latency as a conformance shortcut.
+
 ## State/adversarial tests
 
 Treat host state as untrusted bytes. Keep coverage for malformed/truncated/oversized input, invalid types/numerics, wrong product/schema, unknown parameters, migration chains, resource exhaustion, and failed loads leaving live state unchanged.
 
-Retain golden fixtures for every actually released schema. The current CHSS envelope remains pre-v1 until active-save and cross-format gates are complete.
+Retain golden fixtures for every actually released schema. The current CHSS envelope remains pre-v1 until active-host-save and cross-format gates are complete.
 
 ## Unsafe/FFI evidence
 
@@ -164,10 +186,10 @@ Current recorded matrix:
 
 | Host | Platform | Status | Evidence |
 | --- | --- | --- | --- |
-| REAPER 7.79 | macOS arm64 | pass for current checkpoint | scan, instantiate, parameter state round trip, deterministic f32 render; host chose f32 |
+| REAPER 7.79 | macOS arm64 | previous native baseline passed; current head requires refresh | scan, instantiate, parameter state round trip, deterministic f32 render; host chose f32 |
 | Bitwig | — | not run | not installed |
 
-Future VST3/AU coverage should include hosts that exercise save/reopen/automation and editor lifecycle, including Ableton Live and Logic where applicable.
+The current-head REAPER refresh should add an actual automated `trim` render and active-save-during-automation scenario. Future VST3/AU coverage should include hosts that exercise save/reopen/automation and editor lifecycle, including Ableton Live and Logic where applicable.
 
 ## Cross-format differential gate
 

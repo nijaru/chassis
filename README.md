@@ -8,7 +8,7 @@ Status: **private pre-alpha**. Public APIs and the CHSS persistence envelope are
 
 ## Current checkpoint
 
-Chassis is now in **Phase 2: native CLAP qualification**, with a small number of Phase-1 semantic consistency gates still open.
+Chassis is in **Phase 2: native CLAP qualification**. The core lifecycle/state model is established and the current Rust regression gate is green through activation-scoped latency and its CLAP projection.
 
 Implemented today:
 
@@ -17,15 +17,21 @@ Implemented today:
 - deterministic bounded state documents, adjacent migrations, transactional replacement, and adversarial decode coverage;
 - borrowed sample-accurate parameter events plus block-start transport context;
 - generic allocation-free `ProcessBufferSource<S>` traversal;
+- an executable post-activation core process allocation detector;
+- activation-failure recovery and reusable-runtime negative-space coverage;
+- activation-scoped `LatencySamples` captured from the active `Processor`;
 - mapped CLAP f32/f64 audio ports, including auxiliary/input-only/output-only/asymmetric cases supported by the current core layout model;
 - explicit stable CLAP audio/parameter IDs;
-- CLAP render/offline projection;
-- generation-checked scalar publication qualified under Loom;
+- exported `trim` automation that audibly drives deterministic f32/f64 DSP sample by sample;
+- CLAP render/offline and latency/PDC extension projection;
+- generation-checked scalar publication with direct concurrency tests and Loom evidence;
 - choice plain-value/name round trips and host value rescan after state load.
 
-The current exported conformance artifact passed `clap-validator` 0.4.1 with **35 passes, 0 failures, 9 intentional skips**, plus a five-second two-worker fuzz run. REAPER 7.79/macOS-arm64 scanned, instantiated, state-round-tripped both parameters, and rendered the artifact through a saved project; the fixed-gain f32 render was bit-identical to the expected differential. Native host `data64` dispatch remains unexercised because REAPER selected the advertised f32 path.
+The last recorded native conformance baseline predates the current automation/latency changes. That earlier artifact passed `clap-validator` 0.4.1 with **35 passes, 0 failures, 9 intentional skips**, plus a five-second two-worker fuzz run. REAPER 7.79/macOS-arm64 scanned, instantiated, round-tripped both parameters, and produced the expected deterministic f32 render. REAPER selected f32, so native host `data64` dispatch remained unexercised.
 
-The next checkpoint makes the exported `trim` parameter audibly drive DSP, qualifies active save during automation, instruments realtime allocation/work bounds, then starts the first real FX client.
+Those native results remain useful regression history, but they do **not** qualify current head after the audible automation and CLAP latency changes. The immediate checkpoint is to rebuild the current artifact and repeat validator/fuzz/REAPER qualification with an actual automation render and active-save scenario. Nonzero host PDC behavior will be qualified when a real delayed client or purpose-built delayed conformance case exercises it.
+
+After that, finish adapter work-bound/overhead evidence and start the first real FX client: a mastering limiter that pressures lookahead latency, offline behavior, smoothing, telemetry, state, and deterministic rendering.
 
 ## Architecture
 
@@ -39,6 +45,7 @@ InstanceRuntime<P>
   durable framework-owned parameter + semantic state
   active lifecycle coordination
   optional active Processor
+  activation-scoped latency snapshot
 
 Processor
   exclusive mutable realtime DSP history while active

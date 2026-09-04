@@ -19,7 +19,8 @@ Read `docs/architecture.md`, `docs/roadmap.md`, `docs/next-runtime-slice.md`, `d
 
 - `Component` is the immutable schema/capability/factory definition.
 - `InstanceRuntime<P>` is the durable format-independent authority for canonical parameter/custom semantic state and active lifecycle coordination.
-- `Processor` exclusively owns mutable realtime DSP history while active.
+- `Processor` exclusively owns mutable realtime DSP history while active and reports activation-established processing latency.
+- Active latency is snapshotted by `InstanceRuntime` for the lifetime of one activation; a changed latency requires reactivation/restart at the deployment boundary.
 - `MainThread`, `Shared`, editor, and host bridges expose deliberate orchestration/projections; they are not second authorities.
 - Deployment adapters add `Send`/thread-transfer constraints only where the host requires them.
 - Keep CLAP/VST3/AU/Clack/clap-wrapper/toolkit/platform types out of product-facing core APIs.
@@ -57,7 +58,7 @@ Do not automatically smooth explicit host ramps. Product smoothing policy stays 
 
 Separate language correctness, format conformance, realtime guarantees, lifecycle correctness, state/identity compatibility, performance, and production host support.
 
-GitHub Actions is a portable Rust regression signal only. It does not establish native plugin support.
+GitHub Actions is a portable Rust regression signal only. It does not establish native plugin support. Current native validator/REAPER evidence predates the latest audible-automation and CLAP-latency changes, so current head requires native requalification before those results can be promoted again.
 
 Baseline checks:
 
@@ -80,12 +81,12 @@ Clack is the current explicit git-source exception at revision `c5975f9f89f0953b
 ## Current priority
 
 1. Keep repository docs and agent instructions synchronized with the current Phase-2 checkpoint.
-2. Make the exported CLAP conformance `trim` parameter audibly drive DSP and requalify sample-accurate automation.
-3. Formalize/qualify active state-save consistency while automation publication is concurrent.
-4. Remove the temporary activation-local `Activated<P>` compatibility path after its remaining conformance callers migrate to `InstanceRuntime`.
-5. Add realtime allocation/work-bound instrumentation and lifecycle negative-space evidence.
-6. Start the first real FX client (mastering limiter) and let it drive latency, smoothing, telemetry, offline, and other reusable capabilities.
-7. Add modulation/gesture and other CLAP capabilities when required by that client; defer note/MIDI until an instrument/event client needs them.
-8. Then qualify VST3/AU projection and editor lifecycle through the same conformance product and differential tests.
+2. Rebuild and natively requalify current CLAP head: validator, bounded fuzz, REAPER scan/instantiate/state, an automated `trim` render against deterministic expected samples, and a reproducible active-save-during-automation scenario.
+3. Preserve the distinction between current zero-latency conformance coverage and actual nonzero PDC qualification; exercise nonzero latency with the first real delayed client or a deliberate delayed conformance case.
+4. Extend realtime evidence beyond the existing post-activation core allocation test: representative mapped adapter topology, maximum configured event load, frame-count extremes, and adapter-only overhead measurements.
+5. Close remaining deployment negative space that real hosts can expose, especially reentrant callbacks and repeated host lifecycle transitions; core activation-failure recovery is already covered.
+6. Start the first real FX client (mastering limiter) and let it pressure lookahead latency, activation-time resources, offline parity, smoothing, telemetry, state, and deterministic rendering.
+7. Add product-originated gesture/edit and other editor-facing CLAP capabilities when that client needs them; defer note/MIDI until an instrument/event client exists.
+8. Then qualify VST3/AU projection and editor lifecycle through the same product semantics and differential tests.
 
 Do not create empty crates or speculative framework abstractions merely to make the roadmap look complete.

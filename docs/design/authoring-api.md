@@ -1,6 +1,6 @@
 # Authoring API and Convention Model
 
-Status: explicit manual runtime/state/process APIs are implemented and still pre-alpha. `InstanceRuntime<P>` is the durable lifecycle/state authority; the activation-local `Activated<P>` compatibility path is temporary and should be removed after remaining callers migrate.
+Status: explicit manual runtime/state/process APIs are implemented and still pre-alpha. `InstanceRuntime<P>` is the sole durable lifecycle/state authority.
 
 ## Goal
 
@@ -26,10 +26,12 @@ InstanceRuntime<P>
   inactive/active lifecycle
   validated accepted audio configuration
   active Processor ownership
+  activation-scoped latency snapshot
 
 Processor
   exclusive active DSP/runtime-history owner
   reset
+  latency established by this activation
 
 Process<S>
   sample-representation-specific processing capability
@@ -46,6 +48,9 @@ runtime.activate(&component, process_config, audio_configuration)?;
 
 // control path
 runtime.parameters_mut().set("gain", ParameterValue::Float(0.5))?;
+
+// deployment may query the stable latency for this active lifetime
+let latency = runtime.active_latency();
 
 // realtime path supplied by the deployment/runtime
 runtime.process(frame_count, context, buffers)?;
@@ -66,14 +71,16 @@ Process<f64>
 
 Formats advertise only the capabilities the product actually implements and qualifies. Supporting f64 must not require a duplicate processor architecture.
 
+`Processor::latency()` belongs to the activation rather than the sample representation. Products with lookahead, convolution, oversampling, or another delayed path establish the resulting sample count when they construct the processor. Chassis snapshots it for that active lifetime; changing required latency means a new activation rather than mutating host-visible latency from the process callback.
+
 ## Default effect convention
 
 Without an explicit audio-port schema, ordinary effects use stable descriptors for:
 
 ```text
 audio.main.in
- audio.main.out
- audio.sidechain
+audio.main.out
+audio.sidechain
 ```
 
 The default active configuration is stereo main input/output with sidechain inactive. This is an authoring convention, not a core stereo assumption.
@@ -103,7 +110,15 @@ Processing distinguishes base state, host automation trajectory, and effective D
 
 State is a format-independent semantic document with explicit schema versioning and migrations. Normal loads are complete transactional replacements. Product custom fields remain typed semantic entries rather than arbitrary Rust-layout serialization.
 
-The active-save contract is one coherent completed publication generation. A save racing a process block may linearize before or after that block's endpoint publication, never across a mixed generation.
+The active-save contract is one coherent completed publication generation. A save racing a process block may linearize before or after that block's endpoint publication, never across a mixed generation. Local publication tests exercise that contract; real-host active-save qualification remains a deployment gate.
+
+## Latency and activation resources
+
+A product that needs lookahead or another delayed algorithm should allocate/precompute the relevant resources during activation and return the corresponding `LatencySamples` from its processor.
+
+The framework should not infer latency from buffer sizes or parameter names. The product owns the DSP fact; the runtime owns the stable activation snapshot; each deployment adapter projects it according to the format's lifecycle rules.
+
+The first mastering-limiter client should determine whether repeated lookahead/oversampling setup deserves higher-level authoring helpers. Do not create those helpers before real product code demonstrates the common shape.
 
 ## Smoothing and gestures
 
@@ -126,6 +141,7 @@ Convention-first authoring still needs explicit lower-level paths for:
 - raw timed events;
 - custom smoothing;
 - out-of-place/multibus DSP;
+- custom activation resources and latency;
 - custom state fields/migrations;
 - custom editor/window integration;
 - format-specific optional capabilities.
