@@ -20,11 +20,7 @@ use chassis_core::{
     runtime::{Component, LatencySamples, Process, Processor},
 };
 use clack_extensions::latency::{HostLatency, HostLatencyImpl, PluginLatency};
-use clack_host::{
-    events::event_types::ParamValueEvent,
-    factory::plugin::PluginFactory,
-    prelude::*,
-};
+use clack_host::{events::event_types::ParamValueEvent, factory::plugin::PluginFactory, prelude::*};
 
 const TRIM_CLAP_ID: u32 = 7;
 const MAX_PARAMETER_EVENTS: u32 = 64;
@@ -263,53 +259,17 @@ fn input_events() -> EventBuffer {
     events
 }
 
-#[test]
-fn full_adapter_process_path_is_allocation_free_at_event_bound_for_f32_and_f64() {
-    let entry = PluginEntry::load_from_clack::<SingleComponentEntryWithF64<ProbeComponent>>(c"")
-        .expect("static probe entry loads");
-    let descriptor = entry
-        .get_factory::<PluginFactory>()
-        .expect("plugin factory exists")
-        .plugin_descriptor(0)
-        .expect("probe descriptor exists");
-    let host_info = HostInfo::new("chassis-test", "", "", "").expect("host info is valid");
-    let latency_changes = Arc::new(AtomicU32::new(0));
-    let shared_changes = Arc::clone(&latency_changes);
-    let mut plugin = PluginInstance::<TestHostHandlers>::new(
-        move |_| TestHostShared {
-            latency_changes: shared_changes,
-        },
-        |shared| TestHostMainThread {
-            latency_changes: Arc::clone(&shared.latency_changes),
-        },
-        &entry,
-        descriptor.id().expect("probe id is valid"),
-        &host_info,
-    )
-    .expect("probe plugin instantiates");
-
-    let processor = plugin
-        .activate(
-            |_, _| TestHostAudioProcessor,
-            PluginAudioConfiguration {
-                sample_rate: 48_000.0,
-                min_frames_count: MAX_PARAMETER_EVENTS,
-                max_frames_count: MAX_PARAMETER_EVENTS,
-            },
-        )
-        .expect("probe activation succeeds");
-    assert_eq!(latency_changes.load(Ordering::Relaxed), 1);
-
-    let mut processor = processor.start_processing().expect("processing starts");
-    let events = input_events();
-    let mut output_events = EventBuffer::with_capacity(1);
-
+fn measure_f32_adapter_path(
+    processor: &mut StartedPluginAudioProcessor<TestHostHandlers>,
+    events: &EventBuffer,
+    output_events: &mut EventBuffer,
+) {
+    let mut main_inputs = [vec![1.0_f32; 64], vec![1.0_f32; 64]];
+    let mut sidechain_inputs = [vec![0.0_f32; 64], vec![0.0_f32; 64]];
+    let mut outputs = [vec![0.0_f32; 64], vec![0.0_f32; 64]];
+    let mut input_ports = AudioPorts::with_capacity(4, 2);
+    let mut output_ports = AudioPorts::with_capacity(2, 1);
     {
-        let mut main_inputs = [vec![1.0_f32; 64], vec![1.0_f32; 64]];
-        let mut sidechain_inputs = [vec![0.0_f32; 64], vec![0.0_f32; 64]];
-        let mut outputs = [vec![0.0_f32; 64], vec![0.0_f32; 64]];
-        let mut input_ports = AudioPorts::with_capacity(4, 2);
-        let mut output_ports = AudioPorts::with_capacity(2, 1);
         let input_audio = input_ports.with_input_buffers([
             AudioPortBuffer {
                 channels: AudioPortBufferType::f32_input_only(
@@ -330,7 +290,6 @@ fn full_adapter_process_path_is_allocation_free_at_event_bound_for_f32_and_f64()
             ),
             latency: 0,
         }]);
-
         processor
             .process(
                 &input_audio,
@@ -358,21 +317,30 @@ fn full_adapter_process_path_is_allocation_free_at_event_bound_for_f32_and_f64()
                 .expect("measured f32 callback succeeds");
         }
         COUNT_THIS_THREAD.with(|counting| counting.set(false));
-
-        assert_eq!(ALLOCATIONS.load(Ordering::Relaxed), 0);
-        assert_eq!(DEALLOCATIONS.load(Ordering::Relaxed), 0);
-        drop(output_audio);
-        for channel in &outputs {
-            assert!(channel.iter().all(|sample| *sample == 0.5));
-        }
     }
 
+    assert_eq!(ALLOCATIONS.load(Ordering::Relaxed), 0);
+    assert_eq!(DEALLOCATIONS.load(Ordering::Relaxed), 0);
+    for channel in &outputs {
+        assert!(
+            channel
+                .iter()
+                .all(|sample| (*sample - 0.5).abs() <= f32::EPSILON)
+        );
+    }
+}
+
+fn measure_f64_adapter_path(
+    processor: &mut StartedPluginAudioProcessor<TestHostHandlers>,
+    events: &EventBuffer,
+    output_events: &mut EventBuffer,
+) {
+    let mut main_inputs = [vec![1.0_f64; 64], vec![1.0_f64; 64]];
+    let mut sidechain_inputs = [vec![0.0_f64; 64], vec![0.0_f64; 64]];
+    let mut outputs = [vec![0.0_f64; 64], vec![0.0_f64; 64]];
+    let mut input_ports = AudioPorts::with_capacity(4, 2);
+    let mut output_ports = AudioPorts::with_capacity(2, 1);
     {
-        let mut main_inputs = [vec![1.0_f64; 64], vec![1.0_f64; 64]];
-        let mut sidechain_inputs = [vec![0.0_f64; 64], vec![0.0_f64; 64]];
-        let mut outputs = [vec![0.0_f64; 64], vec![0.0_f64; 64]];
-        let mut input_ports = AudioPorts::with_capacity(4, 2);
-        let mut output_ports = AudioPorts::with_capacity(2, 1);
         let input_audio = input_ports.with_input_buffers([
             AudioPortBuffer {
                 channels: AudioPortBufferType::f64_input_only(
@@ -393,7 +361,6 @@ fn full_adapter_process_path_is_allocation_free_at_event_bound_for_f32_and_f64()
             ),
             latency: 0,
         }]);
-
         processor
             .process(
                 &input_audio,
@@ -421,15 +388,61 @@ fn full_adapter_process_path_is_allocation_free_at_event_bound_for_f32_and_f64()
                 .expect("measured f64 callback succeeds");
         }
         COUNT_THIS_THREAD.with(|counting| counting.set(false));
-
-        assert_eq!(ALLOCATIONS.load(Ordering::Relaxed), 0);
-        assert_eq!(DEALLOCATIONS.load(Ordering::Relaxed), 0);
-        drop(output_audio);
-        for channel in &outputs {
-            assert!(channel.iter().all(|sample| *sample == 0.5));
-        }
     }
 
+    assert_eq!(ALLOCATIONS.load(Ordering::Relaxed), 0);
+    assert_eq!(DEALLOCATIONS.load(Ordering::Relaxed), 0);
+    for channel in &outputs {
+        assert!(
+            channel
+                .iter()
+                .all(|sample| (*sample - 0.5).abs() <= f64::EPSILON)
+        );
+    }
+}
+
+#[test]
+fn full_adapter_process_path_is_allocation_free_at_event_bound_for_f32_and_f64() {
+    let entry = PluginEntry::load_from_clack::<SingleComponentEntryWithF64<ProbeComponent>>(c"")
+        .expect("static probe entry loads");
+    let descriptor = entry
+        .get_factory::<PluginFactory>()
+        .expect("plugin factory exists")
+        .plugin_descriptor(0)
+        .expect("probe descriptor exists");
+    let host_info = HostInfo::new("chassis-test", "", "", "").expect("host info is valid");
+    let latency_changes = Arc::new(AtomicU32::new(0));
+    let shared_changes = Arc::clone(&latency_changes);
+    let mut plugin = PluginInstance::<TestHostHandlers>::new(
+        move |()| TestHostShared {
+            latency_changes: shared_changes,
+        },
+        |shared| TestHostMainThread {
+            latency_changes: Arc::clone(&shared.latency_changes),
+        },
+        &entry,
+        descriptor.id().expect("probe id is valid"),
+        &host_info,
+    )
+    .expect("probe plugin instantiates");
+
+    let processor = plugin
+        .activate(
+            |_, _| TestHostAudioProcessor,
+            PluginAudioConfiguration {
+                sample_rate: 48_000.0,
+                min_frames_count: MAX_PARAMETER_EVENTS,
+                max_frames_count: MAX_PARAMETER_EVENTS,
+            },
+        )
+        .expect("probe activation succeeds");
+    assert_eq!(latency_changes.load(Ordering::Relaxed), 1);
+
+    let mut processor = processor.start_processing().expect("processing starts");
+    let events = input_events();
+    let mut output_events = EventBuffer::with_capacity(1);
+    measure_f32_adapter_path(&mut processor, &events, &mut output_events);
+    measure_f64_adapter_path(&mut processor, &events, &mut output_events);
     plugin.deactivate(processor.stop_processing());
 }
 
@@ -446,7 +459,7 @@ fn latency_reactivation_and_audio_thread_transfer_follow_clap_lifecycle() {
     let latency_changes = Arc::new(AtomicU32::new(0));
     let shared_changes = Arc::clone(&latency_changes);
     let mut plugin = PluginInstance::<TestHostHandlers>::new(
-        move |_| TestHostShared {
+        move |()| TestHostShared {
             latency_changes: shared_changes,
         },
         |shared| TestHostMainThread {
@@ -520,7 +533,7 @@ fn repeated_instances_can_be_created_and_destroyed_without_activation() {
         let latency_changes = Arc::new(AtomicU32::new(0));
         let shared_changes = Arc::clone(&latency_changes);
         let plugin = PluginInstance::<TestHostHandlers>::new(
-            move |_| TestHostShared {
+            move |()| TestHostShared {
                 latency_changes: shared_changes,
             },
             |shared| TestHostMainThread {
