@@ -173,8 +173,7 @@ impl ScalarPublication {
 #[cfg(test)]
 mod tests {
     use std::sync::{
-        Arc,
-        Barrier,
+        Arc, Barrier,
         atomic::{AtomicBool, Ordering as AtomicOrdering},
     };
 
@@ -408,7 +407,8 @@ mod tests {
             .expect("control save obtains a coherent completed generation");
 
         assert_eq!(saved_generation, generation + 2);
-        assert_eq!(saved, [0.25, 4.0]);
+        assert_eq!(saved[0].to_bits(), 0.25_f64.to_bits());
+        assert_eq!(saved[1].to_bits(), 4.0_f64.to_bits());
     }
 
     #[test]
@@ -445,7 +445,8 @@ mod tests {
 
         let (generation, saved) = reader.join().expect("snapshot thread joins");
         assert_eq!(generation, completed);
-        assert_eq!(saved, [1.0, 1.0]);
+        assert_eq!(saved[0].to_bits(), 1.0_f64.to_bits());
+        assert_eq!(saved[1].to_bits(), 1.0_f64.to_bits());
     }
 
     #[test]
