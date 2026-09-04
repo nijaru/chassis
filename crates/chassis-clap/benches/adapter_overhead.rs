@@ -15,7 +15,9 @@ use chassis_core::{
     process::{ActivationConfig, ProcessBlock, ProcessBufferSource},
     runtime::{Component, Process, Processor},
 };
-use clack_host::{events::event_types::ParamValueEvent, factory::plugin::PluginFactory, prelude::*};
+use clack_host::{
+    events::event_types::ParamValueEvent, factory::plugin::PluginFactory, prelude::*,
+};
 
 const PARAMETER_ID: u32 = 23;
 const MAX_EVENTS: u32 = 64;
@@ -112,10 +114,9 @@ fn parameter_events(frame_count: u32, event_count: u32) -> EventBuffer {
     }
 
     for index in 0..event_count {
-        let offset = u32::try_from(
-            u64::from(index) * u64::from(frame_count) / u64::from(event_count),
-        )
-        .expect("benchmark event offset fits u32");
+        let offset =
+            u32::try_from(u64::from(index) * u64::from(frame_count) / u64::from(event_count))
+                .expect("benchmark event offset fits u32");
         let value = if index % 2 == 0 { 0.25 } else { 0.75 };
         events.push(&ParamValueEvent::new(
             offset,
@@ -287,10 +288,16 @@ fn main() {
             },
         )
         .expect("benchmark plugin activates");
-    let mut processor = processor.start_processing().expect("benchmark processing starts");
+    let mut processor = processor
+        .start_processing()
+        .expect("benchmark processing starts");
 
     println!("# chassis-clap adapter-only benchmark");
-    println!("# os={} arch={}", std::env::consts::OS, std::env::consts::ARCH);
+    println!(
+        "# os={} arch={}",
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    );
     println!("# run with repository toolchain and record CPU model + rustc -V alongside results");
     println!("precision,frames,events,median_ns,p95_ns,p99_ns,median_callbacks_per_second");
 
