@@ -1,5 +1,7 @@
 #![allow(unsafe_code)]
 
+//! Test-only heap instrumentation for the post-activation core process path.
+
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     convert::Infallible,
