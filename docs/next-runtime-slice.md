@@ -1,170 +1,132 @@
-# Runtime / CLAP Execution Plan
+# Current Execution Plan
 
-This is the current implementation order on `main`. It is an execution plan, not a stable API promise.
+This file tracks the next implementation order on `main`. It is not an API compatibility promise.
 
-## Validated checkpoint — `ad57f50`
+## Qualified checkpoint
 
-The local Rust qualification gate passed through `ad57f50`:
+The durable format-independent runtime owns parameter/custom semantic state through `InstanceRuntime<P>`. CLAP uses setup-built mapped audio slots, bounded parameter-event scratch, generation-checked scalar publication, optional f64 processing, render-mode projection, and explicit parameter/state identity.
 
-```text
-cargo fmt --all -- --check
-cargo test --workspace --locked
-cargo clippy --workspace --all-features --all-targets --locked -- -D warnings
-cargo build --release -p chassis-clap-conformance --locked
-```
+Current native evidence for the parametered conformance artifact:
 
-The earlier full gate through `62b96cc` also included `cargo deny check` and `cargo machete`; no dependencies changed in the CLAP-I/O slice after that checkpoint. `cargo deny` emitted only the existing unmatched-license-allowance warnings.
+- local Rust fmt/test/Clippy/deny/machete/release gate recorded green for the qualified checkpoint;
+- `clap-validator` 0.4.1: 35 passed, 0 failed, 9 intentional skips;
+- five-second two-worker validator fuzz: clean;
+- REAPER 7.79/macOS-arm64: scan, instantiate, two-parameter state round trip, deterministic f32 render through a saved project;
+- native `data64` host dispatch remains unexercised because REAPER selected f32 for the advertised capability set.
 
-The validated runtime now includes:
+Historical narrower validator counts are superseded by this checkpoint.
 
-- durable single-owner `InstanceRuntime<P>` lifecycle and owned accepted active I/O;
-- stable persistent parameter keys plus schema-local dense `ParameterIndex` identities for realtime work;
-- CLAP parameter bindings that retain dense indices and never re-resolve stable keys in the hot path;
-- adapter-local scalar publication qualified under Loom, including the fixed lossless `pending` handoff;
-- terminal publication generation exhaustion without ABA wraparound;
-- bounded decode of canonical CHSS semantic state;
-- adjacent typed product-schema migrations;
-- adversarial truncation/resource-bound/corruption coverage and a checked-in canonical v1 fixture;
-- complete transactional parameter replacement;
-- complete semantic instance state ownership: framework parameters and validated custom entries are accepted or rejected together;
-- product validation over the complete parameter/custom candidate before publication;
-- activation visibility of the accepted complete semantic state;
-- failure-atomic migrated byte loads and deterministic complete-state export;
-- explicit stable CLAP audio-port IDs rather than declaration-order identity;
-- setup-time audio mapping validation for declared ports/layouts, direction-local IDs, main-port placement, and reciprocal in-place pairing;
-- qualified stereo main I/O with zero or one stereo sidechain through that mapping;
-- input-only sidechain channels delivered to product DSP without callback allocation.
+## Slice 1 — repository truth and API cleanup
 
-The CLAP publication bridge remains adapter-local. Passing Loom demonstrates the current scalar protocol; it does not make that representation a deployment-independent core primitive.
+Do first because stale docs currently point agents at completed milestones.
 
-## Slice 1 — runtime ownership and dense identity
+- reconcile README, roadmap, AGENTS, validation, authoring, and open-question docs;
+- define GitHub Actions as portable Rust regression signal rather than production plugin qualification;
+- close obsolete validation-only PRs/branches when no longer useful;
+- migrate remaining conformance callers from activation-local `Activated<P>` to `InstanceRuntime`;
+- remove `Activated<P>` and the temporary free `runtime::activate()` compatibility path once no caller remains;
+- rename temporary adapter APIs when their names encode obsolete proof limitations.
 
-Completed and qualified.
+Exit: one lifecycle/state authority is visible in code and documentation.
 
-`InstanceRuntime<P>` is the durable format-independent owner. `Processor` exclusively owns mutable realtime DSP history while active. `ParameterKey` remains persistent/authoring identity while `ParameterIndex` is the dense schema-local realtime identity.
+## Slice 2 — audible exported automation
 
-The older activation-local `Activated<'a, P>` path remains only as a migration convenience and must not become a second persistent authority.
+The core conformance processor already proves sample-accurate float trajectories. The exported CLAP artifact must now prove the same semantics end-to-end.
 
-## Slice 2 — publication protocol qualification
+Implement:
 
-Completed and qualified.
+1. `trim` remains a float parameter in `[0, 1]` with default `0.5`;
+2. exported f32/f64 DSP reads the canonical base `trim` plus block automation trajectory;
+3. each main-channel sample is multiplied by the effective `trim` value at that sample offset;
+4. `mode` remains process-inert unless a later conformance case needs stepped DSP behavior;
+5. deterministic tests cover base trim and a multi-event trajectory for f32 and f64;
+6. re-run validator + a host render with actual automation and compare against the reference trajectory.
 
-Evidence covers:
+Exit: CLAP parameter events are proven to affect rendered samples at the intended offsets, not merely transport/state plumbing.
 
-1. exact-generation writer acquisition;
-2. coherent multi-value snapshots;
-3. stale realtime publication rejection;
-4. bounded realtime failure while another writer is active;
-5. terminal generation exhaustion;
-6. weak-memory Acquire/Release/AcqRel behavior under Loom;
-7. the `pending` Release → AcqRel handoff without lost notification.
+## Slice 3 — active state-save consistency
 
-Loom exposed a real race in the old `pending.swap(false, AcqRel)` consume: a consumer that did not observe a concurrent `true` could still overwrite it. Production and model now consume with `compare_exchange(true, false, AcqRel, Acquire)`, so an unsuccessful observation is read-only.
+Current scalar publication already prevents stale realtime completion from overwriting a newer control/state generation. Formalize state save on that mechanism.
 
-Typed non-scalar publication and reclamation remain separate problems and do not justify generalizing this CLAP-specific scalar helper into `chassis-core`.
+Contract:
 
-## Slice 3 — complete state + migrations
+- the audio thread never blocks for state save;
+- save serializes one coherent **completed** scalar publication generation;
+- if save races a process block, it may linearize immediately before or immediately after that block's endpoint publication, but never observe a mixed cross-parameter generation;
+- if save races a newer control edit/state load, generation ordering determines the winner and stale realtime publication is discarded;
+- state load remains transactional and requests host value rescan after publication.
 
-Completed and qualified through `62b96cc`.
+Add executable tests for:
 
-The accepted complete-state path is:
+- save after one automation block contains final automation endpoints;
+- save racing publication returns a coherent old-or-new generation, never mixed values;
+- a newer control/state publication wins over a stale realtime snapshot;
+- deactivate/reactivate synchronizes the saved current generation into the fresh runtime.
 
-```text
-bytes
- -> bounded decode
- -> adjacent product migration chain
- -> materialize complete current parameter/custom candidate
- -> validate framework parameter domain
- -> validate product parameter/custom invariants
- -> publish parameters + custom state together
-```
+Then qualify active save during automation in a real CLAP host where the host exposes a reproducible scenario.
 
-`InstanceRuntime` retains canonical non-`parameter/` `StateEntry` values beside `ParameterStore`. It does not persist arbitrary Rust product structs. `Component::activate_with_state` can inspect the accepted complete semantic state during preparation while defaulting back to the earlier parameter-only activation hook for compatibility.
+Exit: `docs/design/parameters-state.md` can state an implemented and tested active-save contract rather than a future requirement.
 
-Qualified state evidence includes:
+## Slice 4 — realtime evidence
 
-- unique adjacent migration chains and typed product migration failures;
-- legacy v1 migration fixture;
-- checked-in binary v1 fixture that decodes and re-encodes byte-identically;
-- deterministic semantic value encoding;
-- every proper truncation prefix rejected;
-- configured total/product-ID/entry/key/payload bounds;
-- extreme declared lengths rejected without backing payloads;
-- bounded single-byte corruption corpus with no parser panic;
-- repeated failed runtime loads leave live state unchanged;
-- parameter + custom state commit atomically;
-- product rejection leaves both parameter and custom state unchanged;
-- migrated byte loads publish both together;
-- complete state is visible to later activation and export.
+Add mechanical evidence for guarantees already designed into the path.
 
-CHSS envelope v1 is still **not frozen**. Remaining promotion evidence belongs with real adapters rather than more speculative core API:
+- allocation/deallocation detector around process after activation;
+- worst-case configured parameter-event count;
+- representative mapped main + sidechain/aux topology;
+- frame-count extremes including zero where legal;
+- adapter-only overhead benchmark separate from DSP;
+- document workload, block sizes, channel count, CPU/architecture, build mode, and toolchain.
 
-- sustained fuzz corpus/infrastructure beyond the deterministic adversarial corpus;
-- active save/load race qualification through the deployment consistency contract;
-- CLAP/VST3/AU cross-format round trips and partial-stream boundary tests;
-- golden fixtures for every actually released product schema.
+Do not turn this into speculative micro-optimization. The goal is to verify allocation/work claims and establish a baseline.
 
-## Slice 4 — general CLAP I/O
+## Slice 5 — lifecycle negative space
 
-The mapped stereo/sidechain step is completed and qualified through `ad57f50`.
+Close remaining deployment edge cases:
 
-Qualified setup/process behavior now provides:
+- activation failure cleanup;
+- create/init/destroy without activation;
+- repeated activate/deactivate and sample-rate/block-size changes;
+- processor movement between host audio threads without simultaneous mutation;
+- repeated instance creation/destruction;
+- reentrant host callbacks allowed by the pinned Clack model;
+- module unload once future callback/task services exist.
 
-1. explicit stable CLAP audio-port IDs supplied by product/deployment metadata;
-2. direction-local dense CLAP indices with main ports placed at index 0;
-3. setup-time validation of arbitrary declared Chassis ports/layouts;
-4. unique CLAP IDs within each direction;
-5. reciprocal opposite-direction equal-width in-place pairing;
-6. runtime activation from the mapped `AudioIoConfiguration` rather than a hard-coded default;
-7. stereo main input/output processing with zero or one stereo input-only sidechain;
-8. unsupported process topologies rejected during activation instead of reaching partial DSP code.
+Bitwig is useful additional reentrancy coverage when available.
 
-The generic representation is now implemented: `ProcessBlock` and `InstanceRuntime` accept a borrowed `ProcessBufferSource<S>`, while the existing slice source remains available. The CLAP adapter traverses `PortPairsIter`/`PairedChannelsIter` lazily with setup-retained semantic endpoints and validates dimensions, relationships, and sample representation before product DSP. It supports the mapped f32 path and optional f64 path without callback-owned channel collections.
+## Slice 6 — first real FX client: mastering limiter
 
-Required invariant: no callback-time owned `Vec<ChannelBuffer>` allocation.
+Start the real client before implementing broad note/MIDI or generic background infrastructure.
 
-## Slice 5 — native CLAP qualification
+Initial limiter integration should force concrete answers for:
 
-The current Rust semantics and general I/O are coherent enough to rebuild/package the conformance `.clap` and qualify the **current** artifact:
+- latency and lookahead declaration;
+- offline/realtime parity;
+- activation-time buffers/oversampling preparation;
+- automation and smoothing policy;
+- meter/telemetry publication;
+- state/preset behavior;
+- deterministic host renders.
 
-- `clap-validator` normal suite and bounded fuzzing;
-- audio-port enumeration, stable IDs, main/sidechain metadata, and in-place pairing;
-- parameter enumeration/get/value conversion;
-- parameter automation through process and flush paths;
-- state save/load round trip while inactive;
-- active state save while automation is running;
-- state load followed by processing;
-- repeated deactivate/reactivate preserving host-visible state;
-- lifecycle/repeated-instance stress;
-- REAPER render, automation, sidechain, save/load and reopen smoke tests;
-- Bitwig when available because it exercises relevant CLAP/reentrancy behavior.
+Framework helpers graduate only when the limiter or subsequent EQ/dynamics clients prove common semantics.
 
-Executed against the current parametered f64-capable artifact (one `choice`, one `float`; DSP fixed 0.5 gain regardless of values):
+## Slice 7 — capability expansion driven by clients
 
-- `clap-validator` 0.4.1 normal suite: 35 passes, 0 failures, 9 intentional skips (preset-discovery/note-events not advertised); both double-precision process-audio cases, the full parameter set/flush/sample-accurate/modulation-fuzz/conversion matrix, and all three state-reproducibility cases pass;
-- five-second, two-worker validator fuzz: no errors;
-- REAPER 7.79/macOS-arm64 headless `-renderproject` requalification: scan, instantiate, two-parameter state-chunk round trip through a saved project (`parameter/mode` = `Choice("clean")`, `parameter/trim` = `Float(0.5)`), and render; the f32 FX render is bit-identical to 0.5× the bypassed render, and a 2e-38 subnormal probe plus a bit-identical `f32(0.5×source)` comparison confirms f32 dispatch — expected, since the artifact advertises `SUPPORTS_64BITS` without `PREFERS_64BITS`; native `data64` dispatch remains unexercised by the available host matrix;
-- earlier narrow-artifact (19 passes/25 skips) and parameterless-f64 (23 passes/21 skips) evidence remains superseded by the above;
-- REAPER in this environment is unlicensed (interactive launches show an evaluation nag); all evidence above was gathered through batch `-renderproject` runs, which complete without interaction.
+Likely limiter-era CLAP work:
 
-Still open for this slice: audible automation response through a real host (the conformance parameters are process-inert by design), active-state save during automation, and Bitwig reentrancy coverage when that host is available. Do not treat older artifacts as evidence for current code.
+1. latency metadata/change behavior;
+2. product-originated gesture/edit path needed by the editor;
+3. meter/telemetry transport;
+4. tail/status only if product semantics require them.
 
-## Slice 6 — CLAP capability expansion
+Defer note/MIDI/event ports until an instrument or event processor becomes a real client.
 
-Executed: choice parameter projection (dense option-index plain values, option-name/value round trips, host value rescan after state load; validator conversion + state-reproducibility matrices pass natively). Remaining, in order:
+## Slice 8 — VST3/AU and editor
 
-1. modulation and product-originated gesture output;
-2. note/MIDI/event ports;
-3. latency/tail/status metadata as required by real clients.
+After native CLAP + limiter evidence is coherent:
 
-Each capability needs conformance plus native-host evidence rather than source support alone.
-
-## Slice 7 — first real FX client
-
-Use a real effect before growing generic conveniences much further. It should exercise many parameters, complete semantic state, general I/O where useful, latency/offline behavior, explicit smoothing policy, and meter/telemetry publication without sharing mutable processor state.
-
-Only repeated product needs graduate into framework helpers.
-
-## After native CLAP
-
-Proceed to VST3/AU projection and editor integration after the same conformance product has qualified CLAP state, automation, lifecycle, and general I/O. Cross-format differential tests then become the compatibility gate.
+- qualify a pinned/reviewed `clap-wrapper` revision/release;
+- run VST3/AU native validators and real-host matrices;
+- add cross-format differential state/audio/automation tests;
+- prove editor attach/detach, resize/scaling, recreation, parameter gestures, and telemetry;
+- then add production packaging/signing/notarization.

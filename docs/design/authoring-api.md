@@ -1,29 +1,31 @@
 # Authoring API and Convention Model
 
-Status: first explicit manual runtime slice implemented; syntax and higher-level conveniences remain pre-alpha.
+Status: explicit manual runtime/state/process APIs are implemented and still pre-alpha. `InstanceRuntime<P>` is the durable lifecycle/state authority; the activation-local `Activated<P>` compatibility path is temporary and should be removed after remaining callers migrate.
 
 ## Goal
 
-A normal Chassis product should mostly contain:
+A normal product should mostly contain:
 
 - parameter declarations;
 - DSP state/processing;
 - optional custom persistent state;
 - optional editor code.
 
-It should not repeatedly implement format metadata, host parameter plumbing, state stream glue, bus enumeration, automation queues, native editor attachment, or per-format packaging scripts.
+Chassis should own repeated format plumbing, state stream glue, host parameter projection, common lifecycle integration, validation, and packaging support without hiding realtime costs or compatibility identity.
 
-Convention removes mechanical work without hiding realtime timing, copies, allocation, state authority, or compatibility identity.
-
-## Explicit layer first
-
-Chassis now has the first executable manual lifecycle/process layer in `chassis-core`:
+## Current explicit model
 
 ```text
 Component
-  immutable definition/factory
-  default effect audio-port schema
-  activate -> Processor
+  immutable product schema/capabilities/factory
+  default effect audio-port descriptors
+  activate_with_state(...) -> Processor
+
+InstanceRuntime<P>
+  durable ParameterStore + custom semantic state
+  inactive/active lifecycle
+  validated accepted audio configuration
+  active Processor ownership
 
 Processor
   exclusive active DSP/runtime-history owner
@@ -31,222 +33,109 @@ Processor
 
 Process<S>
   sample-representation-specific processing capability
-  process(ProcessBlock<S>) with context/automation
-
-Activated<P>
-  immutable activation config + exclusive Processor
-  canonical base ParameterStore
-  validated block context and automation boundary
-  reset / process / consuming deactivate
+  process(ProcessBlock<S>)
 ```
 
-This is intentionally smaller than the eventual ergonomic API. It proves ownership,
-buffer, typed-parameter, bounded-state, process-context, and automation semantics
-before host translation, proc macros, GUI bindings, or adapters make the surface
-harder to change.
+The useful contract is the ownership split, not the current trait spelling.
 
-Do not add proc macros until the conformance component and first CLAP adapter show which declarations are genuinely repetitive.
-
-## Current explicit effect
-
-The current external API is approximately:
+A format-independent client currently follows this shape:
 
 ```rust,ignore
-struct MyEffect;
+let mut runtime = InstanceRuntime::new(component.parameter_descriptors())?;
+runtime.activate(&component, process_config, audio_configuration)?;
 
-impl chassis_core::runtime::Component for MyEffect {
-    type Processor = MyProcessor;
-    type ActivationError = MyActivateError;
+// control path
+runtime.parameters_mut().set("gain", ParameterValue::Float(0.5))?;
 
-    // Omit audio_ports() to use the standard effect descriptors.
+// realtime path supplied by the deployment/runtime
+runtime.process(frame_count, context, buffers)?;
 
-    fn activate(
-        &self,
-        config: &chassis_core::process::ActivationConfig<'_>,
-    ) -> Result<Self::Processor, Self::ActivationError> {
-        MyProcessor::new(config)
-    }
-}
-
-struct MyProcessor {
-    // Product DSP/runtime history only.
-}
-
-impl chassis_core::runtime::Processor for MyProcessor {
-    fn reset(&mut self) {
-        // Reset transient DSP history if needed.
-    }
-}
-
-impl chassis_core::runtime::Process<f32> for MyProcessor {
-    fn process(
-        &mut self,
-        block: &mut chassis_core::process::ProcessBlock<'_, '_, '_, '_, f32>,
-    ) {
-        for channel in block.buffers_mut() {
-            // Use exact in-place storage directly, or explicitly copy a
-            // separate input/output pair with make_in_place().
-            process(channel);
-        }
-    }
-}
+runtime.deactivate()?;
 ```
 
-The framework calls `runtime::activate()` after structural audio-I/O validation and returns an `Activated<MyProcessor>`. Product code does not construct `ActivationConfig` or `ProcessBlock` directly.
-
-This spelling is not a compatibility promise. The useful constraints are the ownership split and absence of hidden realtime work.
+Product code normally implements `Component`, `Processor`, and one or more `Process<S>` capabilities. Deployment code constructs `ProcessContext`/buffer views from the host or device boundary.
 
 ## Why `Processor` and `Process<S>` are separate
 
-Do not hard-code one host sample precision into processor ownership.
-
-A processor has one lifecycle/DSP-history object and may implement:
+One processor owns one DSP-history lifecycle and may support multiple sample representations:
 
 ```text
 Process<f32>
 Process<f64>
 ```
 
-as supported. The conformance effect and CLAP adapter now exercise both precisions through the explicit f64 capability marker; other adapters may advertise only the precisions they implement.
-
-This is preferable to duplicating the whole processor architecture merely to support double precision.
+Formats advertise only the capabilities the product actually implements and qualifies. Supporting f64 must not require a duplicate processor architecture.
 
 ## Default effect convention
 
-With no explicit audio-port declaration, `Component::audio_ports()` returns stable conventional descriptors:
+Without an explicit audio-port schema, ordinary effects use stable descriptors for:
 
 ```text
-audio.main.in   required input
-audio.main.out  required output
-audio.sidechain optional input
+audio.main.in
+ audio.main.out
+ audio.sidechain
 ```
 
-The current default active configuration remains stereo main input/output with sidechain inactive.
+The default active configuration is stereo main input/output with sidechain inactive. This is an authoring convention, not a core stereo assumption.
 
-Important: the explicit runtime currently validates **structural port presence/identity**, not the final whole-layout policy. The default descriptors are not permission to accept every representable channel layout. A dedicated semantic I/O-policy layer must be proven before API freeze.
+Whole-layout semantic policy remains explicit for products that accept multiple configurations.
 
-Inactive optional ports add no process-time buffer work.
+## Buffers
 
-## Buffer ergonomics
+`ChannelBuffer<S>` preserves already-validated host relationships:
 
-`ChannelBuffer<S>` exposes already-proven safe relationships:
-
-- exact in-place input/output with one mutable slice;
-- disjoint input/output slices;
+- exact in-place;
+- separate input/output;
 - input-only;
 - output-only.
 
-Each side carries a stable port/channel endpoint.
+`ProcessBufferSource<S>` lets adapters expose arbitrary mapped channels lazily without constructing callback-owned channel vectors.
 
-`make_in_place()` is an explicit convenience: exact in-place is zero-copy; separate input/output performs one bounded copy to output. Products with out-of-place algorithms can use `input()` and `output_mut()` directly.
+`make_in_place()` may perform a bounded input->output copy for separate buffers. Keep it unless representative measurement justifies a more complex ownership path.
 
-No process convenience allocates.
+Higher-level bus/port helpers should emerge from real DSP clients rather than speculative convenience APIs.
 
-Higher-level port/bus lookup helpers should be added only after representative DSP call sites show which views are actually useful. Avoid per-callback maps or other convenience structures that create hidden work.
+## Parameters and state
 
-## Parameters are not fake fields on Processor
+Persistent identity uses stable parameter keys. Dense `ParameterIndex` values are schema-local realtime projections and are never serialized.
 
-The current explicit runtime slice accepts an immutable schema through
-`Component::parameter_descriptors()`. Activation validates and owns a
-`ParameterStore` containing the current base/control values; `ProcessBlock`
-borrows that store for DSP observation. The store supports validated edits,
-defaults, and parameter entries in the bounded state document.
+Processing distinguishes base state, host automation trajectory, and effective DSP value. `ProcessBlock` exposes the canonical base store plus borrowed events; processors derive effective values without creating another persistent authority.
 
-Compatibility-relevant declarations remain explicit:
+State is a format-independent semantic document with explicit schema versioning and migrations. Normal loads are complete transactional replacements. Product custom fields remain typed semantic entries rather than arbitrary Rust-layout serialization.
 
-- stable canonical string key;
-- value type/domain;
-- plain-unit range/default;
-- mapping/distribution where needed;
-- display/parse/unit behavior;
-- automation/modulation capabilities;
-- optional product smoothing policy.
+The active-save contract is one coherent completed publication generation. A save racing a process block may linearize before or after that block's endpoint publication, never across a mixed generation.
 
-Rust field names and display labels are not persistent identity. The current
-store is deliberately a control/non-realtime authority. Process-time events are
-validated against that schema and exposed as borrowed sets/linear trajectories;
-host gesture translation and automation-to-base publication remain follow-up
-contracts. The processor observes framework-owned base state through each
-`ProcessBlock` plus current process events, not a second persistent store.
+## Smoothing and gestures
 
-Nested/repeated groups should compose stable key prefixes. Repeated instances should use stable named identities when reordering may occur; raw array index is acceptable only when reordering is explicitly a compatibility break.
+Explicit host ramps are reproduced without automatic extra smoothing. Smoothing is product DSP policy unless a later framework helper proves reusable semantics.
 
-## Main-thread / shared defaults
+Product/editor-originated parameter edits eventually use typed begin/change/end gesture handles with host notification and echo-suppression behavior. They must not expose unrestricted mutable processor access.
 
-Most effects should need no product-specific non-RT runtime object:
+## GUI
 
-```text
-MainThread = ()
-Shared = ()
-```
+Chassis owns editor lifecycle/host attachment and parameter/telemetry integration, not visual design.
 
-Framework-owned canonical parameter/state/lifecycle machinery will still exist internally; `()` only means the **product** has no additional state in those domains.
-
-When custom shared state exists, it is a synchronized projection/snapshot with one named owner—not general shared mutability.
-
-## Custom persistent state
-
-Most user-visible state should be parameters. Extra persistent fields use stable keys and a deliberately supported Chassis value/codec contract.
-
-`Serialize` on an arbitrary Rust struct is not by itself a long-term plugin-state contract.
-
-## GUI convention
-
-A component can eventually have no editor, a generic debug editor, or a product editor factory.
-
-A GUI adapter should bind typed parameter handles that provide current display/base value observation, begin/change/end gestures, host notification, formatting/parsing, and accessibility metadata where supported.
-
-Chassis owns editor lifecycle/host attachment; the product/toolkit owns appearance and interaction design.
-
-## Standalone / instrument convention
-
-The same component lifecycle/state/processor model applies outside a plugin host.
-
-An instrument changes capabilities/I/O, not the framework architecture:
-
-```text
-note/event input
-no audio input
-stereo or multi-bus audio output
-```
-
-The current `Component::audio_ports()` default is merely the effect convenience; instruments override it and future event capabilities without replacing `Processor`/`Process<S>`.
+A future generic/debug editor may be framework-provided. Production toolkit adapters remain optional; headless products do not depend on them.
 
 ## Escape hatches
 
-A convention-first framework needs deliberate lower-level paths for:
+Convention-first authoring still needs explicit lower-level paths for:
 
 - custom I/O policy;
-- manual parameter schema;
-- explicit legacy/backend ID overrides;
-- raw timed parameter/events;
+- manual parameter schema and backend/legacy ID overrides;
+- raw timed events;
 - custom smoothing;
-- out-of-place/multi-bus buffer processing;
-- custom state field codec/migrations;
+- out-of-place/multibus DSP;
+- custom state fields/migrations;
 - custom editor/window integration;
-- format-specific optional capabilities through adapter extension APIs.
+- format-specific optional capabilities.
 
-Escape hatches do not relax memory safety, realtime, or stable-identity invariants.
+Escape hatches do not relax memory safety, realtime, state-authority, or identity invariants.
 
-## `cargo-chassis`
+## Tooling direction
 
-Build tooling should eventually own workspace/product discovery, export builds, local install, identity manifests, validators, packaging, signing, and notarization.
-
-Likely UX:
-
-```text
-cargo chassis new
-cargo chassis build
-cargo chassis install
-cargo chassis validate
-cargo chassis package
-cargo chassis identity
-```
-
-Build/release behavior belongs in tooling, not runtime proc macros.
+Build/release tooling should eventually own product discovery, export builds, local install, validators, identity manifests, packaging, signing, and notarization. Keep those concerns out of runtime proc macros.
 
 ## Promotion rule
 
-The integration conformance component now uses the explicit public API directly. Continue to grow that path before introducing derives/builders.
-
-A macro earns its place only when it removes repeated mechanical declarations without concealing timing, allocation, ownership, or compatibility behavior an author needs to debug.
+Do not add derives/builders/macros until the conformance export and real FX clients show stable repeated declarations. A convenience earns promotion only when it removes mechanical work without hiding timing, allocation, ownership, or compatibility behavior an author needs to reason about.

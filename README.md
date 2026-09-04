@@ -1,131 +1,102 @@
 # Chassis
 
-Chassis is a convention-first Rust framework for professional realtime audio software.
+Chassis is a convention-first Rust framework for professional realtime audio components.
 
-The first production surface is audio plugins, beginning with effects. The core component model is intentionally usable for instruments, standalone applications, and embedded processors without rewriting product DSP/state. Optional hosting/device/graph layers may later support larger audio applications without making DAW/project semantics part of Chassis core.
+The first production clients are audio effects. The format-independent core is deliberately compatible with instruments, standalone deployment, and embedded processing without making any one plugin format, GUI toolkit, or host part of the product-facing model.
 
-Status: **private pre-alpha design and implementation**. Nothing in `chassis-core` or `chassis-clap` is a stable public API yet.
+Status: **private pre-alpha**. Public APIs and the CHSS persistence envelope are not frozen.
 
-## Direction
+## Current checkpoint
 
-Chassis aims to make the normal professional-plugin path mostly product code while preserving explicit ownership, realtime, and compatibility semantics.
+Chassis is now in **Phase 2: native CLAP qualification**, with a small number of Phase-1 semantic consistency gates still open.
 
-Current principles:
+Implemented today:
 
-- convention over configuration with lower-level escape hatches;
-- one authority for each mutable state/lifecycle guarantee;
-- exclusive mutable realtime `Processor` state while active;
-- strict allocation/blocking/work rules on deterministic realtime paths, not the whole codebase;
-- stable human-readable product/parameter/port identities separated from backend IDs/runtime indices;
-- stereo main I/O + optional inactive stereo sidechain as the default effect convention, not a core limitation;
-- whole-component I/O negotiation with room for instruments, multiple buses, surround, ambisonics, and immersive channel beds;
-- format-independent persistent state and automation semantics;
-- no hidden requirement for a particular GUI toolkit;
-- evidence-driven adapters and performance work rather than assuming a framework/backend is correct because it builds.
+- durable `InstanceRuntime<P>` ownership of canonical parameter and custom semantic state;
+- typed float/integer/boolean/choice parameters with stable persistent keys and dense realtime indices;
+- deterministic bounded state documents, adjacent migrations, transactional replacement, and adversarial decode coverage;
+- borrowed sample-accurate parameter events plus block-start transport context;
+- generic allocation-free `ProcessBufferSource<S>` traversal;
+- mapped CLAP f32/f64 audio ports, including auxiliary/input-only/output-only/asymmetric cases supported by the current core layout model;
+- explicit stable CLAP audio/parameter IDs;
+- CLAP render/offline projection;
+- generation-checked scalar publication qualified under Loom;
+- choice plain-value/name round trips and host value rescan after state load.
 
-Target desktop platforms are macOS, Windows, and Linux where each export format applies. Initial format work is CLAP first, then VST3 and Audio Unit. AAX is later/conditional because it also carries Avid/PACE licensing and distribution requirements.
+The current exported conformance artifact passed `clap-validator` 0.4.1 with **35 passes, 0 failures, 9 intentional skips**, plus a five-second two-worker fuzz run. REAPER 7.79/macOS-arm64 scanned, instantiated, state-round-tripped both parameters, and rendered the artifact through a saved project; the fixed-gain f32 render was bit-identical to the expected differential. Native host `data64` dispatch remains unexercised because REAPER selected the advertised f32 path.
+
+The next checkpoint makes the exported `trim` parameter audibly drive DSP, qualifies active save during automation, instruments realtime allocation/work bounds, then starts the first real FX client.
+
+## Architecture
+
+The ownership model is:
+
+```text
+Component
+  immutable product schema/capabilities/factory
+
+InstanceRuntime<P>
+  durable framework-owned parameter + semantic state
+  active lifecycle coordination
+  optional active Processor
+
+Processor
+  exclusive mutable realtime DSP history while active
+
+MainThread / Shared / Editor
+  optional non-realtime orchestration and synchronized projections
+```
+
+Stable product/parameter/port identities are independent from Rust names, display labels, declaration order, runtime dense indices, and backend IDs.
+
+Realtime rules apply to deterministic callbacks, not the whole program: no allocation/deallocation after activation, no blocking I/O, no contended/unbounded locks, and explicit work/resource bounds. Controlled copies are allowed when they simplify ownership and measurement does not justify more complexity.
+
+## Workspace
+
+```text
+crates/
+  chassis-core/     format-independent lifecycle, buffers, params, automation, state
+  chassis-clap/     CLAP projection through the reviewed Clack revision
+examples/
+  clap-conformance/ deterministic exported qualification component
+```
+
+`chassis-core` forbids unsafe code. `chassis-clap` currently owns no Chassis unsafe block; Clack provides the ABI and safe channel views.
 
 ## Backend strategy
 
-The first adapter uses Clack at the low-level CLAP boundary, pinned to exact revision `c5975f9f89f0953b00768680357985d46178078a`.
+The CLAP adapter uses Clack pinned to exact revision `c5975f9f89f0953b00768680357985d46178078a`. The pin is a deliberate safety exception while the published Clack release does not contain the required reentrancy fix. A future safety-fixed crates.io release can replace the git pin only after audit and conformance requalification.
 
-This git pin is an intentional safety exception. The latest published Clack release available during the adapter audit, 0.1.1, has an acknowledged plugin-side reentrancy UB bug affecting real hosts including Bitwig and `clap-wrapper`. The pinned revision contains the subsequent reentrancy fix and later hardening. Chassis prefers returning to a normal crates.io release once a suitable safety-fixed release is published and qualified.
+VST3/AUv2/AUv3 should initially project through `clap-wrapper`, but wrapper output earns support only through Chassis differential tests, native validators, and real-host qualification. Native format adapters are justified only by concrete semantic or maintenance limitations.
 
-[clap-wrapper](https://github.com/free-audio/clap-wrapper) remains the preferred initial route to VST3/AUv2/AUv3 once the native CLAP semantic path is qualified.
+## Validation
 
-Clack/CLAP types remain outside `chassis-core`. The initial `chassis-clap` code uses Clack's safe audio API and owns no raw CLAP pointer dereference itself. Backend qualification still requires local build/test, dependency-source review, CLAP validation, lifecycle stress, and real-host testing.
+GitHub Actions is a **portable Rust regression signal**, not the authority for plugin production qualification. Native validators, host renders, fuzz/stress, packaging, realtime measurements, and platform-specific evidence remain local/native gates.
 
-See [the pinned Clack adapter audit](docs/research/clack-pinned-adapter-audit.md).
-
-## Default effect convention
-
-An ordinary effect that does not specify custom I/O conceptually gets:
+Baseline Rust checks:
 
 ```text
-audio.main.in    stereo required
-audio.main.out   stereo required
-audio.sidechain  stereo optional/inactive
+cargo fmt --all -- --check
+cargo test --workspace --locked
+cargo clippy --workspace --all-features --all-targets --locked -- -D warnings
+cargo deny check
+cargo machete
 ```
 
-Unused optional facilities should not impose process-time work.
-
-The first CLAP proof intentionally exports only the required stereo main pair. Sidechain/multibus/configurable-layout export is a later adapter gate rather than a hidden limitation in `chassis-core`.
+Loom, Miri, sanitizers, native format validators, host tests, and benchmarks are added where the relevant boundary exists. Never describe an unexecuted check as passing.
 
 ## Read first
 
 - [Architecture](docs/architecture.md)
 - [Roadmap](docs/roadmap.md)
-- [Open questions / API freeze gates](docs/design/open-questions.md)
+- [Current execution plan](docs/next-runtime-slice.md)
+- [Open questions / freeze gates](docs/design/open-questions.md)
+- [Validation strategy](docs/design/validation.md)
+- [Parameters, automation, and state](docs/design/parameters-state.md)
+- [Process buffers](docs/design/process-buffers.md)
 - [Licensing](docs/licensing.md)
-- [Dependency/license policy](docs/dependencies.md)
-
-Detailed contracts:
-
-- [Runtime ownership](docs/design/runtime.md)
-- [Audio ports/layout negotiation](docs/design/audio-ports.md)
-- [Processing buffers](docs/design/process-buffers.md)
-- [Parameters/automation/state](docs/design/parameters-state.md)
-- [State format](docs/design/state-format.md)
-- [Events/notes/MIDI/transport](docs/design/events-transport.md)
-- [Common runtime services](docs/design/runtime-services.md)
-- [Product/export identity](docs/design/identity-metadata.md)
-- [Authoring/convention model](docs/design/authoring-api.md)
-- [Crate/package boundaries](docs/design/crate-boundaries.md)
-- [Validation/conformance](docs/design/validation.md)
-
-## Current workspace
-
-```text
-crates/
-  chassis-core/
-    src/
-      audio.rs      stable port keys, basic layouts/configuration validation
-      buffer.rs     safe exact-alias/disjoint/input-only/output-only channel views
-      process.rs    activation bounds + borrowed per-call ProcessBlock
-      runtime.rs    explicit Component/Processor/Process lifecycle shell
-      parameters.rs typed schemas + validated base/control state
-      automation.rs bounded borrowed parameter trajectories
-      state.rs      deterministic bounded CHSS state document
-    tests/
-      conformance.rs deterministic external-API lifecycle/buffer tests
-
-  chassis-clap/
-    src/lib.rs      Clack lifecycle, stereo f32/f64 buffers, scalar params/state/transport
-    src/parameters.rs explicit CLAP IDs, scalar normalization, shared state projection
-
-examples/
-  clap-conformance/
-    src/lib.rs      exported deterministic gain component for CLAP qualification
-```
-
-The current CLAP slice maps factory/main-thread construction, activation, f32 stereo processing, optional f64 processing, reset, and deactivation onto the existing Chassis runtime. F64 exports use an explicit `SingleComponentEntryWithF64` marker and require the same processor to implement both `Process<f32>` and `Process<f64>`. The adapter also projects explicitly mapped scalar float, integer, boolean, and choice parameters (dense option-index plain values with option-name display round trips and a host value rescan after state load), bounded parameter-value events, block-start transport tempo/play/record flags, render mode, and bounded CHSS parameter state. Modulation/gesture output, note/MIDI events, sidechains/multibus, GUI, and install tooling remain future adapter work. The current parametered f64 artifact passes the local Rust gate and CLAP validator (35 passes including the full parameter/state matrix), and has been requalified through a bit-exact headless REAPER 7.79 render (f32 dispatch, which the host chooses because the artifact advertises `SUPPORTS_64BITS` without `PREFERS_64BITS`).
-
-`chassis-core` remains std-only. `chassis-clap` is the first crate with third-party dependencies and consumes one full-SHA pinned Clack source while the adapter contract is being qualified.
-
-## Validation
-
-There is currently **no authoritative hosted CI**. Validation is local/tool-driven until hosted automation is intentionally restored.
-
-Baseline commands on a supported development machine:
-
-```sh
-cargo fmt --all -- --check
-cargo test --workspace
-cargo clippy --workspace --all-features --all-targets -- -D warnings
-cargo deny check
-cargo machete
-```
-
-The current Rust 1.98 gate passes locally, with the lockfile resolving the exact pinned Clack revision. Build/package the conformance export and run CLAP-native validation before treating the adapter as fully qualified. The current f64 validator run reports 23 passed and 21 intentional skips, including both double-precision process-audio cases; a five-second, two-worker fuzz run completed without errors. REAPER 7.79/macOS-arm64 headless render evidence is recorded in `docs/design/validation.md`.
-
-Use Miri/model tests/sanitizers/native validators as the relevant unsafe/adapters are implemented. Do not describe an unexecuted check as passing.
+- [Dependency policy](docs/dependencies.md)
 
 ## Licensing
 
-Chassis is **AGPL-3.0-or-later**. The intended long-term model also offers a separate commercial license for proprietary software that incorporates Chassis without accepting AGPL copyleft obligations.
-
-AGPL users may experiment, modify, distribute, and sell AGPL-compliant open-source products. A vendor wanting to distribute a proprietary/closed-source product incorporating Chassis would use the separate commercial license.
-
-Commercial terms are intentionally undefined during private pre-alpha. Before accepting substantive external code contributions, Chassis will establish contributor terms that preserve commercial relicensing rights.
-
-Third-party dependencies keep their own licenses. `deny.toml` and [docs/dependencies.md](docs/dependencies.md) define the conservative dependency policy; checks are currently run locally rather than by GitHub Actions.
+Chassis is AGPL-3.0-or-later with an intended separate commercial license for proprietary products. Dependency policy therefore considers both realtime/safety quality and commercial relicensing compatibility. Contributor/relicensing terms must be established before substantive outside contributions are accepted.

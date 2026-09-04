@@ -1,318 +1,150 @@
 # Open Questions and API Freeze Gates
 
-This document records unresolved design choices that are intentionally **not** compatibility promises yet. Resolve them through the conformance runtime, adapter work, and representative products rather than by adding abstraction speculatively.
+This file records unresolved design decisions that still block API or production claims. Completed proof steps belong in `docs/design/validation.md`; execution order belongs in `docs/next-runtime-slice.md`.
 
-## First explicit runtime slice — implemented, not frozen
+## Runtime/API freeze
 
-### Component / Processor construction
+`InstanceRuntime<P>` is the durable format-independent authority for one component instance. `Processor` owns active DSP history; `Process<S>` expresses sample-representation capability.
 
-The first manual API now exists:
+Still unresolved before freezing the authoring surface:
 
-- `Component` is the immutable definition/factory;
-- framework activation structurally validates I/O before calling product activation;
-- `Processor` exclusively owns active DSP/runtime history and reset;
-- sample processing is a separate `Process<S>` capability;
-- `Activated<P>` owns the processor, immutable activation config, and validated base `ParameterStore`; it consumes itself on deactivation.
+- remove the temporary activation-local `Activated<P>` / free `runtime::activate()` compatibility path after remaining tests migrate;
+- decide the final spelling/ergonomics for creating `InstanceRuntime` from a `Component` without duplicating schema validation boilerplate;
+- prove semantic whole-I/O policy beyond structural port presence for products that negotiate multiple legal layouts;
+- keep `Processor` non-`Send` in core unless a deployment requires transfer; adapters add the bound at their boundary.
 
-The first CLAP adapter now exercises this ownership split directly. Clack requires its audio processor to be `Send`, so `chassis-clap` places `Send` on the concrete processor at the deployment boundary rather than adding it to `chassis-core::Processor` globally.
+Do not add proc macros/derives until real client code demonstrates the repeated declarations worth hiding.
 
-This resolves the basic ownership shape but does **not** freeze trait spelling/signatures.
+## Process buffers
 
-Before promotion, still prove:
+The generic safe source shape is implemented and the CLAP adapter traverses setup-mapped channels without callback-owned channel collections.
 
-- cleanup of failed/partial activation through real adapter/host sequences;
-- semantic whole-I/O policy beyond structural port presence;
-- how the eventual framework `InstanceRuntime` adds automation/event publication around the canonical parameter/state authority without turning into a giant shared object;
-- whether any additional lifecycle capability is genuinely required by CLAP/VST3/AU;
-- native host qualification of the f32/f64 capability projection using one processor architecture.
+Freeze gates:
 
-Do not add derives/macros yet. The integration conformance effect and first CLAP export use this explicit API directly.
+- ergonomic higher-level bus/port views only after real DSP clients demonstrate recurring access patterns;
+- target-specific legality for inactive/null/zero-buffer cases as formats require;
+- benchmark controlled copy/conversion paths before adding ownership or unsafe complexity to remove them;
+- native f64 host-dispatch evidence remains desirable, but lack of a host choosing `data64` does not invalidate validator-qualified f64 support.
 
-### Safe process buffer view
+## Parameters and automation
 
-The core implementation exposes:
+Implemented: typed schema/store, dense realtime indices, borrowed sample-accurate events, CLAP float/integer/boolean/choice projection, generation-checked scalar publication, and state value rescan after load.
 
-- exact in-place input/output with one mutable Rust slice;
-- disjoint input/output views;
-- input-only and output-only views;
-- semantic stable port/channel endpoints;
-- bounded explicit copy-to-output convenience for ordinary in-place DSP;
-- callback slice-length validation without unsafe code in `chassis-core`.
+Freeze gates:
 
-The first CLAP proof maps Clack `ChannelPair::InputOutput` and `ChannelPair::InPlace` directly into those safe Chassis relationships. It uses a fixed stack `[ChannelBuffer; 2]` for the one-stereo-main proof and performs no process-time heap allocation in Chassis adapter code.
+- exported conformance DSP must audibly exercise sample-accurate automation rather than keeping parameters process-inert;
+- finalize product-originated begin/change/end gesture semantics and echo suppression;
+- modulation must remain distinct from base-state publication and must not overwrite durable values;
+- parameter mapping/formatting helpers must have explicit round-trip/domain tests before becoming generic authoring conveniences.
 
-Remaining freeze gates:
+## Active state save/load
 
-- general adapter setup representation for arbitrary ports/channels without per-callback allocation or lifetime-erasing unsafe scratch;
-- ergonomic higher-level port/bus views for stereo main, sidechain, multiple buses, and non-one-to-one routing;
-- target-specific null/inactive/zero-buffer legality;
-- native host coverage for f64 dispatch/advertisement;
-- benchmark copy/conversion paths before adding ownership/unsafe complexity to remove them.
+The intended CLAP consistency contract is:
 
-Do **not** generalize the current proof by allocating `Vec<ChannelBuffer>` on every process call. If the current slice-shaped `ProcessBlock` makes a correct arbitrary-layout adapter awkward, revisit the core borrowing shape using adapter evidence rather than hiding the mismatch.
+- state save is a non-realtime operation and may wait for an in-progress scalar publisher;
+- it serializes one coherent completed publication generation;
+- a save racing a process block may observe the generation immediately before or after that block's endpoint publication, never a mixed generation;
+- a newer control edit/state load wins over stale realtime publication by generation check;
+- state load remains transactional and requests host value rescan after successful publication.
 
-### Process context
+Before freezing state APIs, add direct executable tests for the save/publication race and active host qualification during automation. Cross-format round trips remain required once VST3/AU exist.
 
-`ProcessBlock<S>` now carries:
+The CHSS wire envelope remains pre-v1 and may change until these gates are complete.
 
-- actual frame count;
-- `ProcessContext` with `ProcessMode` (`Realtime`, `BufferedRealtime`, `Offline` where supplied);
-- optional block-start transport snapshot;
-- bounded, borrowed parameter events retaining nondecreasing source order;
-- borrowed safe channel views.
+## Realtime guarantees
 
-The core event prototype supports instantaneous sets and lazy floating-point
-linear trajectories. `Activated::process()` validates event values against the
-active parameter schema before product DSP. It does not yet publish automation
-endpoints back into base state or provide a coherent active state-save snapshot.
+The process architecture avoids explicit callback allocation and unbounded work, but inspection is not enough for a production claim.
 
-The CLAP adapter now maps the render extension into `ProcessMode`, translates
-block-start transport and bounded parameter events, and supports optional f64
-sample dispatch. These mappings remain adapter-local and must not be inferred
-for other formats. Active state-save consistency and richer event semantics
-remain open.
+Before promotion:
 
-Still to add only when the corresponding semantic layer is implemented:
+- instrument allocation/deallocation after activation;
+- stress configured maximum parameter-event counts and representative mapped topologies;
+- measure adapter-only overhead at representative block sizes;
+- verify replaced-object reclamation cannot fall onto the callback when larger snapshot/telemetry facilities appear.
 
-- host-specific parameter/event translation and gesture semantics;
-- coherent automation/base-state publication;
-- note/MIDI/event views/sinks;
-- narrow realtime-safe output/host capabilities.
+Do not introduce custom allocators, lock-free infrastructure, SIMD, padding, or unsafe zero-copy machinery merely to make benchmarks look sophisticated.
 
-Do not encode CLAP process status or VST3 classes directly into this type.
+## CLAP production qualification
 
-## Blocks the first state/automation API
+The current parametered artifact is qualified on the available validator + REAPER macOS-arm64 matrix. Production support still requires broader evidence.
 
-### Canonical parameter-store mechanics
+Open:
 
-The initial typed schema and owned base-value store are implemented in
-`chassis-core`. They validate immutable domains/defaults, reject duplicate
-stable keys, expose control edits, and apply parameter state transactionally.
-The store is intentionally not presented as an audio-thread event/trajectory
-transport.
+- activation failure cleanup and malformed/partial lifecycle cases not covered by current validator runs;
+- reentrant host callbacks under the pinned Clack model;
+- additional OS/architecture/host coverage;
+- active state save while automation is running;
+- actual automated render differential after `trim` becomes process-active;
+- Bitwig coverage when available.
 
-Need to prove:
+Clack remains pinned to reviewed revision `c5975f9f89f0953b00768680357985d46178078a`. Any revision/release change is an audit and conformance event.
 
-- how UI/host edits update base state;
-- how the active runtime publishes automation endpoints without polling every parameter/sample;
-- how the post-automation current base value becomes observable;
-- how a multi-parameter state load publishes as one generation;
-- how state save while active obtains its documented cross-parameter consistency without blocking realtime;
-- memory-ordering/ownership/reclamation if atomics or snapshots are used.
+## Export metadata/API
 
-Do not default to “one atomic per parameter” until the state-save/load contract is demonstrated.
+Current CLAP export identity constants are temporary proof metadata. Before shipping a product:
 
-### State wire format v1
+- define one canonical product/export identity manifest;
+- generate backend IDs/metadata from that owner rather than duplicating constants across adapters;
+- support explicit import/legacy mappings where released compatibility requires them;
+- freeze byte-order/identity fixtures.
 
-The current Chassis-owned envelope is implemented as a prototype in
-`chassis-core::state`; parameter state uses the `parameter/` namespace and
-checks product identity/schema at the store boundary.
+Temporary names that encode obsolete proof limits should be renamed before real clients depend on them.
 
-Freeze only after:
+## VST3/AU projection
 
-- wrong-product rejection through every adapter boundary;
-- deterministic golden fixtures;
-- fuzz/property/corruption/exhaustion tests;
-- migration fixture;
-- partial stream I/O tests;
-- cross-format state round trips;
-- an active save/load consistency contract.
+Treat `clap-wrapper` output as a separate adapter qualification problem, not proof by construction.
 
-Changing the format before v1 is expected.
-
-## CLAP adapter — narrow slice locally qualified, not production-qualified
-
-### Clack dependency/version surface
-
-The first adapter pins one exact safety-fixed Clack git revision:
-
-```text
-https://github.com/prokopyl/clack
-c5975f9f89f0953b00768680357985d46178078a
-```
-
-The latest published release available during the audit, 0.1.1, has an acknowledged plugin-side reentrancy UB issue affecting real hosts including Bitwig and `clap-wrapper`. The fix merged after 0.1.1 and changes affected handler access from exclusive mutable to shared references. Since both Bitwig and `clap-wrapper` are relevant to Chassis, using 0.1.1 solely to stay on crates.io is not acceptable.
-
-The selected revision is after the reentrancy fix and subsequent immediate safety/lifetime work. It is MIT/Apache-2.0 licensed and is allowlisted as the project's only current git-source exception. See `docs/research/clack-pinned-adapter-audit.md`.
-
-Completed for this narrow slice:
-
-- regenerated/reviewed the exact git + transitive dependency graph in `Cargo.lock`;
-- confirmed Cargo resolves every Clack package to the pinned revision;
-- inspected the exact source used by the lockfile;
-- passed advisory/source/license checks after Cargo resolved the graph.
-
-Still required before production qualification:
-
-- deeper audit of Clack unsafe/lifetime and panic containment around the process/extension path;
-- allocation/locking/reclamation audit of the exact process path;
-- broader host/OS/architecture coverage, including Bitwig where available;
-- move back to a suitable crates.io Clack release when a safety-fixed release is published and qualified.
-
-Keep Clack types confined to `chassis-clap` and export/test glue.
-
-### CLAP lifecycle mapping
-
-The first implementation maps:
-
-```text
-factory/main-thread construction -> Chassis Component
-CLAP activate                    -> Chassis activate
-CLAP process                     -> Activated::process
-CLAP reset                       -> Activated::reset
-CLAP deactivate                  -> Activated::deactivate
-```
-
-Clack supplies the CLAP create/init/start/stop/destroy machinery around these types. The Chassis audio processor currently uses Clack's default no-op start/stop behavior because core has no separate semantic start/stop state yet.
-
-The validator and REAPER smoke test now provide evidence for:
-
-- create/init/activate/start/process/stop/deactivate/destroy legal sequences;
-- repeated activation/deactivation and reset/reactivate;
-- basic validator-side buffer and process failure containment;
-- real-host activation and processing through REAPER.
-
-Still required:
-
-- activation failure cleanup;
-- invalid/partial host sequences and panic containment beyond validator coverage;
-- processor movement between CLAP audio threads (`Send`) without simultaneous mutation;
-- reentrant host callbacks against the pinned Clack model;
-- module unload once future callbacks/tasks exist.
-
-The adapter existing in source is not evidence these sequences are qualified.
-
-### Buffer mapping
-
-The first proof intentionally supports exactly:
-
-- one stereo main input;
-- one stereo main output;
-- f32, with optional f64 through the explicit capability marker;
-- exact in-place or disjoint paired channels.
-
-It rejects missing/asymmetric required main channels, wrong port counts, non-stereo main data, unavailable or mixed sample representations (including `Both`), invalid frame bounds, and Chassis callback-bound failures before product DSP proceeds.
-
-Still required:
-
-- sidechain/aux/multiple buses;
-- stable setup-time endpoint mapping for arbitrary configurations;
-- CLAP audio-port activation/configuration negotiation;
-- native host qualification of f64 dispatch/advertisement;
-- silence/constant-mask semantics if useful;
-- synthetic malformed-buffer tests at the lowest safe boundary Clack exposes;
-- proof that generalization retains bounded no-allocation callback work.
-
-### Export/package/host qualification
-
-`examples/clap-conformance` is a packaged and locally validated `.clap` proof artifact, not production-qualified native CLAP support.
-
-Completed for the tested macOS arm64 slice:
-
-- local fmt/test/clippy/deny/machete green with the reviewed lockfile;
-- release export build;
-- platform-correct `.clap` bundle packaging;
-- `clap-validator` 0.4.1 validation and five-second fuzz run;
-- REAPER 7.78/macOS-arm64 smoke render with differential gain verification;
-- exact validator/host/toolchain evidence recorded in `docs/design/validation.md`.
-
-Still required before calling native CLAP support usable in production:
-
-- Bitwig and broader real-host/OS/architecture coverage;
-- allocation/locking/reclamation and deeper Clack unsafe/lifetime audit;
-- failure/reentrancy/module-unload evidence beyond the current validator and host scenarios.
-
-### Event/parameter translation
-
-The first CLAP adapter slice now translates bounded CLAP `ParamValueEvent`s into
-borrowed core set events, maps block-start transport flags/tempo, and exposes
-explicitly mapped scalar float, integer, boolean, and choice parameters through
-the CLAP params/state extensions, including dense choice projection and a host
-value rescan after state load.
-
-Native CLAP parameter/state qualification has now run: the parametered artifact passes the full validator parameter/conversion/state-reproducibility matrix and a headless REAPER two-parameter state round trip.
-
-Choice/index projection is implemented as dense schema option indices on the CLAP plain-value wire with option-name display round trips and a host value rescan after state load; `ChoiceId` shares its text so realtime choice sets do not allocate. Modulation, gesture output, note/event ports, and broader state publication semantics remain unimplemented. Prove each without forcing CLAP-specific semantics into core. In particular, define what consistency a state save has while processing is active before freezing this API.
-
-## Blocks VST3/AU claims
-
-### `clap-wrapper` qualification
-
-Treat VST3/AU projection as provisional until the same conformance component passes:
+Before claiming VST3/AU support, run the same conformance product through:
 
 - native validators;
 - state/identity fixtures;
-- buffer aliasing/layout tests;
 - automation trajectory tests;
+- buffer/layout tests;
 - editor lifetime/resize tests;
-- real host matrix.
+- real host save/reopen/automation scenarios;
+- differential comparison against native CLAP semantics.
 
-The known Clack 0.1.1 reentrancy issue explicitly cited `clap-wrapper`; keep the pinned safety-fixed Clack source (or a future qualified release) as a prerequisite for this projection path.
+Own a native format adapter only when concrete wrapper limitations justify it.
 
-Replace/patch/own a native adapter only when a concrete wrapper limitation justifies it.
-
-### Export identity manifest
-
-Finalize manifest syntax and generate-once/freeze behavior before any product ships. Import paths for legacy IDs and byte-order golden fixtures are required.
-
-The current `ClapStereoEffect::{CLAP_ID, CLAP_NAME}` contract is temporary adapter-proof metadata and must not become the long-term duplicated identity source merely because it exists first.
-
-## GUI freeze gates
+## GUI
 
 Do not make Iced or another toolkit part of the core contract prematurely.
 
-Before a first-class adapter:
+Before a first-class GUI adapter:
 
-- prove parent window attach/detach across target hosts;
-- resize/scale/high-DPI lifecycle;
+- parent window attach/detach;
+- resize/scale/high-DPI behavior;
 - editor recreation/teardown;
-- parameter gestures and observations;
+- parameter observations and gestures;
 - realtime telemetry ownership;
 - accessibility path where practical;
-- custom rendering/control flexibility sufficient for commercial plugin UIs.
+- enough rendering/control flexibility for commercial product UIs.
 
-## Background execution / snapshots
+## Background work / snapshots
 
-No hidden global executor yet.
+No hidden global executor.
 
-Before adding a framework task service, specify:
+Before adding framework task services, specify instance/module lifetime, cancellation, stale-completion rejection, unload/shutdown behavior, result destruction ownership, and offline determinism.
 
-- instance/module/executor lifetime;
-- plugin dylib unload behavior;
-- task generation and stale-completion rejection;
-- cancellation versus join/final shutdown;
-- ownership of large result/replaced-object destruction;
-- deterministic offline behavior.
+Typed immutable control->DSP snapshots or meter publication may be implemented independently when the first real FX client proves a concrete need.
 
-Typed immutable control->DSP snapshot publication may be implemented separately if a concrete FX needs it before a general task service.
+## Instruments / events
 
-## Instruments
+The core remains compatible with instruments, but note/MIDI helpers are deferred until a real instrument/event client exists.
 
-Core must remain compatible now, but instrument helpers wait for a real instrument/conformance extension.
+Before stable instrument claims, prove note identity/expression, event output capacity/rejection, MIDI fallback where relevant, multiple outputs, high-event-count behavior, and standalone deployment.
 
-Before stable instrument claims, prove note identity, expression, MIDI fallback, multiple event/audio outputs, output-event capacity/rejection, and standalone behavior.
+## Surround / immersive
 
-The current input-only/output-only buffer forms are necessary groundwork, not an instrument-support claim. The fixed stereo CLAP proof is deliberately not an instrument API.
+Do not freeze a closed speaker enum. Add labeled surround/ambisonics/immersive semantics only with a product that requires them and explicit ordering/normalization/mapping fixtures.
 
-## Surround / ambisonics / immersive
+Dolby Atmos object/metadata/renderer workflows remain separate from channel-bed layouts.
 
-Do not freeze a closed speaker enum. Before stable multichannel APIs, define extensible speaker positions, ambisonic ordering/normalization, mapping fixtures, and whole-layout negotiation.
+## Governance
 
-Channel-based immersive beds are distinct from Dolby Atmos object/metadata workflows.
+Before accepting substantive outside code or selling commercial licenses:
 
-## Standalone / host / application layers
-
-Standalone should run the same component/processor/state implementation, but device/window ownership is a later layer.
-
-General plugin hosting, device runtime, and processing graph crates are conditional on a real application. Do not let their hypothetical needs complicate plugin v0.1 unless the core would otherwise make them impossible.
-
-## Licensing/governance before public contributions/commercial licenses
-
-Before accepting substantive outside code:
-
-- establish contributor/relicensing terms (likely a concise CLA);
-- decide commercial license terms;
-- review notices/attribution generation;
-- verify all distributed dependencies remain compatible with both AGPL and proprietary licensing.
-
-This does not block private framework development.
+- establish contributor/relicensing terms;
+- define commercial license terms;
+- verify notices/attribution generation;
+- re-check distributed dependency compatibility with AGPL and proprietary licensing.
