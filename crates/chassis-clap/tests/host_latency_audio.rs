@@ -77,9 +77,7 @@ impl Process<f32> for DelayedProcessor {
                 .make_in_place()
                 .expect("main channel has input and output")
             {
-                let input = *sample;
-                *sample = delay[*position];
-                delay[*position] = input;
+                std::mem::swap(sample, &mut delay[*position]);
                 *position += 1;
                 if *position == delay.len() {
                     *position = 0;
@@ -209,9 +207,17 @@ fn reported_latency_matches_impulse_delay() {
     let mut processor = processor.start_processing().expect("processing starts");
     let outputs = process_impulse(&mut processor, 128);
     for channel in outputs {
-        assert!(channel[..64].iter().all(|sample| sample.abs() <= f32::EPSILON));
+        assert!(
+            channel[..64]
+                .iter()
+                .all(|sample| sample.abs() <= f32::EPSILON)
+        );
         assert!((channel[64] - 1.0).abs() <= f32::EPSILON);
-        assert!(channel[65..].iter().all(|sample| sample.abs() <= f32::EPSILON));
+        assert!(
+            channel[65..]
+                .iter()
+                .all(|sample| sample.abs() <= f32::EPSILON)
+        );
     }
 
     plugin.deactivate(processor.stop_processing());
