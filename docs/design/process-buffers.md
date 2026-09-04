@@ -1,18 +1,10 @@
 # Processing and Audio Buffer Model
 
-Status: safe channel relationships, the no-allocation generic buffer-source boundary, and the mapped f32 CLAP source are implemented. The generic core/source path and expanded CLAP mapping are locally Rust-1.98-qualified through `dfc137c`. Higher-level author-facing port views and public API remain pre-alpha.
+Status: safe channel relationships, generic allocation-free `ProcessBufferSource<S>`, and mapped CLAP f32/f64 traversal are implemented. Author-facing higher-level bus views remain pre-alpha.
 
-## Goal
+## Safe relationships
 
-Give ordinary effects a simple processing path while preserving host buffer semantics and Rust aliasing guarantees. Avoid gratuitous copies, but do not make zero-copy a goal in itself.
-
-The core buffer model must support effects, generators/instruments, auxiliary inputs/outputs, multiple buses, variable block sizes, offline rendering, and eventual high-channel-count processing.
-
-## Safe channel relationships
-
-Target formats can provide exact in-place input/output buffers or distinct buffers. Chassis therefore cannot assume every process call is in-place or every input/output pair is separate.
-
-`chassis-core::buffer::ChannelBuffer<'a, S>` represents four already-proven safe relationships:
+`ChannelBuffer<'a, S>` represents already-proven host relationships:
 
 ```text
 InPlace
@@ -28,172 +20,94 @@ OutputOnly
   output endpoint + &mut [S]
 ```
 
-Endpoints use stable `PortKey` plus a zero-based channel index. They associate a safe sample view with semantic product ports without exposing backend bus indices.
+Endpoints carry stable semantic port identity plus channel index. Backend dense bus/channel indices are adapter projections, not product identity.
 
-`InPlace` deliberately stores **one mutable reference only**. Chassis never constructs both `&[S]` and `&mut [S]` for the same host range. `Separate` may exist only after the input/output ranges have already been proved disjoint for the borrow lifetime.
+`InPlace` stores one mutable reference only. `Separate` is legal only after the adapter has proved input/output disjoint for the borrow lifetime. Product DSP never receives raw host pointers.
 
-Input-only and output-only views preserve generators, analyzers, auxiliary routing, and multi-output products without forcing a fake one-to-one effect topology.
+## Controlled copy convenience
 
-The adapter owns host-pointer and host-layout validation. Product DSP never receives raw host pointers.
+`ChannelBuffer::make_in_place()` provides one explicit convenience:
 
-## Construction and frame bounds
+- exact in-place -> existing mutable slice, no copy;
+- separate -> bounded input-to-output copy, then output slice;
+- input-only/output-only -> error because no valid paired in-place view exists.
 
-`ChannelBuffer` constructors accept the current callback frame count, validate that backing storage is long enough, and expose exactly that prefix. They never allocate.
+Products with out-of-place algorithms can use input/output access directly. Zero-copy is not a goal by itself; keep the bounded copy unless measurement justifies more complex ownership.
 
-`ProcessConfig` also carries the activation-owned maximum number of normalized parameter events accepted per callback. Adapters choose that bound from their accepted host/product contract; zero is valid for a deployment with no parameter-event projection.
+## Generic no-allocation source
 
-A short synthetic/host-derived safe view is rejected before product DSP receives it.
+Runtime-negotiated port/channel counts cannot safely be retained as lifetime-bearing `ChannelBuffer` values in processor storage, while constructing an owned vector every callback violates the realtime contract.
 
-## Conventional in-place helper
-
-`ChannelBuffer::make_in_place()` is the explicit convenience path for ordinary in-place DSP:
-
-- exact in-place: returns the existing `&mut [S]` with no copy;
-- separate: performs one bounded `copy_from_slice` from input to output and returns output;
-- input-only: fails because no output exists;
-- output-only: fails because no input exists to copy.
-
-This copy is controlled product/framework behavior, not hidden adapter normalization. Products that benefit from out-of-place processing can use `input()` and `output_mut()` directly and skip it.
-
-## No-allocation buffer sources
-
-Runtime-negotiated port/channel counts cannot be represented safely by retaining lifetime-bearing `ChannelBuffer` values in processor storage. Building a `Vec<ChannelBuffer>` every callback would violate the realtime contract, while erasing the lifetimes would weaken the aliasing model.
-
-The implemented source boundary is iterator-based:
+The implemented boundary is:
 
 ```text
 ProcessBufferSource<S>
   validate_frame_count(expected)
   channels() -> allocation-free iterator
 
-iterator item: ProcessChannel<S>
+ProcessChannel<S>
   relationship
-  input/output endpoint
-  frame_count
-  input / output_mut
-  make_in_place
+  semantic endpoints
+  frame count
+  input / output_mut / make_in_place
 ```
 
-`ProcessChannel<S>` abstracts only operations already supplied by `ChannelBuffer`; it is not a second buffer semantic model. `ChannelBuffer` and mutable `ChannelBuffer` borrows implement it.
+A materialized slice uses `ChannelBufferSlice`; a format adapter can yield safe host-derived channel wrappers lazily. Laziness changes when the safe view is produced, not the alias proof required for it.
 
-`ProcessBufferSource<S>` uses generic associated types for its channel item and iterator. A materialized source can therefore yield borrowed channel views while a format adapter can yield safe host-derived channel wrappers lazily, without trait-object lifetime erasure or callback-owned collections.
-
-`ChannelBufferSlice` is the compatibility source for existing `&mut [ChannelBuffer]` callers. A core conformance source also chains two independent channel slices, proving that one legal process traversal does not require a contiguous materialized collection.
-
-The source shape itself was qualified on Rust 1.98 at `e4b34e4`. It was then wired through `ProcessBlock`, `Process<S>`, `Activated`, and `InstanceRuntime::process_source`, with the slice entry points retained as compatibility wrappers; that full core boundary was qualified at `3349910`.
+`InstanceRuntime::process_source()` is the authoritative runtime entry for arbitrary sources. `InstanceRuntime::process()` is the non-allocating materialized-slice convenience wrapper.
 
 ## ProcessBlock
 
-The current product-facing call is:
+`ProcessBlock<S, B>` borrows:
 
-```text
-ProcessBlock<'source, 'context, 'parameters, S, B>
-where B: ProcessBufferSource<S>
-```
+- actual frame count;
+- active process configuration;
+- process mode and transport snapshot;
+- canonical base `ParameterStore`;
+- bounded sample-sorted `ParameterEvents`;
+- one `ProcessBufferSource<S>`.
 
-It contains:
+Before product DSP runs, core validates frame bounds, event block association/type/domain, and source dimensions. Stable endpoint/backend mapping belongs to setup and is not rediscovered per callback.
 
-- actual callback frame count;
-- per-call `ProcessContext` and `ProcessMode`;
-- block-start transport snapshot;
-- validated borrowed parameter events;
-- immutable active base/control `ParameterStore` view;
-- one borrowed buffer source from which safe channel views can be traversed allocation-free.
+Float automation trajectories are evaluated lazily through cursors rather than expanded into per-sample event storage.
 
-Its constructor is framework-private. Before product DSP is entered, the runtime validates:
+## CLAP mapping
 
-- positive activation minimum when one was guaranteed;
-- activated maximum frame count;
-- the event context belongs to this callback frame count;
-- event count/type/domain constraints relative to the active parameter schema;
-- the source's callback-varying frame dimensions.
+`ClapAudioConfiguration` validates explicit stable `ClapAudioPort` metadata and builds setup-owned `ClapProcessSlot` mappings. `ClapBufferSource` then traverses Clack's safe `ChannelPair` relationships directly.
 
-`ParameterEvents` remains caller-storage-backed and sample-sorted. `FloatParameterCursor` evaluates set/linear trajectories lazily and never expands a ramp into per-sample event storage.
+The adapter handles:
 
-Stable semantic endpoint mapping is deliberately **not** rediscovered by `ProcessBlock`. Format adapters resolve stable keys, dense backend indices, and legal pairing at setup/activation and retain that plan for callback traversal.
+- reciprocal semantic input/output pairs as one Chassis relationship;
+- unrelated input/output ports sharing a dense CLAP index as independent single-direction channels;
+- asymmetric input/output tails;
+- mapped auxiliary/sidechain ports;
+- f32 or f64 callbacks selected consistently across the mapped configuration.
 
-## CLAP mapped source
+An exact alias supplied for unrelated semantic ports is rejected before DSP because the same mutable region cannot safely represent two independent outputs/owners.
 
-The current CLAP adapter proves the generic source against a real runtime-negotiated format.
-
-`ClapAudioConfiguration` validates declared Chassis ports against explicit stable `ClapAudioPort` metadata and builds setup-owned `ClapProcessSlot` values. Dense CLAP input/output indices are process-layout details, not product identity.
-
-A process slot may contain an input, an output, or both. Two ports are marked `paired` only when their declared `in_place_pair` relationships are reciprocal and their layouts are compatible. Setup ordering aligns real semantic pairs when CLAP's dense arrays can represent them together.
-
-This distinction matters because CLAP pairs its input/output arrays by dense index. Two unrelated ports may therefore appear in one Clack `PortPair` even though they are not one semantic Chassis channel relationship.
-
-`ClapBufferSource` handles that case without allocation:
-
-- a declared reciprocal pair may expose Clack `InputOutput` or exact `InPlace` as one Chassis channel relationship;
-- unrelated `InputOutput` buffers at one dense index are split into independent input-only and output-only Chassis channels;
-- asymmetric input/output tails remain single-direction channels;
-- an `InPlace` alias for two unrelated ports is rejected before product DSP because one shared mutable region cannot safely represent two independent semantic ports.
-
-The source wraps Clack's already-safe `ChannelPair` values directly instead of materializing callback `ChannelBuffer` arrays. It prevalidates mapped port count, channel count, sample representation, and relationship shape before entering product DSP.
-
-The mapped f32 source, arbitrary auxiliary mappings, and split-independent iterator state passed Rust 1.98 formatting, full workspace tests, strict all-feature/all-target Clippy, and the release conformance build at `dfc137c`.
-
-This is source/compiler qualification. The expanded topology still needs a repeated native `clap-validator`/real-host qualification run; the older REAPER/validator evidence applies to the earlier conventional stereo artifact.
-
-## Rust aliasing contract
-
-A format adapter may expose `InPlace` only for a valid exact alias where a single mutable slice is the sole live Rust reference to that memory.
-
-It may expose `Separate` only after proving the input/output ranges disjoint for the full borrow lifetime.
-
-Unexpected partial overlap, overlapping output channels, inconsistent lengths, invalid/null pointers, or host state that cannot satisfy Rust reference rules must be contained at the adapter boundary. Never manufacture overlapping references merely because a host specification says the host should behave.
-
-If a legal backend relationship is awkward to express with ordinary references, raw pointers/private unsafe machinery must stay inside the adapter behind a smaller safe accessor. The product API is not weakened to raw pointers for adapter convenience.
-
-The generic source does not relax this rule. Laziness changes when a safe relationship object is produced, not the proof required for that relationship.
-
-## Port/bus ergonomics still open
-
-Endpoint-bearing channel traversal is sufficient to prove ownership, aliasing, and arbitrary mapped routing without freezing the final author-facing bus API.
-
-Before public API freeze, compare efficient views/helpers for:
-
-- conventional stereo main input/output;
-- optional sidechain;
-- explicit port/channel lookup;
-- multiple buses;
-- input-only/output-only products;
-- mono-to-stereo or other non-one-to-one routing.
-
-Do not add a per-block map/allocation merely for lookup convenience. Dense endpoint helpers can be resolved at activation if real product call sites justify them.
+Mapped port count, channel count, sample representation, relationship shape, and callback frame count are checked before product traversal.
 
 ## Sample precision
 
-The buffer/source types are generic over `S`. Runtime processing uses a separate `Process<S>` capability rather than parameterizing `Processor` itself.
+Buffer/source types are generic over `S`; processor lifetime is not. One `Processor` may implement both `Process<f32>` and `Process<f64>`.
 
-The conformance processor and CLAP adapter support `f32` and optional `f64`. F64 CLAP exports use an explicit capability marker and require one processor to implement both `Process<f32>` and `Process<f64>`; they do not create a second lifecycle object. A callback must use one precision across all mapped ports, so mixed or `Both` host representations are rejected before product DSP.
+The CLAP adapter advertises f64 only through the explicit f64-capable export marker and requires the processor to implement both precisions. Mixed sample representations in one callback are rejected.
 
-Do not genericize unrelated control/state types over sample precision.
+## Realtime rules
 
-## Render/offline mode
+`Process<S>` and every `ProcessBufferSource` implementation must obey the deterministic callback contract:
 
-`ProcessContext` already distinguishes realtime-like modes from `ProcessMode::Offline`; format adapters should map an explicit host semantic signal rather than infer offline state from transport or timing.
+- no heap allocation/deallocation after activation;
+- no blocking I/O or contended/unbounded locks;
+- work bounded by validated frame/channel/event configuration;
+- no callback-owned dynamic channel collections;
+- no stable-string/schema searches when setup can retain dense mappings;
+- replacement/reclamation of large objects stays off the callback.
 
-For CLAP, that signal is the render extension. The adapter stores the host-selected realtime/offline mode in instance-local atomic adapter state and maps it into `ProcessContext` on each callback. The render setting is ephemeral host state, not persisted product state. Targeted native render qualification remains open.
+Mechanical allocation/work-bound instrumentation is still required before production claims; source inspection alone is not proof.
 
-## Layout and data movement
+## Remaining design work
 
-Planar/non-interleaved channel access remains the initial product convention because it matches plugin processing well.
+Higher-level bus/port helpers should come from real DSP clients. Useful candidates may include conventional stereo-main access, optional sidechain, and efficient explicit port lookup, but they must not add hidden per-block maps or allocation.
 
-If a future backend supplies interleaved or otherwise incompatible storage, conversion scratch must be allocated during activation and bounded by accepted channel/frame configuration. Document and benchmark conversion cost before calling it negligible.
-
-Avoid cache padding, bespoke packing, SIMD-specific alignment, or custom allocators until measurement shows a real benefit.
-
-## Variable and edge block sizes
-
-Processing cannot assume a fixed frame count. Activation establishes resource bounds; each callback supplies the actual count.
-
-Core conformance covers ordinary blocks, maximum/minimum violations, zero-frame processing where allowed, separate buffers, exact in-place buffers, and non-flat sources. Target-specific validation still needs expanded native coverage for changing block sizes, inactive/null-buffer legality where applicable, offline rendering, and higher-channel-count host configurations.
-
-## Realtime rule
-
-No convenience available from `Process<S>` may allocate, block, perform I/O, or perform work whose upper bound is unrelated to the validated configuration/block.
-
-Stable validation and lookup work should be hoisted out of callbacks. Controlled bounded copies are allowed; hidden dynamic memory growth is not.
-
-`ProcessBufferSource::channels()` is subject to the same rule. A source may traverse host-owned descriptors and construct safe borrowed views, but it may not grow owned storage merely to present those views to product DSP.
+Future interleaved/incompatible backend layouts require activation-owned bounded conversion scratch plus measured cost. Higher-channel-count/surround/ambisonics layouts remain product-driven roadmap work.
