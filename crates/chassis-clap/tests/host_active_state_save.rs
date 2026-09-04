@@ -13,7 +13,9 @@ use chassis_core::{
     state::{StateDocument, StateValue},
 };
 use clack_extensions::state::PluginState;
-use clack_host::{events::event_types::ParamValueEvent, factory::plugin::PluginFactory, prelude::*};
+use clack_host::{
+    events::event_types::ParamValueEvent, factory::plugin::PluginFactory, prelude::*,
+};
 
 const FIRST_CLAP_ID: u32 = 17;
 const SECOND_CLAP_ID: u32 = 18;
@@ -82,10 +84,8 @@ impl Process<f32> for StateProcessor {
 impl ClapStereoEffect for StateProbe {
     const CLAP_ID: &'static str = "org.nijaru.chassis.active-state-probe";
     const CLAP_NAME: &'static str = "Chassis Active State Probe";
-    const CLAP_PARAMETER_IDS: &'static [(&'static str, u32)] = &[
-        ("first", FIRST_CLAP_ID),
-        ("second", SECOND_CLAP_ID),
-    ];
+    const CLAP_PARAMETER_IDS: &'static [(&'static str, u32)] =
+        &[("first", FIRST_CLAP_ID), ("second", SECOND_CLAP_ID)];
     const CLAP_MAX_PARAMETER_EVENTS: u32 = 2;
 }
 
@@ -109,10 +109,7 @@ impl HostHandlers for TestHostHandlers {
     type AudioProcessor<'a> = TestHostAudioProcessor;
 }
 
-fn save_state(
-    plugin: &PluginInstance<TestHostHandlers>,
-    state: PluginState,
-) -> Vec<u8> {
+fn save_state(plugin: &mut PluginInstance<TestHostHandlers>, state: PluginState) -> Vec<u8> {
     let mut bytes = Vec::new();
     state
         .save(&plugin.plugin_handle(), &mut bytes)
@@ -143,7 +140,7 @@ fn active_save_linearizes_before_or_after_audio_endpoint_publication() {
             entered: Arc::clone(&entered),
             release: Arc::clone(&release),
         })
-        .expect("test barriers initialize once");
+        .unwrap_or_else(|_| panic!("test barriers initialize once"));
 
     let entry = PluginEntry::load_from_clack::<SingleComponentEntry<StateProbe>>(c"")
         .expect("static state probe entry loads");
@@ -176,7 +173,7 @@ fn active_save_linearizes_before_or_after_audio_endpoint_publication() {
             },
         )
         .expect("state probe activates");
-    let initial = save_state(&plugin, state);
+    let initial = save_state(&mut plugin, state);
     assert!((parameter_value(&initial, "first") - 0.0).abs() <= f64::EPSILON);
     assert!((parameter_value(&initial, "second") - 0.0).abs() <= f64::EPSILON);
 
@@ -237,14 +234,14 @@ fn active_save_linearizes_before_or_after_audio_endpoint_publication() {
         });
 
         entered.wait();
-        let during = save_state(&plugin, state);
+        let during = save_state(&mut plugin, state);
         assert_eq!(during, initial);
         release.wait();
 
         worker.join().expect("audio worker returns processor")
     });
 
-    let after = save_state(&plugin, state);
+    let after = save_state(&mut plugin, state);
     assert!((parameter_value(&after, "first") - 0.25).abs() <= f64::EPSILON);
     assert!((parameter_value(&after, "second") - 0.75).abs() <= f64::EPSILON);
     assert_ne!(after, initial);
