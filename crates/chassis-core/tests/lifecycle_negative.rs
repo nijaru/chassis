@@ -89,12 +89,11 @@ fn failed_activation_leaves_runtime_inactive_and_reusable() {
         .set("gain", ParameterValue::Float(0.75))
         .expect("test value is valid");
 
-    let first = runtime.activate(
-        &component,
-        process_config(),
-        DEFAULT_EFFECT_CONFIGURATION,
-    );
-    assert!(matches!(first, Err(ActivateError::Product(ActivationRejected))));
+    let first = runtime.activate(&component, process_config(), DEFAULT_EFFECT_CONFIGURATION);
+    assert!(matches!(
+        first,
+        Err(ActivateError::Product(ActivationRejected))
+    ));
     assert!(!runtime.is_active());
     assert_eq!(
         runtime.parameters().get("gain"),
@@ -102,11 +101,7 @@ fn failed_activation_leaves_runtime_inactive_and_reusable() {
     );
 
     runtime
-        .activate(
-            &component,
-            process_config(),
-            DEFAULT_EFFECT_CONFIGURATION,
-        )
+        .activate(&component, process_config(), DEFAULT_EFFECT_CONFIGURATION)
         .expect("runtime can activate after a product failure");
     assert!(runtime.is_active());
     assert_eq!(activations.load(Ordering::Relaxed), 2);
