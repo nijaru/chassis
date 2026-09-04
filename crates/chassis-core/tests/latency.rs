@@ -65,11 +65,7 @@ fn latency_is_snapshotted_for_each_successful_activation() {
     assert_eq!(runtime.active_latency(), None);
 
     runtime
-        .activate(
-            &component,
-            process_config(),
-            DEFAULT_EFFECT_CONFIGURATION,
-        )
+        .activate(&component, process_config(), DEFAULT_EFFECT_CONFIGURATION)
         .expect("first activation succeeds");
     assert_eq!(runtime.active_latency(), Some(LatencySamples::new(256)));
 
@@ -84,11 +80,7 @@ fn latency_is_snapshotted_for_each_successful_activation() {
     assert_eq!(runtime.active_latency(), None);
 
     runtime
-        .activate(
-            &component,
-            process_config(),
-            DEFAULT_EFFECT_CONFIGURATION,
-        )
+        .activate(&component, process_config(), DEFAULT_EFFECT_CONFIGURATION)
         .expect("reactivation succeeds");
     assert_eq!(runtime.active_latency(), Some(LatencySamples::new(512)));
 }
