@@ -83,7 +83,7 @@ Implemented and executable:
 
 Remaining, in order:
 
-1. Measure adapter-only overhead on representative stable hardware with the existing benchmark harness.
+1. ~~Measure adapter-only overhead on representative stable hardware with the existing benchmark harness.~~ Complete (2026-09-03): recorded in `docs/design/validation.md`; median 49–53 ns/callback no-event, 477–499 ns at 64 events, flat across frames/precision; no material adapter cost, no optimization warranted. (One-time fix: the bench target needed `harness = false` to actually execute.)
 2. Refresh real-DAW current-head evidence when a suitable host is available: scan/instantiate, state save/reopen, actual automated `trim` render, active-save, and PDC alignment.
 3. Exercise native host f64 dispatch when a production host can be induced to select it.
 4. Add further host/architecture coverage when release targets make it useful; Bitwig remains valuable real-world re-entrancy coverage even though re-entrant semantics are now executable in-process.

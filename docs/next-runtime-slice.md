@@ -27,6 +27,12 @@ The historical REAPER 7.79/macOS-arm64 baseline predates current observable beha
 
 ## Slice 1 — representative performance evidence
 
+**Complete (2026-09-03).** Recorded in `docs/design/validation.md` under "Realtime allocation and performance": adapter-only median 49–53 ns/callback at zero event load and 477–499 ns at the configured 64-event load (~7 ns/event), flat across 32–512 frames and f32/f64, on Apple M3 Max / macOS 26.6.2 / rustc 1.98.0. No material adapter cost appeared, so no optimization work is warranted.
+
+One-time fix during this slice: `benches/adapter_overhead.rs` is a `main()`-based manual harness, but the bench target was auto-discovered with the libtest harness, so `cargo bench` reported "0 tests" and never ran. `crates/chassis-clap/Cargo.toml` now declares `[[bench]] name = "adapter_overhead" harness = false`.
+
+The harness details are retained for reproducibility:
+
 This is the remaining code-side Phase-2 measurement that can be performed without a DAW, but it requires stable representative hardware rather than a shared CI runner.
 
 Use:
@@ -42,8 +48,6 @@ The harness exercises the actual in-process CLAP adapter with:
 - f32 and f64;
 - stereo main + stereo sidechain;
 - trivial product DSP to expose adapter cost.
-
-Record CPU, OS/architecture, Rust version, release profile, sample rate, topology, event load, and benchmark output. Treat the result as a distribution/throughput measurement, not a universal constant. Optimize only if a material cost appears.
 
 ## Slice 2 — real-DAW qualification when available
 

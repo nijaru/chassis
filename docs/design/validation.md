@@ -111,6 +111,15 @@ cargo bench -p chassis-clap --bench adapter_overhead
 
 It exercises 32/64/128/512-frame blocks, f32/f64, zero/max event load, and stereo main + sidechain. Run it on stable representative hardware and record CPU/architecture, OS, Rust version, release profile, sample rate, topology, and event load. Shared CI VM timing is not production performance evidence.
 
+Representative measurement (first recording, 2026-09-03, Nick's Mac15,9 / Apple M3 Max / arm64, macOS 26.6.2, rustc 1.98.0 (88d9e12ae 2026-08-18), cargo bench release profile, 48 kHz, stereo main + stereo sidechain, trivial no-op DSP):
+
+- no-event load: median 49–53 ns/callback across every block size and precision, ~19–20 M callbacks/s;
+- configured 64-event load: median 477–499 ns/callback, ~2.0 M callbacks/s;
+- overhead is flat in frame count and f32/f64; event normalization dominates at ~7 ns/event;
+- two consecutive runs agreed within ~4% on medians; p99 stayed within ~6% of median except single-cell OS noise.
+
+Interpretation: adapter-only overhead is well under a single sample period at 48 kHz (20.8 µs); there is no material adapter cost to optimize before real-client work. This is a distribution measurement on one machine, not a universal constant.
+
 ## Lifecycle / negative space
 
 Executable current coverage includes:
