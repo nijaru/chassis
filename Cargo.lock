@@ -39,6 +39,7 @@ version = "0.0.0"
 dependencies = [
  "chassis-core",
  "clack-extensions",
+ "clack-host",
  "clack-plugin",
  "loom",
 ]
@@ -70,6 +71,17 @@ version = "0.2.0"
 source = "git+https://github.com/prokopyl/clack?rev=c5975f9f89f0953b00768680357985d46178078a#c5975f9f89f0953b00768680357985d46178078a"
 dependencies = [
  "bitflags",
+ "clack-common",
+ "clack-host",
+ "clack-plugin",
+ "clap-sys",
+]
+
+[[package]]
+name = "clack-host"
+version = "0.2.0"
+source = "git+https://github.com/prokopyl/clack?rev=c5975f9f89f0953b00768680357985d46178078a#c5975f9f89f0953b00768680357985d46178078a"
+dependencies = [
  "clack-common",
  "clack-plugin",
  "clap-sys",

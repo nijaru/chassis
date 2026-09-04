@@ -16,4 +16,6 @@ clack-extensions = { workspace = true, features = ["audio-ports", "clack-plugin"
 workspace = true
 
 [dev-dependencies]
+clack-host.workspace = true
+clack-extensions = { workspace = true, features = ["clack-host", "latency"] }
 loom = "0.7.2"
