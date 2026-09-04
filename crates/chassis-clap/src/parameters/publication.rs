@@ -172,6 +172,12 @@ impl ScalarPublication {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{
+        Arc,
+        Barrier,
+        atomic::{AtomicBool, Ordering as AtomicOrdering},
+    };
+
     use super::*;
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -384,6 +390,62 @@ mod tests {
 
         assert!(!publication.try_publish_value(0, 0.25));
         assert!(publication.try_snapshot_into(&mut snapshot).is_none());
+    }
+
+    #[test]
+    fn control_snapshot_after_realtime_publication_observes_completed_generation() {
+        let publication = ScalarPublication::new(&[0.5, 0.0]);
+        let mut realtime = [0.0; 2];
+        let generation = publication
+            .try_snapshot_into(&mut realtime)
+            .expect("initial realtime snapshot is coherent");
+        realtime.copy_from_slice(&[0.25, 4.0]);
+        assert!(publication.try_publish_values_from(generation, &realtime));
+
+        let mut saved = [0.0; 2];
+        let saved_generation = publication
+            .snapshot_control_into(&mut saved)
+            .expect("control save obtains a coherent completed generation");
+
+        assert_eq!(saved_generation, generation + 2);
+        assert_eq!(saved, [0.25, 4.0]);
+    }
+
+    #[test]
+    fn control_snapshot_waits_out_an_in_progress_multi_value_write() {
+        let publication = Arc::new(ScalarPublication::new(&[0.0, 0.0]));
+        let completed = publication
+            .try_begin_write(0)
+            .expect("test writer acquires generation zero");
+        publication.values[0].store(1.0_f64.to_bits(), Ordering::Release);
+
+        let reader_started = Arc::new(AtomicBool::new(false));
+        let release_writer = Arc::new(Barrier::new(2));
+        let reader = {
+            let publication = Arc::clone(&publication);
+            let reader_started = Arc::clone(&reader_started);
+            let release_writer = Arc::clone(&release_writer);
+            std::thread::spawn(move || {
+                reader_started.store(true, AtomicOrdering::Release);
+                release_writer.wait();
+                let mut saved = [f64::NAN; 2];
+                let generation = publication
+                    .snapshot_control_into(&mut saved)
+                    .expect("control snapshot succeeds after writer completion");
+                (generation, saved)
+            })
+        };
+
+        while !reader_started.load(AtomicOrdering::Acquire) {
+            std::hint::spin_loop();
+        }
+        publication.values[1].store(1.0_f64.to_bits(), Ordering::Release);
+        publication.finish_write(completed);
+        release_writer.wait();
+
+        let (generation, saved) = reader.join().expect("snapshot thread joins");
+        assert_eq!(generation, completed);
+        assert_eq!(saved, [1.0, 1.0]);
     }
 
     #[test]
