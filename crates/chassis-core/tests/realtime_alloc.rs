@@ -11,7 +11,10 @@ use chassis_core::{
     audio::{DEFAULT_EFFECT_CONFIGURATION, MAIN_INPUT, MAIN_OUTPUT},
     automation::ParameterEvents,
     buffer::{ChannelBuffer, InputEndpoint, OutputEndpoint},
-    process::{ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessConfig, ProcessContext, ProcessMode, TransportSnapshot},
+    process::{
+        ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessChannel, ProcessConfig,
+        ProcessContext, ProcessMode, TransportSnapshot,
+    },
     runtime::{Component, InstanceRuntime, Process, Processor},
 };
 
@@ -121,11 +124,7 @@ fn repeated_post_activation_process_calls_do_not_allocate_or_deallocate() {
     let component = Effect;
     let mut runtime = InstanceRuntime::for_component(&component).expect("runtime schema is valid");
     runtime
-        .activate(
-            &component,
-            process_config(),
-            DEFAULT_EFFECT_CONFIGURATION,
-        )
+        .activate(&component, process_config(), DEFAULT_EFFECT_CONFIGURATION)
         .expect("activation succeeds");
 
     let mut left = [1.0_f32; 512];
