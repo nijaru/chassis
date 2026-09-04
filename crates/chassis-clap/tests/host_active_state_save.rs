@@ -131,6 +131,61 @@ fn parameter_value(bytes: &[u8], key: &str) -> f64 {
     }
 }
 
+fn run_automation_callback(
+    processor: StoppedPluginAudioProcessor<TestHostHandlers>,
+) -> StoppedPluginAudioProcessor<TestHostHandlers> {
+    let mut processor = processor.start_processing().expect("processing starts");
+    let mut main_inputs = [vec![0.0_f32; 1], vec![0.0_f32; 1]];
+    let mut sidechain_inputs = [vec![0.0_f32; 1], vec![0.0_f32; 1]];
+    let mut outputs = [vec![0.0_f32; 1], vec![0.0_f32; 1]];
+    let mut input_ports = AudioPorts::with_capacity(4, 2);
+    let mut output_ports = AudioPorts::with_capacity(2, 1);
+    let input_audio = input_ports.with_input_buffers([
+        AudioPortBuffer {
+            channels: AudioPortBufferType::f32_input_only(
+                main_inputs.iter_mut().map(InputChannel::variable),
+            ),
+            latency: 0,
+        },
+        AudioPortBuffer {
+            channels: AudioPortBufferType::f32_input_only(
+                sidechain_inputs.iter_mut().map(InputChannel::variable),
+            ),
+            latency: 0,
+        },
+    ]);
+    let mut output_audio = output_ports.with_output_buffers([AudioPortBuffer {
+        channels: AudioPortBufferType::f32_output_only(outputs.iter_mut().map(Vec::as_mut_slice)),
+        latency: 0,
+    }]);
+    let mut input_events = EventBuffer::with_capacity(2);
+    input_events.push(&ParamValueEvent::new(
+        0,
+        ClapId::new(FIRST_CLAP_ID),
+        Pckn::match_all(),
+        0.25,
+    ));
+    input_events.push(&ParamValueEvent::new(
+        0,
+        ClapId::new(SECOND_CLAP_ID),
+        Pckn::match_all(),
+        0.75,
+    ));
+    let mut output_events = EventBuffer::with_capacity(0);
+
+    processor
+        .process(
+            &input_audio,
+            &mut output_audio,
+            &input_events.as_input(),
+            &mut output_events.as_output(),
+            None,
+            None,
+        )
+        .expect("automation callback succeeds");
+    processor.stop_processing()
+}
+
 #[test]
 fn active_save_linearizes_before_or_after_audio_endpoint_publication() {
     let entered = Arc::new(Barrier::new(2));
@@ -178,66 +233,11 @@ fn active_save_linearizes_before_or_after_audio_endpoint_publication() {
     assert!((parameter_value(&initial, "second") - 0.0).abs() <= f64::EPSILON);
 
     let processor = std::thread::scope(|scope| {
-        let worker = scope.spawn(move || {
-            let mut processor = processor.start_processing().expect("processing starts");
-            let mut main_inputs = [vec![0.0_f32; 1], vec![0.0_f32; 1]];
-            let mut sidechain_inputs = [vec![0.0_f32; 1], vec![0.0_f32; 1]];
-            let mut outputs = [vec![0.0_f32; 1], vec![0.0_f32; 1]];
-            let mut input_ports = AudioPorts::with_capacity(4, 2);
-            let mut output_ports = AudioPorts::with_capacity(2, 1);
-            let input_audio = input_ports.with_input_buffers([
-                AudioPortBuffer {
-                    channels: AudioPortBufferType::f32_input_only(
-                        main_inputs.iter_mut().map(InputChannel::variable),
-                    ),
-                    latency: 0,
-                },
-                AudioPortBuffer {
-                    channels: AudioPortBufferType::f32_input_only(
-                        sidechain_inputs.iter_mut().map(InputChannel::variable),
-                    ),
-                    latency: 0,
-                },
-            ]);
-            let mut output_audio = output_ports.with_output_buffers([AudioPortBuffer {
-                channels: AudioPortBufferType::f32_output_only(
-                    outputs.iter_mut().map(Vec::as_mut_slice),
-                ),
-                latency: 0,
-            }]);
-            let mut input_events = EventBuffer::with_capacity(2);
-            input_events.push(&ParamValueEvent::new(
-                0,
-                ClapId::new(FIRST_CLAP_ID),
-                Pckn::match_all(),
-                0.25,
-            ));
-            input_events.push(&ParamValueEvent::new(
-                0,
-                ClapId::new(SECOND_CLAP_ID),
-                Pckn::match_all(),
-                0.75,
-            ));
-            let mut output_events = EventBuffer::with_capacity(0);
-
-            processor
-                .process(
-                    &input_audio,
-                    &mut output_audio,
-                    &input_events.as_input(),
-                    &mut output_events.as_output(),
-                    None,
-                    None,
-                )
-                .expect("automation callback succeeds");
-            processor.stop_processing()
-        });
-
+        let worker = scope.spawn(move || run_automation_callback(processor));
         entered.wait();
         let during = save_state(&mut plugin, state);
         assert_eq!(during, initial);
         release.wait();
-
         worker.join().expect("audio worker returns processor")
     });
 
