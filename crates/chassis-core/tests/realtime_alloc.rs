@@ -4,9 +4,10 @@
 
 use std::{
     alloc::{GlobalAlloc, Layout, System},
+    cell::Cell,
     convert::Infallible,
     num::NonZeroU32,
-    sync::atomic::{AtomicBool, AtomicU64, Ordering},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use chassis_core::{
@@ -22,16 +23,25 @@ use chassis_core::{
 
 struct CountingAllocator;
 
-static COUNTING: AtomicBool = AtomicBool::new(false);
+thread_local! {
+    static COUNT_THIS_THREAD: Cell<bool> = const { Cell::new(false) };
+}
+
 static ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
 static DEALLOCATIONS: AtomicU64 = AtomicU64::new(0);
 
+fn counting_this_thread() -> bool {
+    COUNT_THIS_THREAD
+        .try_with(Cell::get)
+        .unwrap_or(false)
+}
+
 // This allocator is test instrumentation only. It delegates every operation to
-// `System` unchanged and increments atomics only while the measured section is
-// enabled. The production Chassis crates continue to forbid unsafe code.
+// `System` unchanged and increments atomics only for the measured callback thread.
+// The production Chassis crates continue to forbid unsafe code.
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        if COUNTING.load(Ordering::Relaxed) {
+        if counting_this_thread() {
             ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
         }
         // SAFETY: `layout` comes from `GlobalAlloc::alloc`; forwarding it to the
@@ -40,7 +50,7 @@ unsafe impl GlobalAlloc for CountingAllocator {
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        if COUNTING.load(Ordering::Relaxed) {
+        if counting_this_thread() {
             DEALLOCATIONS.fetch_add(1, Ordering::Relaxed);
         }
         // SAFETY: `ptr` and `layout` are the exact pair supplied by the caller
@@ -49,7 +59,7 @@ unsafe impl GlobalAlloc for CountingAllocator {
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        if COUNTING.load(Ordering::Relaxed) {
+        if counting_this_thread() {
             ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
         }
         // SAFETY: same forwarding argument as `alloc`; System implements the
@@ -58,7 +68,7 @@ unsafe impl GlobalAlloc for CountingAllocator {
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        if COUNTING.load(Ordering::Relaxed) {
+        if counting_this_thread() {
             ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
             DEALLOCATIONS.fetch_add(1, Ordering::Relaxed);
         }
@@ -134,7 +144,7 @@ fn repeated_post_activation_process_calls_do_not_allocate_or_deallocate() {
 
     ALLOCATIONS.store(0, Ordering::Relaxed);
     DEALLOCATIONS.store(0, Ordering::Relaxed);
-    COUNTING.store(true, Ordering::SeqCst);
+    COUNT_THIS_THREAD.with(|counting| counting.set(true));
 
     for _ in 0..1_000 {
         let mut buffers = [
@@ -158,7 +168,7 @@ fn repeated_post_activation_process_calls_do_not_allocate_or_deallocate() {
             .expect("process callback is valid");
     }
 
-    COUNTING.store(false, Ordering::SeqCst);
+    COUNT_THIS_THREAD.with(|counting| counting.set(false));
 
     assert_eq!(ALLOCATIONS.load(Ordering::Relaxed), 0);
     assert_eq!(DEALLOCATIONS.load(Ordering::Relaxed), 0);
