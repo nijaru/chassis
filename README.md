@@ -8,7 +8,7 @@ Status: **private pre-alpha**. Public APIs and the CHSS persistence envelope are
 
 ## Current checkpoint
 
-Chassis is in **Phase 2: native CLAP qualification**. The core lifecycle/state model is established and the current Rust regression gate is green through activation-scoped latency and its CLAP projection.
+Chassis is in **Phase 2: native CLAP qualification**. The format-independent lifecycle/state model and the current CLAP adapter semantics are executable and qualified on the portable Rust + Linux headless matrix. Production DAW/platform qualification remains separate.
 
 Implemented today:
 
@@ -17,7 +17,6 @@ Implemented today:
 - deterministic bounded state documents, adjacent migrations, transactional replacement, and adversarial decode coverage;
 - borrowed sample-accurate parameter events plus block-start transport context;
 - generic allocation-free `ProcessBufferSource<S>` traversal;
-- an executable post-activation core process allocation detector;
 - activation-failure recovery and reusable-runtime negative-space coverage;
 - activation-scoped `LatencySamples` captured from the active `Processor`;
 - mapped CLAP f32/f64 audio ports, including auxiliary/input-only/output-only/asymmetric cases supported by the current core layout model;
@@ -25,13 +24,25 @@ Implemented today:
 - exported `trim` automation that audibly drives deterministic f32/f64 DSP sample by sample;
 - CLAP render/offline and latency/PDC extension projection;
 - generation-checked scalar publication with direct concurrency tests and Loom evidence;
-- choice plain-value/name round trips and host value rescan after state load.
+- coherent active state save through the real CLAP extension while processing is in progress;
+- full in-process CLAP adapter allocation/lifecycle tests through pinned Clack host APIs.
 
-The last recorded native conformance baseline predates the current automation/latency changes. That earlier artifact passed `clap-validator` 0.4.1 with **35 passes, 0 failures, 9 intentional skips**, plus a five-second two-worker fuzz run. REAPER 7.79/macOS-arm64 scanned, instantiated, round-tripped both parameters, and produced the expected deterministic f32 render. REAPER selected f32, so native host `data64` dispatch remained unexercised.
+Current portable/headless evidence includes:
 
-Those native results remain useful regression history, but they do **not** qualify current head after the audible automation and CLAP latency changes. The immediate checkpoint is to rebuild the current artifact and repeat validator/fuzz/REAPER qualification with an actual automation render and active-save scenario. Nonzero host PDC behavior will be qualified when a real delayed client or purpose-built delayed conformance case exercises it.
+- Rust 1.98.0: workspace fmt, tests, strict Clippy, and Loom green at `c6aa54f2022d456e89329fd969ba993eb8d76e52`;
+- current Linux conformance artifact: `clap-validator` 0.4.1 at pinned revision `b2f1d9b79b1d264a5747f46707d72b1aa40a02ef`, **35 passed, 0 failed, 9 intentional skips**;
+- five-second two-worker validator fuzz: clean;
+- full adapter callback path: zero measured allocation/deallocation across 1,000 f32 and 1,000 f64 callbacks at the configured 64-event bound with stereo main + stereo sidechain;
+- CLAP frame-count minimum/maximum accepted and over-bound blocks rejected;
+- product activation failure leaves the same CLAP instance reusable;
+- repeated inactive instance construction/destruction, sample-rate/block-size reactivation, and audio-thread processor transfer are exercised;
+- activation latency changes are visible through `PluginLatency` and the host latency-change callback;
+- a deliberate delayed probe reports 64 samples and produces its stereo impulse exactly 64 samples later;
+- active state save while an audio callback is paused returns the coherent pre-publication generation, then the completed automation endpoints after the callback publishes.
 
-After that, finish adapter work-bound/overhead evidence and start the first real FX client: a mastering limiter that pressures lookahead latency, offline behavior, smoothing, telemetry, state, and deterministic rendering.
+The previously recorded REAPER 7.79/macOS-arm64 result remains useful historical host evidence, but it predates the newest automation/latency work and is **not** current-head production qualification. When a real DAW is available again, refresh scan/instantiate/save-reopen, automated `trim` render, active-save, PDC alignment, and native host precision behavior.
+
+The remaining code-side Phase-2 evidence gap is representative adapter-only performance measurement on stable hardware. CI runner timing is not treated as production performance data.
 
 ## Architecture
 
@@ -68,7 +79,7 @@ examples/
   clap-conformance/ deterministic exported qualification component
 ```
 
-`chassis-core` forbids unsafe code. `chassis-clap` currently owns no Chassis unsafe block; Clack provides the ABI and safe channel views.
+`chassis-core` forbids unsafe code. Production `chassis-clap` code currently owns no Chassis unsafe block; Clack provides the ABI and safe channel views. Test-only allocation instrumentation uses unsafe allocator forwarding solely to measure callback behavior.
 
 ## Backend strategy
 
@@ -78,19 +89,14 @@ VST3/AUv2/AUv3 should initially project through `clap-wrapper`, but wrapper outp
 
 ## Validation
 
-GitHub Actions is a **portable Rust regression signal**, not the authority for plugin production qualification. Native validators, host renders, fuzz/stress, packaging, realtime measurements, and platform-specific evidence remain local/native gates.
+GitHub Actions provides two distinct portable signals:
 
-Baseline Rust checks:
+- **Rust CI**: fmt, workspace tests, strict Clippy, and Loom;
+- **CLAP Conformance**: build/package the Linux conformance plugin, run the pinned `clap-validator`, and run bounded fuzzing.
 
-```text
-cargo fmt --all -- --check
-cargo test --workspace --locked
-cargo clippy --workspace --all-features --all-targets --locked -- -D warnings
-cargo deny check
-cargo machete
-```
+Neither substitutes for production DAW/platform qualification or representative performance measurement.
 
-Loom, Miri, sanitizers, native format validators, host tests, and benchmarks are added where the relevant boundary exists. Never describe an unexecuted check as passing.
+Baseline local checks additionally include dependency/license/dead-dependency review when those tools are configured and available. Never describe an unexecuted check as passing.
 
 ## Read first
 

@@ -6,9 +6,9 @@ This roadmap is ordered by architectural proof and real-client pressure, not fea
 
 Chassis is in **Phase 2: native CLAP qualification**.
 
-The format-independent runtime/state/parameter architecture, generic process-buffer source, mapped f32/f64 CLAP audio path, render-mode projection, typed parameter/state projection, audible exported automation, and activation-scoped latency are implemented. Current Rust CI is green through the CLAP latency projection.
+The format-independent runtime/state/parameter architecture, generic process-buffer source, mapped f32/f64 CLAP audio path, render-mode projection, typed parameter/state projection, audible exported automation, activation-scoped latency, active-save publication, and adapter realtime/lifecycle semantics are implemented.
 
-The last recorded native validator/REAPER baseline predates the current audible-automation and latency changes. It remains useful regression history, but current head must be rebuilt and requalified natively before those results are described as current plugin evidence.
+Current head is qualified on the portable Rust + Linux headless CLAP matrix. Real-DAW/platform qualification remains intentionally separate.
 
 ## Phase 0 — semantic foundation
 
@@ -43,15 +43,15 @@ Implemented:
 
 Remaining promotion work:
 
-- representative work-bound and adapter-overhead measurements;
-- additional lifecycle/failure cases exposed by deployment rather than core construction;
-- semantic whole-I/O policy for products that accept multiple legal configurations when a real product requires it.
+- representative performance measurements where performance claims are made;
+- semantic whole-I/O policy for products that accept multiple legal configurations when a real product requires it;
+- ergonomics/conveniences only when real clients demonstrate recurring needs.
 
 ## Phase 2 — native CLAP
 
-Status: implementation is ahead of the last native qualification checkpoint.
+Status: current implementation is qualified on the Linux headless validator + in-process host matrix; production DAW coverage remains incomplete.
 
-Implemented:
+Implemented and executable:
 
 - Clack-backed CLAP adapter isolated from core;
 - stable explicit audio-port and parameter IDs;
@@ -63,42 +63,41 @@ Implemented:
 - float/integer/boolean/choice parameter projection;
 - exported `trim` automation driving deterministic f32/f64 DSP at sample offsets;
 - generation-checked scalar publication with direct concurrency and Loom evidence;
-- coherent completed-generation snapshots supporting active state save;
+- coherent active state save through the CLAP state extension while processing is active;
 - CHSS state save/load and host value rescan;
 - CLAP latency extension backed by activation-scoped core latency;
-- exported deterministic conformance plugin.
+- deliberate nonzero-latency probe whose reported latency matches its actual delayed impulse;
+- full adapter-path allocation/deallocation probe at the configured maximum event count for f32/f64 and main + sidechain topology;
+- CLAP minimum/maximum frame-count processing and over-bound rejection;
+- product activation failure + retry on the same instance;
+- repeated inactive instance construction/destruction;
+- sample-rate/block-size reactivation;
+- audio-thread transfer without simultaneous processor mutation;
+- current Linux `clap-validator` 0.4.1: 35 passed, 0 failed, 9 intentional skips;
+- five-second two-worker validator fuzz: clean.
 
-Last recorded native baseline before the newest changes:
+Remaining, in order:
 
-- `clap-validator` 0.4.1: 35 passed, 0 failed, 9 intentional skips;
-- five-second two-worker validator fuzz: clean;
-- REAPER 7.79/macOS-arm64: scan, instantiate, two-parameter state round trip, deterministic f32 render;
-- native host `data64` dispatch unexercised because REAPER selected f32.
+1. Refresh real-DAW current-head evidence when a suitable host is available: scan/instantiate, state save/reopen, and actual automated `trim` render against the deterministic trajectory.
+2. Verify real-host PDC/alignment for delayed DSP; the in-process probe already proves metadata and DSP delay agree.
+3. Exercise native host f64 dispatch when a production host can be induced to select it.
+4. Measure adapter-only overhead on representative stable hardware rather than a shared CI runner.
+5. Add further OS/architecture/host coverage as release targets become concrete.
+6. Start the first real FX client and implement only capabilities its product semantics require.
 
-Next, in order:
-
-1. rebuild current head and repeat full validator + bounded fuzz qualification;
-2. render actual `trim` automation in REAPER and compare samples against the deterministic trajectory;
-3. reproduce state save while automation is active and verify coherent saved endpoints/state;
-4. retain f64 validator evidence and exercise native host `data64` when a host can be induced to select it;
-5. verify nonzero host PDC behavior when a real delayed client or deliberate delayed conformance case is available;
-6. finish reentrancy/repeated-host-lifecycle coverage and representative adapter work-bound/overhead evidence;
-7. start the first real FX client and implement only capabilities its product semantics require.
-
-Bitwig remains desirable reentrancy coverage when available; it is not installed in the current validation environment.
+The historical REAPER 7.79/macOS-arm64 result remains regression history, not current-head production qualification.
 
 ## Phase 3 — first real FX client
 
-Start the mastering limiter before broadening the framework speculatively.
+Start the mastering-limiter class of client before broadening the framework speculatively. Do not duplicate or migrate an existing Truce product unless that product explicitly opts into Chassis.
 
-The limiter should pressure-test:
+The first real delayed/dynamics client should pressure-test:
 
-- real lookahead resources whose declared latency matches delayed audio;
+- production lookahead resources whose declared latency matches delayed audio;
 - latency changes across activation/restart rather than live drift;
 - offline/realtime parity;
-- real sample-accurate automation;
-- explicit smoothing policy;
-- state under real product use;
+- real sample-accurate automation and explicit smoothing policy;
+- state/preset behavior under product use;
 - metering/telemetry publication;
 - activation-time lookahead/oversampling resources;
 - deterministic render/host reopen tests.
@@ -109,7 +108,7 @@ A tonal EQ and compressor/dynamics client follow when they add distinct pressure
 
 ## Phase 4 — desktop formats and editor lifecycle
 
-After the CLAP semantics above are stable under a real client:
+After CLAP semantics are stable under a real client:
 
 - project through a pinned/reviewed `clap-wrapper` release/revision to VST3/AUv2/AUv3;
 - run Steinberg validator, `auval`, pluginval where useful, and real-host matrices;

@@ -20,7 +20,7 @@ Read `docs/architecture.md`, `docs/roadmap.md`, `docs/next-runtime-slice.md`, `d
 - `Component` is the immutable schema/capability/factory definition.
 - `InstanceRuntime<P>` is the durable format-independent authority for canonical parameter/custom semantic state and active lifecycle coordination.
 - `Processor` exclusively owns mutable realtime DSP history while active and reports activation-established processing latency.
-- Active latency is snapshotted by `InstanceRuntime` for the lifetime of one activation; a changed latency requires reactivation/restart at the deployment boundary.
+- Active latency is snapshotted by `InstanceRuntime` for one activation; changed latency requires reactivation/restart at the deployment boundary.
 - `MainThread`, `Shared`, editor, and host bridges expose deliberate orchestration/projections; they are not second authorities.
 - Deployment adapters add `Send`/thread-transfer constraints only where the host requires them.
 - Keep CLAP/VST3/AU/Clack/clap-wrapper/toolkit/platform types out of product-facing core APIs.
@@ -58,19 +58,17 @@ Do not automatically smooth explicit host ramps. Product smoothing policy stays 
 
 Separate language correctness, format conformance, realtime guarantees, lifecycle correctness, state/identity compatibility, performance, and production host support.
 
-GitHub Actions is a portable Rust regression signal only. It does not establish native plugin support. Current native validator/REAPER evidence predates the latest audible-automation and CLAP-latency changes, so current head requires native requalification before those results can be promoted again.
+Current portable evidence is split into:
 
-Baseline checks:
+- **Rust CI**: fmt, workspace tests, strict Clippy, Loom;
+- **CLAP Conformance**: current Linux artifact, pinned `clap-validator` 0.4.1, and bounded fuzz;
+- **in-process Clack host tests**: actual Chassis CLAP entry for adapter allocation/work bounds, f32/f64, lifecycle, active state save, and latency metadata/DSP consistency.
 
-```text
-cargo fmt --all -- --check
-cargo test --workspace --locked
-cargo clippy --workspace --all-features --all-targets --locked -- -D warnings
-cargo deny check
-cargo machete
-```
+Current Linux validator evidence is 35 passed / 0 failed / 9 intentional skips plus clean five-second two-worker fuzzing.
 
-Use Loom for subtle atomics, Miri for modelable unsafe Rust, sanitizers/native stress for FFI, native format validators, deterministic host renders, fuzzing, and representative benchmarks where those claims exist. Record exact evidence; never report an unrun gate as passing.
+The REAPER 7.79/macOS-arm64 evidence is a historical baseline that predates current head. Do not present the synthetic host or Linux validator as production DAW/platform qualification.
+
+Baseline local checks may additionally include dependency/license/dead-dependency tools when configured and available. Record exact evidence; never report an unrun gate as passing.
 
 ## Dependencies and licensing
 
@@ -80,13 +78,12 @@ Clack is the current explicit git-source exception at revision `c5975f9f89f0953b
 
 ## Current priority
 
-1. Keep repository docs and agent instructions synchronized with the current Phase-2 checkpoint.
-2. Rebuild and natively requalify current CLAP head: validator, bounded fuzz, REAPER scan/instantiate/state, an automated `trim` render against deterministic expected samples, and a reproducible active-save-during-automation scenario.
-3. Preserve the distinction between current zero-latency conformance coverage and actual nonzero PDC qualification; exercise nonzero latency with the first real delayed client or a deliberate delayed conformance case.
-4. Extend realtime evidence beyond the existing post-activation core allocation test: representative mapped adapter topology, maximum configured event load, frame-count extremes, and adapter-only overhead measurements.
-5. Close remaining deployment negative space that real hosts can expose, especially reentrant callbacks and repeated host lifecycle transitions; core activation-failure recovery is already covered.
-6. Start the first real FX client (mastering limiter) and let it pressure lookahead latency, activation-time resources, offline parity, smoothing, telemetry, state, and deterministic rendering.
-7. Add product-originated gesture/edit and other editor-facing CLAP capabilities when that client needs them; defer note/MIDI until an instrument/event client exists.
-8. Then qualify VST3/AU projection and editor lifecycle through the same product semantics and differential tests.
+1. Keep repository authority docs synchronized with current executable evidence.
+2. When a production DAW is available, refresh current-head scan/instantiate/save-reopen, automated `trim` render, active-save-during-automation, PDC alignment, and native precision behavior.
+3. Measure adapter-only overhead on representative stable hardware; do not use shared CI timing as production performance evidence.
+4. Let the first product that explicitly opts into Chassis drive the next framework surface. A mastering-limiter class of client is the intended pressure case for lookahead resources, offline parity, smoothing, telemetry, state, and deterministic rendering.
+5. Do not duplicate or silently migrate the existing Truce `audio-plugins` implementation to Chassis.
+6. Add product-originated gesture/edit and meter/telemetry infrastructure when a real Chassis client needs them; defer note/MIDI until an instrument/event client exists.
+7. Then qualify VST3/AU projection and editor lifecycle through the same product semantics and differential tests.
 
 Do not create empty crates or speculative framework abstractions merely to make the roadmap look complete.

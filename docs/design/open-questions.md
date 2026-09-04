@@ -4,7 +4,7 @@ This file records unresolved design decisions that still block API or production
 
 ## Runtime/API freeze
 
-`InstanceRuntime<P>` is the sole durable format-independent authority for one component instance. `Processor` owns active DSP history; `Process<S>` expresses sample-representation capability. The temporary activation-local `Activated<P>` / free `runtime::activate()` lifecycle path has been removed.
+`InstanceRuntime<P>` is the sole durable format-independent authority for one component instance. `Processor` owns active DSP history; `Process<S>` expresses sample-representation capability.
 
 Still unresolved before freezing the authoring surface:
 
@@ -24,7 +24,7 @@ Freeze gates:
 - ergonomic higher-level bus/port views only after real DSP clients demonstrate recurring access patterns;
 - target-specific legality for inactive/null/zero-buffer cases as formats require;
 - benchmark controlled copy/conversion paths before adding ownership or unsafe complexity to remove them;
-- native f64 host-dispatch evidence remains desirable, but lack of a host choosing `data64` does not invalidate validator-qualified f64 support.
+- native production-host f64 dispatch remains desirable even though validator and in-process host coverage exercise f64 successfully.
 
 ## Parameters and automation
 
@@ -32,24 +32,24 @@ Implemented: typed schema/store, dense realtime indices, borrowed sample-accurat
 
 Freeze gates:
 
-- finalize product-originated begin/change/end gesture semantics and echo suppression;
+- finalize product-originated begin/change/end gesture semantics and echo suppression when an editor client requires them;
 - modulation must remain distinct from base-state publication and must not overwrite durable values;
 - parameter mapping/formatting helpers must have explicit round-trip/domain tests before becoming generic authoring conveniences;
-- real-host automated-render evidence for current head remains required even though core/export tests already prove the trajectory locally.
+- production-DAW automated-render evidence remains required despite executable core/export/in-process-host trajectory coverage.
 
 ## Active state save/load
 
-The CLAP consistency contract is implemented locally:
+The CLAP consistency contract is implemented and executable:
 
 - state save is a non-realtime operation and may wait for an in-progress scalar publisher;
 - it serializes one coherent completed publication generation;
-- a save racing a process block may observe the generation immediately before or after that block's endpoint publication, never a mixed generation;
+- a save racing a process block may observe the generation immediately before or after endpoint publication, never a mixed generation;
 - a newer control edit/state load wins over stale realtime publication by generation check;
 - state load remains transactional and requests host value rescan after successful publication.
 
-Direct executable publication tests cover completed snapshots, an in-progress multi-value write, stale realtime generation rejection, bounded realtime attempts, and terminal generation behavior. Before freezing production state claims, add a reproducible active-save-during-automation host scenario and cross-format round trips once VST3/AU exist.
+Direct tests, Loom, and an in-process CLAP host scenario now cover this behavior while audio processing is active. Remaining freeze gates are production-DAW confirmation and cross-format round trips once VST3/AU exist.
 
-The CHSS wire envelope remains pre-v1 and may change until these gates are complete.
+The CHSS wire envelope remains pre-v1 until production-host and cross-format state behavior is established.
 
 ## Latency / lookahead
 
@@ -59,48 +59,45 @@ Implemented:
 - `Processor::latency()` with zero default;
 - activation-scoped latency snapshot in `InstanceRuntime`;
 - lifecycle tests proving the value cannot drift within one activation and is recomputed on reactivation;
-- CLAP `PluginLatency` projection plus host latency-change notification when a new activation changes the value.
+- CLAP `PluginLatency` projection plus host latency-change notification when a new activation changes the value;
+- deliberate delayed CLAP probe proving reported 64-sample latency corresponds to an impulse delayed by exactly 64 samples.
 
 Still open:
 
-- qualify nonzero latency with DSP that actually delays output by the reported amount;
-- verify host PDC/alignment behavior and restart/reactivation when a product configuration changes required latency;
-- determine any higher-level lookahead/resource authoring conveniences from the mastering limiter rather than inventing them in advance;
+- verify production-host PDC/alignment and restart/reactivation behavior when product configuration changes required latency;
+- determine higher-level lookahead/resource authoring conveniences from a real delayed product rather than inventing them in advance;
 - prove cross-format latency parity once VST3/AU projections exist.
-
-The current conformance processor reports zero latency. Do not advertise metadata-only nonzero latency as proof.
 
 ## Realtime guarantees
 
-Core now has a thread-local allocation/deallocation detector around repeated post-activation processing. It is evidence for that exact core callback path, not for the complete adapter or production workload.
+Core and full CLAP adapter callback allocation/deallocation evidence are now executable. The adapter test covers stereo main + stereo sidechain, the configured 64-event maximum, f32 and f64, and repeated callbacks without measured callback-thread allocation/deallocation. Frame-count minimum/maximum and over-bound rejection are also covered.
 
-Before promotion:
+Remaining promotion work:
 
-- instrument the full CLAP adapter process path under representative mapped topologies;
-- stress configured maximum parameter-event counts and frame-count extremes;
-- measure adapter-only overhead at representative block sizes;
+- measure adapter-only overhead on representative stable hardware at relevant block sizes/event loads;
 - verify replaced-object reclamation cannot fall onto the callback when larger snapshot/telemetry facilities appear.
 
 Do not introduce custom allocators, lock-free infrastructure, SIMD, padding, or unsafe zero-copy machinery merely to make benchmarks look sophisticated.
 
 ## CLAP production qualification
 
-The last recorded native baseline passed the available validator + REAPER macOS-arm64 matrix, but it predates current-head audible automation and latency-extension changes. Current implementation therefore needs a fresh native qualification run before those baseline results become current evidence again.
+Current Linux headless qualification is current:
 
-Open:
+- `clap-validator` 0.4.1: 35 passed, 0 failed, 9 intentional skips;
+- bounded five-second two-worker fuzz: clean;
+- in-process Clack host exercises allocation/work bounds, activation failure/retry, repeated instances, reactivation, thread transfer, active state save, latency notification, and delayed audio.
 
-- current-head `clap-validator` + bounded fuzz rerun;
-- current-head REAPER scan/instantiate/state reopen;
-- actual automated `trim` render differential against expected sample offsets;
-- active state save while automation is running;
-- nonzero PDC behavior once real delayed DSP exists;
-- reentrant host callbacks under the pinned Clack model;
-- repeated host lifecycle/sample-rate/block-size transitions;
+Open production-host work:
+
+- current-head DAW scan/instantiate/state reopen;
+- actual automated `trim` render differential against expected sample offsets in a production DAW;
+- active state save during DAW automation;
+- real-host PDC/alignment;
 - additional OS/architecture/host coverage;
-- Bitwig coverage when available;
-- native host f64 dispatch when a host can be induced to choose it.
+- native host f64 dispatch when a production host can be induced to choose it;
+- Bitwig/reentrancy coverage where available.
 
-Core activation-failure recovery is already covered and is no longer an open core gate.
+The historical REAPER 7.79/macOS-arm64 baseline predates current head and remains regression history only.
 
 Clack remains pinned to reviewed revision `c5975f9f89f0953b00768680357985d46178078a`. Any revision/release change is an audit and conformance event.
 
@@ -113,7 +110,7 @@ Current CLAP export identity constants are temporary proof metadata. Before ship
 - support explicit import/legacy mappings where released compatibility requires them;
 - freeze byte-order/identity fixtures.
 
-Temporary names that encode obsolete proof limits should be renamed before real clients depend on them. `ClapStereoEffect` remains such a candidate if the first production clients make its name misleading relative to the generic mapped I/O it already supports.
+Temporary names that encode obsolete proof limits should be renamed before real clients depend on them. `ClapStereoEffect` remains a candidate if its name becomes misleading relative to the generic mapped I/O already supported.
 
 ## VST3/AU projection
 

@@ -2,116 +2,100 @@
 
 This file tracks the next implementation order on `main`. It is not an API compatibility promise.
 
-## Current code checkpoint
+## Current checkpoint
 
-The durable format-independent runtime owns parameter/custom semantic state through `InstanceRuntime<P>`. `Processor` exclusively owns active DSP history and now reports activation-established processing latency, which the runtime snapshots for the active lifetime.
+Current Rust checkpoint: `c6aa54f2022d456e89329fd969ba993eb8d76e52`.
 
-The CLAP adapter uses setup-built mapped audio slots, bounded parameter-event scratch, generation-checked scalar publication, optional f64 processing, render-mode projection, explicit parameter/state identity, audible `trim` automation, and CLAP latency projection.
+Rust CI is green for fmt, workspace tests, strict Clippy, and Loom. The Linux CLAP conformance workflow builds/packages the current artifact, runs pinned `clap-validator` 0.4.1, and runs bounded fuzzing.
 
-Rust CI is green through the CLAP latency projection checkpoint (`081caccadaca8c8038efa53f1fbbb41695143321`): fmt, workspace tests, strict Clippy, and Loom all pass.
+Current executable evidence includes:
 
-Completed since the last native CLAP qualification baseline:
-
-- exported `trim` now audibly drives deterministic f32/f64 DSP sample by sample;
-- conformance callers use `InstanceRuntime`; the temporary `Activated<P>` / free `runtime::activate()` lifecycle path is removed;
-- publication tests cover coherent completed snapshots, in-progress multi-value writes, stale realtime generations, and bounded realtime retry behavior;
-- a thread-local allocation probe verifies repeated post-activation core `process` calls perform no allocation/deallocation on the callback test thread;
-- activation failure is tested to leave the runtime inactive, state-preserving, and reusable;
-- `LatencySamples`, `Processor::latency()`, and `InstanceRuntime::active_latency()` define activation-scoped latency;
-- CLAP exposes the latency extension and announces a changed activation latency to supporting hosts.
-
-## Native evidence boundary
-
-The most recent recorded native baseline predates those changes:
-
-- `clap-validator` 0.4.1: 35 passed, 0 failed, 9 intentional skips;
+- current Linux `clap-validator`: 35 passed, 0 failed, 9 intentional skips;
 - five-second two-worker validator fuzz: clean;
-- REAPER 7.79/macOS-arm64: scan, instantiate, two-parameter state round trip, deterministic f32 render;
-- native `data64` host dispatch remained unexercised because REAPER selected f32.
+- f32/f64 exported sample-accurate `trim` DSP;
+- full CLAP adapter callback allocation/deallocation probe at the configured 64-event bound, stereo main + stereo sidechain, 1,000 f32 and 1,000 f64 callbacks: zero measured allocation/deallocation on the callback thread;
+- CLAP minimum/maximum frame-count processing plus over-bound rejection;
+- product activation failure leaves the same CLAP instance inactive and reusable;
+- repeated inactive instance construction/destruction;
+- sample-rate/block-size reactivation and audio-thread transfer;
+- CLAP latency-change callback on activation;
+- deliberate delayed probe: reported 64-sample latency matches an impulse delayed by exactly 64 samples;
+- active CLAP state save during a paused audio callback returns the coherent pre-publication generation; after callback completion it returns both new automation endpoints.
 
-Do not describe that baseline as qualification of current head. The implementation changed in observable automation and extension behavior after it was recorded.
+The historical REAPER 7.79/macOS-arm64 baseline predates current observable behavior and remains regression history only.
 
-## Slice 1 — requalify current native CLAP head
+## Slice 1 — real-DAW qualification when available
 
-This is the immediate priority.
+This is externally blocked until a suitable DAW is available; do not stall code work on it.
 
-1. Build/package the current conformance `.clap` artifact.
-2. Run the current `clap-validator` suite and record exact pass/fail/skip counts.
-3. Repeat bounded validator fuzzing.
-4. Re-open the artifact in REAPER and verify scan + instantiation + state save/reopen.
-5. Automate `trim` through a deterministic trajectory and compare rendered samples against the expected reference, including event offsets rather than only block-end state.
-6. Exercise state save while automation is running and verify the saved state is one coherent completed generation.
-7. Retain validator-qualified f64 coverage; attempt native `data64` dispatch only where a host can actually select it.
+When available, verify current head in a production host:
 
-Latency note: the current conformance processor reports zero latency. Validator/host requalification can prove extension presence and zero-latency behavior, but **nonzero PDC correctness requires actual delayed DSP**. Exercise that with the limiter or a deliberate delayed conformance case; do not report nonzero latency without delaying audio by the same amount.
+1. scan and instantiate;
+2. save/reopen state;
+3. render actual `trim` automation and compare sample offsets against the deterministic reference;
+4. save state while automation is active;
+5. verify PDC/alignment with delayed DSP;
+6. exercise native f64 dispatch if the host can select it.
 
-Exit: current head, rather than the historical fixed/earlier artifact, owns the recorded CLAP validator and REAPER evidence.
+The in-process host tests already cover the semantic contracts; this slice establishes production-host behavior.
 
-## Slice 2 — finish realtime/work-bound evidence
+## Slice 2 — representative performance evidence
 
-The core callback allocation probe now provides one mechanical zero-allocation result. Extend evidence to the real adapter path rather than repeating the same core proof.
+The zero-allocation callback claim now has both core and full-adapter executable evidence. The remaining performance question is quantitative adapter overhead.
 
-Cover:
+Measure on stable representative hardware, not a shared CI runner:
 
-- configured maximum parameter-event count;
-- representative mapped main + sidechain/aux topology;
-- minimum/maximum/legal zero frame counts where applicable;
-- f32 and f64 adapter paths where executable;
-- allocation/deallocation across the complete adapter process path;
-- adapter-only overhead separate from DSP.
+- adapter-only processing with trivial DSP;
+- representative block sizes such as 32/64/128/512;
+- no-event and maximum configured event load;
+- f32 and f64;
+- main-only and main + auxiliary/sidechain topology;
+- release build, fixed toolchain, recorded CPU/OS.
 
-Record workload, block sizes, channel count/layout, event count, CPU/architecture, build mode, and toolchain. Do not turn the exercise into speculative micro-optimization.
+Report distribution/throughput rather than one noisy timing. Do not optimize before measurements identify a material cost.
 
-Exit: realtime claims have representative mechanical evidence rather than source inspection alone.
+## Slice 3 — first real FX client
 
-## Slice 3 — close deployment negative space
+Once a product explicitly opts into Chassis, use it as the primary API pressure. A mastering-limiter class of client is the intended first case because it exercises the right missing capabilities. Do not duplicate or silently migrate the existing Truce `audio-plugins` implementation.
 
-Core activation failure is now covered. Focus remaining work on host/deployment behavior:
+The client should drive:
 
-- repeated activate/deactivate and sample-rate/block-size changes through CLAP;
-- create/init/destroy without activation where the native harness can force it;
-- processor movement between host audio threads without simultaneous mutation;
-- repeated instance creation/destruction;
-- reentrant host callbacks allowed by the pinned Clack model;
-- eventual module unload only when future callback/task services make it relevant.
-
-Bitwig is useful additional reentrancy coverage when available.
-
-## Slice 4 — first real FX client: mastering limiter
-
-Start the real client before implementing broad note/MIDI or generic background infrastructure.
-
-The limiter should provide the first product-level proof for:
-
-- actual lookahead/delayed audio matching reported latency;
-- restart/reactivation when activation-scoped latency changes;
-- offline/realtime parity;
 - activation-time lookahead and oversampling resources;
-- real automation and explicit smoothing policy;
-- meter/telemetry publication;
+- real product latency/restart behavior;
+- offline/realtime parity;
+- automation and explicit smoothing policy;
 - state/preset behavior;
+- bounded meter/gain-reduction telemetry;
 - deterministic host renders and reopen tests.
 
-Keep its DSP crate wrapper-agnostic. Framework helpers graduate only when limiter integration demonstrates that the behavior belongs to Chassis rather than the product.
+Promote framework helpers only after client code demonstrates recurring framework-owned behavior.
 
-## Slice 5 — editor-facing capabilities driven by the client
+## Slice 4 — editor-facing capabilities driven by the client
 
-Once the limiter needs a production editor:
+When the first Chassis client actually needs a production editor:
 
 1. define product-originated begin/change/end gesture semantics and echo suppression;
 2. add bounded meter/telemetry publication with explicit ownership and reclamation;
 3. prove editor attach/detach, recreation, resize/scaling, and parameter observation;
-4. add tail/status or background task infrastructure only if actual product semantics require it.
+4. add tail/status or background task infrastructure only if product semantics require it.
 
 Defer note/MIDI/event ports until an instrument or event processor becomes a real client.
 
-## Slice 6 — VST3/AU and editor qualification
+## Slice 5 — VST3/AU and editor qualification
 
-After native CLAP + limiter evidence is coherent:
+After native CLAP semantics are coherent under a real client:
 
 - qualify a pinned/reviewed `clap-wrapper` revision or release;
 - run VST3/AU native validators and real-host matrices;
 - add cross-format differential state/audio/automation/latency tests;
-- include Ableton save/reopen behavior in VST3 qualification because wrapper state restoration is a host-sensitive boundary;
+- include Ableton save/reopen behavior in VST3 qualification because wrapper state restoration is host-sensitive;
 - prove editor lifecycle across projected formats;
 - then add production packaging/signing/notarization.
+
+## Explicitly deferred
+
+- speculative note/MIDI infrastructure;
+- generic task/executor services;
+- custom allocator/SIMD/zero-copy work without measurements;
+- API convenience macros before real-client repetition exists;
+- replacing Truce in existing products without an explicit migration decision.
