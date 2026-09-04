@@ -1,11 +1,11 @@
-//! Minimal exported CLAP component used to validate the first Chassis adapter slice.
+//! Deterministic exported CLAP component used to qualify Chassis adapter semantics.
 
 use core::convert::Infallible;
 
 use chassis_clap::{ClapStereoEffect, SingleComponentEntryWithF64, clack_export_entry};
 use chassis_core::{
     buffer::BufferRelationship,
-    parameters::{ChoiceOption, ParameterDescriptor},
+    parameters::{ChoiceOption, ParameterDescriptor, ParameterValue},
     process::{ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessChannel},
     runtime::{Component, Process, Processor},
 };
@@ -72,7 +72,40 @@ impl Process<f32> for ConformanceProcessor {
     where
         B: ProcessBufferSource<f32> + ?Sized,
     {
-        process_gain(block, apply_gain);
+        let trim_index = block
+            .parameters()
+            .index("trim")
+            .expect("conformance trim parameter exists");
+        let base_trim = match block.parameters().get("trim") {
+            Some(ParameterValue::Float(value)) => *value,
+            _ => panic!("conformance trim parameter is a float"),
+        };
+        let events = block.parameter_events();
+
+        for mut buffer in block.channels() {
+            match buffer.relationship() {
+                BufferRelationship::InPlace | BufferRelationship::Separate => {
+                    let mut trim = events
+                        .float_cursor(trim_index, base_trim)
+                        .expect("conformance trim base is finite");
+                    for (offset, sample) in buffer
+                        .make_in_place()
+                        .expect("paired main channel has input and output")
+                        .iter_mut()
+                        .enumerate()
+                    {
+                        let gain = trim
+                            .value_at(u32::try_from(offset).expect("callback offset fits u32"))
+                            .expect("callback offset is within the process block");
+                        apply_trim_f32(sample, gain);
+                    }
+                }
+                BufferRelationship::InputOnly => {}
+                BufferRelationship::OutputOnly => {
+                    panic!("conformance effect does not declare output-only channels");
+                }
+            }
+        }
     }
 }
 
@@ -81,28 +114,38 @@ impl Process<f64> for ConformanceProcessor {
     where
         B: ProcessBufferSource<f64> + ?Sized,
     {
-        process_gain(block, apply_gain_f64);
-    }
-}
+        let trim_index = block
+            .parameters()
+            .index("trim")
+            .expect("conformance trim parameter exists");
+        let base_trim = match block.parameters().get("trim") {
+            Some(ParameterValue::Float(value)) => *value,
+            _ => panic!("conformance trim parameter is a float"),
+        };
+        let events = block.parameter_events();
 
-fn process_gain<S, B>(block: &mut ProcessBlock<'_, '_, '_, S, B>, apply_gain: fn(&mut S))
-where
-    S: Copy,
-    B: ProcessBufferSource<S> + ?Sized,
-{
-    for mut buffer in block.channels() {
-        match buffer.relationship() {
-            BufferRelationship::InPlace | BufferRelationship::Separate => {
-                for sample in buffer
-                    .make_in_place()
-                    .expect("paired main channel has input and output")
-                {
-                    apply_gain(sample);
+        for mut buffer in block.channels() {
+            match buffer.relationship() {
+                BufferRelationship::InPlace | BufferRelationship::Separate => {
+                    let mut trim = events
+                        .float_cursor(trim_index, base_trim)
+                        .expect("conformance trim base is finite");
+                    for (offset, sample) in buffer
+                        .make_in_place()
+                        .expect("paired main channel has input and output")
+                        .iter_mut()
+                        .enumerate()
+                    {
+                        let gain = trim
+                            .value_at(u32::try_from(offset).expect("callback offset fits u32"))
+                            .expect("callback offset is within the process block");
+                        apply_trim_f64(sample, gain);
+                    }
                 }
-            }
-            BufferRelationship::InputOnly => {}
-            BufferRelationship::OutputOnly => {
-                panic!("conformance effect does not declare output-only channels");
+                BufferRelationship::InputOnly => {}
+                BufferRelationship::OutputOnly => {
+                    panic!("conformance effect does not declare output-only channels");
+                }
             }
         }
     }
@@ -110,38 +153,39 @@ where
 
 clack_export_entry!(SingleComponentEntryWithF64<ConformanceEffect>);
 
-fn apply_gain(sample: &mut f32) {
-    let gained = *sample * 0.5;
+fn apply_trim_f32(sample: &mut f32, gain: f64) {
+    #[allow(clippy::cast_possible_truncation)]
+    let gained = *sample * gain as f32;
     *sample = if gained.is_subnormal() { 0.0 } else { gained };
 }
 
-fn apply_gain_f64(sample: &mut f64) {
-    let gained = *sample * 0.5;
+fn apply_trim_f64(sample: &mut f64, gain: f64) {
+    let gained = *sample * gain;
     *sample = if gained.is_subnormal() { 0.0 } else { gained };
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_gain, apply_gain_f64};
+    use super::{apply_trim_f32, apply_trim_f64};
 
     #[test]
-    fn gain_flushes_subnormal_output() {
+    fn f32_trim_flushes_subnormal_output() {
         let mut sample = f32::from_bits(1);
-        apply_gain(&mut sample);
+        apply_trim_f32(&mut sample, 0.5);
         assert_eq!(sample.to_bits(), 0.0_f32.to_bits());
     }
 
     #[test]
-    fn gain_preserves_normal_output() {
-        let mut sample = 0.8;
-        apply_gain(&mut sample);
-        assert_eq!(sample.to_bits(), 0.4_f32.to_bits());
+    fn f32_trim_uses_supplied_gain() {
+        let mut sample = 0.8_f32;
+        apply_trim_f32(&mut sample, 0.25);
+        assert_eq!(sample.to_bits(), 0.2_f32.to_bits());
     }
 
     #[test]
-    fn f64_gain_preserves_normal_output() {
+    fn f64_trim_uses_supplied_gain() {
         let mut sample = 0.8_f64;
-        apply_gain_f64(&mut sample);
-        assert_eq!(sample.to_bits(), 0.4_f64.to_bits());
+        apply_trim_f64(&mut sample, 0.25);
+        assert_eq!(sample.to_bits(), 0.2_f64.to_bits());
     }
 }
