@@ -1,131 +1,140 @@
 # Pinned Clack Adapter Audit
 
-Status: implementation-time audit for the first CLAP vertical slice; not a production qualification.
+Status: current dependency/trust-boundary audit for the native CLAP adapter; not a DAW production-qualification record.
 
 ## Selected source
 
-Chassis currently pins the Clack repository at:
+Chassis currently pins Clack at:
 
 ```text
-https://github.com/prokopyl/clack
-c5975f9f89f0953b00768680357985d46178078a
+repository: https://github.com/prokopyl/clack
+revision:   c5975f9f89f0953b00768680357985d46178078a
 ```
 
-That commit is the 2026-08-05 development-version bump to 0.2.0 after the plugin-side reentrancy fix and the immediately following safety/lifetime changes. The relevant Clack workspace is Edition 2024, declares Rust 1.85 MSRV for its publishable crates, and uses `MIT OR Apache-2.0` licensing.
+The revision is also the exact commit referenced by Clack's `v0.2` GitHub prerelease tag. That release was published on 2026-08-05 and explicitly centers plugin/host main-thread re-entrancy support plus the adjacent safety/lifetime changes. The relevant Clack crates use Edition 2024, declare Rust 1.85 MSRV, and are `MIT OR Apache-2.0`.
 
-The manifest uses a full `rev`, not a branch/tag, so Cargo resolves one source commit. `deny.toml` allowlists only the Clack repository as the project's current git-source exception.
+As of 2026-09-04, crates.io/docs.rs still expose 0.1.1 as the latest published registry release for the Clack crates. Chassis therefore keeps the exact git `rev`; using the tag instead would not improve reproducibility, and downgrading to registry 0.1.1 would reintroduce the known re-entrancy defect.
+
+The workspace manifest uses a full revision rather than a branch, and `deny.toml` allowlists only the Clack repository as the current git-source exception.
 
 ## Why Chassis does not use published 0.1.1
 
-The latest published crates.io release available during this audit is Clack 0.1.1 from 2026-07-29.
+Clack issue #89, "UB when hosts call CLAP API re-entrantly," documented that the plugin-side API incorrectly assumed CLAP callbacks could not be re-entered. Affected handlers received exclusive `&mut self`; synchronous host re-entry could therefore create overlapping mutable references and undefined behavior. Bitwig and `clap-wrapper` were cited as real-world reentrant callers.
 
-Clack issue #89, "UB when hosts call CLAP API re-entrantly," documents that the plugin-side API incorrectly assumed CLAP callbacks could not be re-entered. Because handlers received exclusive `&mut self`, synchronous host re-entry could create overlapping mutable references and undefined behavior. The issue explicitly cites Bitwig and `clap-wrapper` as real-world reentrant callers.
+PR #90 / commit `e8c956ae5c2ebabfee4abf28200fc66b484c47b3` corrected the plugin-side model by changing affected handler access from exclusive `&mut` to shared `&self` and requiring explicit interior mutability where mutation is genuinely needed. The `v0.2` release also includes the corresponding host-side re-entrancy work.
 
-This is directly relevant to Chassis:
+This matters directly to Chassis because:
 
-- Bitwig is an intended CLAP qualification host;
-- `clap-wrapper` is the preferred initial VST3/AU projection path;
-- a known aliasing/UB defect in the trust boundary conflicts with Chassis's safety criteria.
+- Bitwig remains an intended CLAP qualification host;
+- `clap-wrapper` remains the preferred first VST3/AU projection path;
+- Chassis state load can synchronously call host parameter-rescan hooks;
+- Chassis activation can synchronously call the host latency-change hook;
+- a known aliasing/UB defect in that trust boundary is unacceptable for the framework's safety criteria.
 
-PR #90 / commit `e8c956ae5c2ebabfee4abf28200fc66b484c47b3` fixed the plugin-side model by changing affected handler access from exclusive `&mut` to shared `&self` and relying on explicit interior mutability where mutation is actually needed.
+The git dependency is therefore a safety/reproducibility exception, not a request to track Clack development head.
 
-Therefore Chassis accepts the supply-chain cost of one fully pinned git dependency rather than knowingly using 0.1.1. This is safety-driven, not a desire to track unreleased features.
+## Additional safety work included by the pin
 
-## Additional post-0.1.1 safety work included by the pin
+The selected revision includes:
 
-The selected revision also comes after several immediately subsequent hardening changes, including:
-
-- plugin-side reentrancy fix;
-- host-side reentrancy work;
-- APIs such as cookie setters/SysEx construction being marked unsafe where required;
+- plugin-side main-thread re-entrancy support;
+- host-side main-thread re-entrancy support;
+- cookie setter/SysEx APIs marked unsafe where required;
 - GUI/window-handle lifetime tightening;
-- development version bump to 0.2.0.
+- the development version bump represented by the `v0.2` prerelease tag.
 
-These changes still require source review where Chassis depends on the affected paths; inclusion by revision is not itself proof of correctness.
+Inclusion by revision is not proof by itself. Chassis tests the adapter paths it relies on and still treats a Clack revision/release change as an audit + conformance event.
 
-## Thread model fit
+## Thread and re-entrancy model fit
 
 The pinned Clack API models:
 
 - audio processor as `Send`, processed exclusively through `&mut`;
-- main-thread state as neither `Send` nor `Sync`;
+- main-thread state as neither `Send` nor `Sync`, with reentrant callbacks exposed through shared `&self`;
 - shared state as `Send + Sync`.
 
-This maps to Chassis's deployment-boundary rule:
+This maps to Chassis as follows:
 
-- `chassis-core::Processor` is not globally `Send` because same-thread embedded runtimes are valid;
-- `chassis-clap` requires the concrete `C::Processor: Send` because CLAP may move the audio processor among host audio threads;
-- processing remains exclusive; Chassis does not require `Sync` for product DSP state.
+- `chassis-core::Processor` is not globally `Send`, because same-thread embedded runtimes remain valid;
+- `chassis-clap` requires concrete processors to be `Send`, because CLAP may transfer the processor between host audio threads;
+- processing remains exclusive and does not require `Sync` DSP state;
+- `ChassisMainThread<C>` uses shared references for CLAP extension callbacks; mutable cross-domain projections use atomics/interior synchronization rather than exclusive main-thread borrows;
+- state load and activation may call host extensions synchronously, so those code paths must remain safe if the host immediately re-enters plugin extension discovery.
 
-The post-reentrancy Clack API gives shared references to main-thread handlers that may be re-entered. Chassis's current adapter only reads its `ChassisMainThread<C>` component during audio-port queries/activation, so this is a clean match.
+The in-process host suite now exercises plugin -> host -> plugin re-entry through parameter-rescan and latency-change callbacks in addition to the pinned dependency's own re-entrancy tests.
 
 ## Buffer boundary
 
-The pinned Clack safe audio API differentiates:
+The pinned Clack safe audio API distinguishes:
 
 - `ChannelPair::InputOnly`;
 - `ChannelPair::OutputOnly`;
 - `ChannelPair::InputOutput` for disjoint input/output;
 - `ChannelPair::InPlace` for exact aliasing represented by one mutable slice.
 
-That maps directly to Chassis process-channel relationships without Chassis handling raw CLAP pointers in the current slice.
+Chassis preserves those safe relationships through setup-built mapped process slots and a lazy generic `ProcessBufferSource`. It does not construct a callback-owned channel `Vec` or erase lifetimes with Chassis-owned unsafe code.
 
-The adapter preserves Clack's safe `ChannelPair<f32>`/`ChannelPair<f64>` relationships through a generic lazy `ProcessBufferSource` and calls the Chassis runtime. It does not materialize a callback-owned channel collection or perform explicit process-time heap allocation in its translation code.
-
-This is a proof, not the general multibus solution. Arbitrary ports/channels must not be implemented by allocating a `Vec<ChannelBuffer>` every callback or by introducing lifetime-erasing unsafe scratch just to preserve the current `ProcessBlock` shape. Adapter evidence should determine whether that core borrowing shape needs refinement.
+Current in-process tests cover mapped main + sidechain topology, f32/f64 paths, minimum/maximum frame bounds, configured maximum parameter-event load, and allocation/deallocation across the complete adapter callback path.
 
 ## Current semantic mapping
 
-Implemented in the first slice:
+Current native CLAP projection is:
 
 ```text
-CLAP factory/init            -> construct Chassis component on main thread
-CLAP activate                -> ProcessConfig + Chassis activate
-CLAP process (f32/f64 mapped audio) -> ChannelPair -> ProcessBufferSource -> InstanceRuntime
-CLAP reset                   -> Activated::reset
-CLAP deactivate              -> Activated::deactivate
-CLAP audio-ports extension   -> one stereo main input + one stereo main output
+CLAP factory/init              -> construct/validate Chassis component + projections
+CLAP activate                  -> InstanceRuntime activation + activation-scoped latency
+CLAP start/process/stop        -> Clack lifecycle + Chassis process callback
+CLAP reset                     -> InstanceRuntime::reset
+CLAP deactivate                -> InstanceRuntime::deactivate
+CLAP audio ports               -> setup-built stable mapped ports/process slots
+CLAP process f32/f64           -> safe ChannelPair views -> ProcessBufferSource -> InstanceRuntime
+CLAP params                    -> typed metadata + bounded value-event normalization/publication
+CLAP state                     -> bounded CHSS save/load + transactional parameter publication
+CLAP render                    -> ProcessMode::Realtime / ProcessMode::Offline
+CLAP latency                   -> activation snapshot + host change notification
+CLAP transport                 -> bounded borrowed transport snapshot
 ```
 
-Clack owns CLAP create/init/start/stop/destroy scaffolding. Chassis currently uses Clack's default no-op start/stop because core has not established a separate semantic start/stop requirement.
+The deterministic conformance export has audible sample-accurate `trim` automation, typed float/choice state, f32/f64 processing, and zero declared latency. A separate in-process delayed probe proves nonzero reported latency matches actual delayed audio sample-for-sample.
 
-Not implemented yet:
+Note/MIDI/event ports, GUI/editor APIs, and broad application/host infrastructure remain intentionally deferred until real clients require them.
 
-- sidechain/aux/multiple-bus native host qualification;
-- configurable audio-port/layout negotiation;
-- parameters, automation, modulation, events, MIDI/notes, transport;
-- state;
-- latency/tail/sleep/bypass semantics;
-- GUI;
-- bundle/install tooling;
-- real-host qualification of the expanded adapter.
+## Failure containment and realtime evidence
 
-The adapter now advertises/dispatches optional f64 and maps the render extension into `ProcessMode::Offline`; it returns `ProcessStatus::Continue` conservatively. Native validator qualification exists for the current f64 artifact.
+The adapter rejects or contains invalid inputs before product DSP for the validated boundaries currently represented by core/Clack, including invalid activation bounds, unsupported audio mappings/sample representations, malformed callback dimensions, and invalid/beyond-budget parameter event streams.
 
-## Failure containment
+Current mechanical evidence includes:
 
-The Chassis adapter rejects before product DSP when:
+- failed product activation leaves the CLAP instance reusable;
+- create/init/destroy without activation is repeatable;
+- reactivation recomputes activation-scoped latency and can change sample-rate/block bounds;
+- processor ownership can transfer to another audio thread without concurrent mutation;
+- current main + sidechain f32/f64 callback paths allocate/deallocate zero times at the configured event bound in the test harness;
+- frame-bound extremes are accepted and over-bound process blocks rejected;
+- active state save linearizes to one completed scalar generation;
+- nonzero latency metadata matches an actual delayed impulse;
+- state-rescan and latency host callbacks tolerate immediate plugin extension re-entry.
 
-- CLAP activation frame bounds are zero, exceed the CLAP signed 32-bit limit, or fail Chassis validation;
-- process data does not expose exactly one input and one output port for this proof;
-- the main port is not exactly stereo;
-- required sample representations are unavailable, mixed, or supplied as `Both`;
-- a required main channel is input-only or output-only;
-- Chassis callback bounds reject the block.
+Chassis still relies on Clack for the raw C ABI and pointer/alias validation. `chassis-core` remains `#![forbid(unsafe_code)]`; current adapter production code adds no Chassis-owned unsafe block.
 
-Clack handles the raw C ABI and constructs safe audio views. Chassis must still audit Clack's internal unsafe implementation and panic/FFI containment before calling the backend production-qualified.
+## Current qualification boundary
 
-## Promotion gates
+Current Linux CI packages the conformance `.clap` and runs the pinned `clap-validator` 0.4.1 source plus bounded two-worker fuzz. The current result is 35 passed, 0 failed, 9 intentional skips, with the bounded fuzz run clean.
 
-Before this slice becomes the basis for real product exports:
+The most recent REAPER evidence is historical macOS-arm64 coverage from before the latest automation/latency work. It must not be described as current-head DAW qualification.
 
-1. let Cargo resolve the pinned git source and regenerate/review `Cargo.lock`;
-2. run fmt/test/clippy/deny/machete locally;
-3. inspect the exact resolved Clack/transitive tree and source revision;
-4. compile the `chassis-clap-conformance` rlib/cdylib;
-5. package a real `.clap` artifact for the current platform;
-6. run `clap-validator` plus lifecycle/buffer stress;
-7. smoke-test at least Bitwig or another real CLAP host, with reentrant behavior in mind;
-8. decide the general port/channel borrowing model before arbitrary multibus support;
-9. requalify render-mode and f64 mappings in native hosts when available;
-10. migrate back to a crates.io Clack release when a suitable safety-fixed release is published and validated.
+A manual adapter-overhead benchmark harness exists for representative local hardware; CI may compile it, but hosted-runner timing is not promoted as performance evidence.
+
+## Remaining promotion gates
+
+Before describing Chassis CLAP as production-qualified:
+
+1. keep Rust fmt/test/Clippy/Loom and current CLAP validator/fuzz gates green;
+2. retain portable macOS/Windows compilation/test coverage alongside Linux;
+3. run the adapter-overhead benchmark on stable representative hardware and record CPU/OS/toolchain/workload;
+4. requalify current head in real DAWs: scan/instantiate, save/reopen, deterministic automation render, active save, and PDC alignment;
+5. exercise a host-selected native f64 path when an available DAW can select it;
+6. add Bitwig or equivalent real-world re-entrancy coverage when available;
+7. qualify the first real Chassis product before freezing higher-level authoring conveniences;
+8. re-audit and requalify if Clack changes revision/source form;
+9. migrate to crates.io only when a suitable safety-fixed registry release exists and passes the same evidence gates.
