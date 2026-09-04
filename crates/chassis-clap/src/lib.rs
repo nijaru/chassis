@@ -3,8 +3,8 @@
 //! This adapter projects explicit stable audio/parameter IDs and a bounded scalar
 //! parameter publication into CLAP. Process-time audio is driven by the validated
 //! setup mapping rather than a hard-coded stereo buffer shape. The audio path
-//! supports f32 exports and explicit f64-capable exports; choice-parameter and
-//! note/event projections remain explicit follow-up work.
+//! supports f32 exports and explicit f64-capable exports; note/event projections
+//! remain explicit follow-up work.
 
 mod audio;
 mod parameters;
@@ -15,7 +15,7 @@ use std::{
     io::{Read as _, Write as _},
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
     },
     vec::Vec,
 };
@@ -31,6 +31,7 @@ use chassis_core::{
 };
 use clack_extensions::{
     audio_ports::{AudioPortInfoWriter, PluginAudioPorts, PluginAudioPortsImpl},
+    latency::{HostLatency, PluginLatency, PluginLatencyImpl},
     params::{
         HostParams, ParamDisplayWriter, ParamInfo, ParamRescanFlags, PluginAudioProcessorParams,
         PluginMainThreadParams, PluginParams,
@@ -89,10 +90,9 @@ pub trait ClapStereoEffect: Component + Default + 'static {
     /// Stable CLAP parameter IDs keyed by canonical Chassis parameter key.
     ///
     /// The mapping must contain exactly one entry for every descriptor returned
-    /// by [`Component::parameter_descriptors`]. The initial adapter supports
-    /// scalar float, integer, and boolean descriptors; choices are rejected
-    /// during plugin construction until their index/identity projection is
-    /// specified.
+    /// by [`Component::parameter_descriptors`]. Float, integer, boolean, and
+    /// choice descriptors are projected; choices use their stepped plain index
+    /// for CLAP while Chassis retains stable semantic option identity in state.
     const CLAP_PARAMETER_IDS: &'static [(&'static str, u32)] = &[];
 
     /// Maximum number of known CLAP parameter value events accepted per block.
@@ -158,6 +158,7 @@ pub struct ChassisMainThread<'host, C> {
     audio: ClapAudioConfiguration,
     shared: Arc<ClapParameterState>,
     render: Arc<RenderState>,
+    latency: AtomicU32,
     host: HostMainThreadHandle<'host>,
 }
 
@@ -185,6 +186,7 @@ where
 
     fn declare_extensions(builder: &mut PluginExtensions<Self>, shared: Option<&Self::Shared<'_>>) {
         builder.register::<PluginAudioPorts>();
+        builder.register::<PluginLatency>();
         if shared.is_none_or(|shared| !shared.parameters.bindings().is_empty()) {
             builder.register::<PluginParams>();
         }
@@ -225,6 +227,7 @@ where
 
     fn declare_extensions(builder: &mut PluginExtensions<Self>, shared: Option<&Self::Shared<'_>>) {
         builder.register::<PluginAudioPorts>();
+        builder.register::<PluginLatency>();
         if shared.is_none_or(|shared| !shared.parameters.bindings().is_empty()) {
             builder.register::<PluginParams>();
         }
@@ -302,6 +305,7 @@ where
         audio,
         shared: Arc::clone(&shared.parameters),
         render: Arc::clone(&shared.render),
+        latency: AtomicU32::new(0),
         host,
     })
 }
@@ -367,6 +371,21 @@ where
             main_thread.audio.audio_io(),
         )
         .map_err(|_| PluginError::Message("Chassis component activation failed"))?;
+
+    let latency = processor
+        .runtime
+        .active_latency()
+        .ok_or(PluginError::Message(
+            "Chassis runtime did not publish activation latency",
+        ))?
+        .get();
+    let previous_latency = main_thread.latency.swap(latency, Ordering::AcqRel);
+    if previous_latency != latency
+        && let Some(host_latency) = main_thread.host.get_extension::<HostLatency>()
+    {
+        host_latency.changed(&main_thread.host);
+    }
+
     Ok(processor)
 }
 
@@ -391,6 +410,15 @@ where
         if let Some(info) = self.audio.info(index, direction) {
             writer.set(&info);
         }
+    }
+}
+
+impl<C> PluginLatencyImpl for ChassisMainThread<'_, C>
+where
+    C: ClapStereoEffect,
+{
+    fn get(&self) -> u32 {
+        self.latency.load(Ordering::Acquire)
     }
 }
 
