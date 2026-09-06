@@ -43,7 +43,7 @@ Current automated evidence includes:
 - a deliberate delayed probe whose reported 64-sample latency matches its actual stereo impulse delay;
 - active state save during processing linearizing to one coherent completed parameter generation.
 
-The recorded REAPER 7.79/macOS-arm64 result remains historical host evidence because it predates the newest automation/latency work. When a production DAW is available again, refresh scan/instantiate/save-reopen, automated `trim` render, active-save, PDC alignment, and native host precision behavior.
+Current head carries REAPER 7.79/macOS-arm64 (M3 Max, 48 kHz) real-DAW evidence (2026-09-06) for scan/instantiate, sample-exact automated `trim` rendering, injected-state save/reload rendering, and active-save during automated playback; see `docs/design/validation.md` for the host matrix. PDC alignment and native f64 dispatch remain open (they need a nonzero-latency export artifact and a host that selects `data64`).
 
 The remaining code-side Phase-2 measurement gap is adapter-only overhead on stable representative hardware. CI runner timing is not treated as production performance data. A dependency-free `cargo bench -p chassis-clap --bench adapter_overhead` harness is ready for that measurement.
 
