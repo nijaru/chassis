@@ -88,6 +88,13 @@ impl Process<f32> for DelayedProcessor {
                 .expect("main channel is an in-place pair")
             {
                 std::mem::swap(sample, &mut delay[*position]);
+                // Flush subnormal output to zero: denormals can trigger large
+                // CPU penalties on some processors, and hosts fuzz with
+                // subnormal input. Input subnormals are flushed on the way
+                // out of the delay line, so both directions are covered.
+                if sample.is_subnormal() {
+                    *sample = 0.0;
+                }
                 *position += 1;
                 if *position == delay.len() {
                     *position = 0;

@@ -22,11 +22,15 @@ jobs:
       - name: Install Rust 1.98.0
         run: rustup toolchain install 1.98.0 --profile minimal
 
-      - name: Build conformance plugin
-        run: cargo +1.98.0 build --release -p chassis-clap-conformance --locked
+      - name: Build conformance plugins
+        run: |
+          cargo +1.98.0 build --release -p chassis-clap-conformance --locked
+          cargo +1.98.0 build --release -p chassis-clap-delayed-probe --locked
 
-      - name: Package Linux CLAP
-        run: cp target/release/libchassis_clap_conformance.so target/release/chassis-clap-conformance.clap
+      - name: Package Linux CLAPs
+        run: |
+          cp target/release/libchassis_clap_conformance.so target/release/chassis-clap-conformance.clap
+          cp target/release/libchassis_clap_delayed_probe.so target/release/chassis-delayed-probe.clap
 
       - name: Build pinned clap-validator
         run: >-
@@ -36,11 +40,15 @@ jobs:
           --locked
           clap-validator
 
-      - name: Validate CLAP
-        run: clap-validator validate target/release/chassis-clap-conformance.clap
+      - name: Validate CLAPs
+        run: |
+          clap-validator validate target/release/chassis-clap-conformance.clap
+          clap-validator validate target/release/chassis-delayed-probe.clap
 
       - name: Bounded CLAP fuzz
-        run: clap-validator fuzz -j2 -d5s target/release/chassis-clap-conformance.clap
+        run: |
+          clap-validator fuzz -j2 -d5s target/release/chassis-clap-conformance.clap
+          clap-validator fuzz -j2 -d5s target/release/chassis-delayed-probe.clap
 
   validate-macos:
     runs-on: macos-latest
@@ -51,10 +59,12 @@ jobs:
       - name: Install Rust 1.98.0
         run: rustup toolchain install 1.98.0 --profile minimal
 
-      - name: Build conformance plugin
-        run: cargo +1.98.0 build --release -p chassis-clap-conformance --locked
+      - name: Build conformance plugins
+        run: |
+          cargo +1.98.0 build --release -p chassis-clap-conformance --locked
+          cargo +1.98.0 build --release -p chassis-clap-delayed-probe --locked
 
-      - name: Package macOS CLAP bundle
+      - name: Package macOS CLAP bundles
         run: |
           bundle=target/release/chassis-clap-conformance.clap
           mkdir -p "$bundle/Contents/MacOS"
@@ -75,6 +85,25 @@ jobs:
           </dict>
           </plist>
           PLIST
+          probe=target/release/chassis-delayed-probe.clap
+          mkdir -p "$probe/Contents/MacOS"
+          cp target/release/libchassis_clap_delayed_probe.dylib "$probe/Contents/MacOS/chassis-delayed-probe"
+          chmod +x "$probe/Contents/MacOS/chassis-delayed-probe"
+          cat > "$probe/Contents/Info.plist" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleDevelopmentRegion</key><string>en</string>
+            <key>CFBundleExecutable</key><string>chassis-delayed-probe</string>
+            <key>CFBundleIdentifier</key><string>com.nijaru.chassis.delayed-probe</string>
+            <key>CFBundleName</key><string>Chassis Delayed Probe</string>
+            <key>CFBundlePackageType</key><string>BNDL</string>
+            <key>CFBundleShortVersionString</key><string>0.0.0</string>
+            <key>CFBundleVersion</key><string>1</string>
+          </dict>
+          </plist>
+          PLIST
 
       - name: Build pinned clap-validator
         run: >-
@@ -84,11 +113,15 @@ jobs:
           --locked
           clap-validator
 
-      - name: Validate CLAP
-        run: clap-validator validate target/release/chassis-clap-conformance.clap
+      - name: Validate CLAPs
+        run: |
+          clap-validator validate target/release/chassis-clap-conformance.clap
+          clap-validator validate target/release/chassis-delayed-probe.clap
 
       - name: Bounded CLAP fuzz
-        run: clap-validator fuzz -j2 -d5s target/release/chassis-clap-conformance.clap
+        run: |
+          clap-validator fuzz -j2 -d5s target/release/chassis-clap-conformance.clap
+          clap-validator fuzz -j2 -d5s target/release/chassis-delayed-probe.clap
 
   validate-windows:
     runs-on: windows-latest
@@ -99,12 +132,16 @@ jobs:
       - name: Install Rust 1.98.0
         run: rustup toolchain install 1.98.0 --profile minimal
 
-      - name: Build conformance plugin
-        run: cargo +1.98.0 build --release -p chassis-clap-conformance --locked
+      - name: Build conformance plugins
+        run: |
+          cargo +1.98.0 build --release -p chassis-clap-conformance --locked
+          cargo +1.98.0 build --release -p chassis-clap-delayed-probe --locked
 
-      - name: Package Windows CLAP
+      - name: Package Windows CLAPs
         shell: bash
-        run: cp target/release/chassis_clap_conformance.dll target/release/chassis-clap-conformance.clap
+        run: |
+          cp target/release/chassis_clap_conformance.dll target/release/chassis-clap-conformance.clap
+          cp target/release/chassis_clap_delayed_probe.dll target/release/chassis-delayed-probe.clap
 
       - name: Build pinned clap-validator
         shell: bash
@@ -115,10 +152,14 @@ jobs:
           --locked
           clap-validator
 
-      - name: Validate CLAP
+      - name: Validate CLAPs
         shell: bash
-        run: clap-validator validate target/release/chassis-clap-conformance.clap
+        run: |
+          clap-validator validate target/release/chassis-clap-conformance.clap
+          clap-validator validate target/release/chassis-delayed-probe.clap
 
       - name: Bounded CLAP fuzz
         shell: bash
-        run: clap-validator fuzz -j2 -d5s target/release/chassis-clap-conformance.clap
+        run: |
+          clap-validator fuzz -j2 -d5s target/release/chassis-clap-conformance.clap
+          clap-validator fuzz -j2 -d5s target/release/chassis-delayed-probe.clap
