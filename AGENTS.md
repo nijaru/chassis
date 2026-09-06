@@ -62,7 +62,7 @@ Current automated headless evidence is split into:
 - **CLAP Conformance**: packaged Linux/macOS/Windows artifacts, pinned `clap-validator` 0.4.1, and bounded fuzz;
 - **in-process Clack host tests**: actual Chassis CLAP entry for adapter allocation/work bounds, f32/f64, lifecycle, active state save, latency metadata/DSP consistency, main-thread re-entrancy, and panic containment.
 
-The current validator suite is 35 passed / 0 failed / 9 intentional skips. Do not equate the synthetic host or validator with production DAW qualification. Current head carries REAPER 7.79/macOS-arm64 evidence (2026-09-06) for scan/instantiate, sample-exact automation render, state round-trip, and active-save; PDC alignment and native f64 dispatch remain open.
+The current validator suite is 35 passed / 0 failed / 9 intentional skips. Do not equate the synthetic host or validator with production DAW qualification. Current head carries REAPER 7.79/macOS-arm64 evidence (2026-09-06) for scan/instantiate, sample-exact automation render, state round-trip, active-save, and PDC alignment with the exported delayed probe; native f64 dispatch remains open.
 
 `cargo-deny` and `cargo-machete` are automated policy gates. Record exact evidence; never report an unrun gate as passing.
 

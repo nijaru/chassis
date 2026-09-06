@@ -3,6 +3,7 @@ members = [
     "crates/chassis-core",
     "crates/chassis-clap",
     "examples/clap-conformance",
+    "examples/clap-delayed-probe",
 ]
 resolver = "3"
 

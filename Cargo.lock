@@ -53,6 +53,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "chassis-clap-delayed-probe"
+version = "0.0.0"
+dependencies = [
+ "chassis-clap",
+ "chassis-core",
+]
+
+[[package]]
 name = "chassis-core"
 version = "0.0.0"
 

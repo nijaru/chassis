@@ -23,7 +23,7 @@ Current automated evidence includes:
 - deliberate delayed probe: reported 64-sample latency matches an impulse delayed by exactly 64 samples;
 - active CLAP state save during processing linearizes to a coherent completed generation.
 
-Current head carries REAPER 7.79/macOS-arm64 real-DAW evidence (2026-09-06, M3 Max, 48 kHz) for scan/instantiate, sample-exact automated `trim` rendering, injected-state save/reload rendering, and active-save during automated playback. PDC alignment and native f64 dispatch remain open (see Slice 2).
+Current head carries REAPER 7.79/macOS-arm64 real-DAW evidence (2026-09-06, M3 Max, 48 kHz) for scan/instantiate, sample-exact automated `trim` rendering, injected-state save/reload rendering, active-save during automated playback, and PDC alignment with the exported delayed probe. Native f64 dispatch remains open (see Slice 2).
 
 ## Slice 1 — representative performance evidence
 
@@ -58,11 +58,11 @@ Complete items:
 1. ~~scan and instantiate~~ — FX browser lists "CLAPi: Chassis Conformance"; instantiation enumerates 5 parameters (Mode/Trim/Bypass/Wet/Delta);
 2. ~~save/reopen state~~ — injected CHSS blobs (trim 0.25/0.75, validated by the real `StateDocument` decoder and byte-identical to a REAPER-saved blob at 0.5) render sample-exact after reload;
 3. ~~render actual `trim` automation~~ — square envelope renders sample-exact: trim changes land at exact sample offsets 24000/36000 against the deterministic reference (48,000/48,000 frames);
-4. ~~save state while automation is active~~ — project saved while the transport rolled through 4-point trim automation; saved base state coherent (trim=0.5, not torn); automation replays sample-exact after reload.
+4. ~~save state while automation is active~~ — project saved while the transport rolled through 4-point trim automation; saved base state coherent (trim=0.5, not torn); automation replays sample-exact after reload;
+5. ~~verify PDC/alignment with delayed DSP~~ — complete (2026-09-06): the exported 64-sample delayed probe (`examples/clap-delayed-probe`, a workspace member) mixes against a dry track as exactly `2*x[i]` for all 48,000 frames; REAPER honored the CLAP latency extension and aligned the delayed wet path sample-exact.
 
 Remaining items:
 
-5. PDC/alignment with delayed DSP — blocked on the conformance artifact: it reports zero latency, so no PDC compensation is observable. Needs a nonzero-latency export (e.g. a delayed-probe companion artifact like the in-process `DelayedProbe` fixture);
 6. native f64 dispatch — blocked: the artifact advertises `SUPPORTS_64BITS` without `PREFERS_64BITS`, and REAPER chooses f32 dispatch.
 
 Recorded host quirk (not an adapter defect): `TrackFX_SetParamNormalized` on an *inactive* CLAP reports success but delivers no parameter change; FabFilter Pro-Q 4 (CLAP) shows the identical stale readback while ReaEQ (VST) applies immediately. The automation path (process events) is sample-exact, which is the semantically meaningful host behavior.

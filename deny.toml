@@ -34,6 +34,7 @@ exceptions = [
     { allow = ["AGPL-3.0-or-later"], crate = "chassis-core" },
     { allow = ["AGPL-3.0-or-later"], crate = "chassis-clap" },
     { allow = ["AGPL-3.0-or-later"], crate = "chassis-clap-conformance" },
+    { allow = ["AGPL-3.0-or-later"], crate = "chassis-clap-delayed-probe" },
 ]
 
 [licenses.private]
