@@ -49,6 +49,8 @@ The current validator suite reports **35 passed, 0 failed, 9 intentional skips**
 
 These gates do not establish production DAW behavior or representative performance.
 
+**CI status note (2026-09-06):** GitHub Actions has been rejecting jobs since 2026-09-04 13:18 UTC with a billing failure ("recent account payments have failed or your spending limit needs to be increased"), so no session commits after `c7744a9` have received CI coverage. The same gates were run locally at current head (`2285fbb`) as the interim evidence: full workspace fmt/tests (112 passed)/strict Clippy/cargo-deny/cargo-machete, plus both packaged artifacts through the pinned `clap-validator` (conformance: 35 passed / 0 failed / 9 intentional skips; delayed probe: 21 / 0 / 23) with clean bounded five-second two-worker fuzz. The public CI matrix must go green again before the next release-oriented claim.
+
 ## Current in-process CLAP evidence
 
 Tests under `crates/chassis-clap/tests/` exercise the actual exported Chassis CLAP entry through pinned Clack host APIs rather than a synthetic adapter-only seam.
