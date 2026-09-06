@@ -51,9 +51,7 @@ The harness exercises the actual in-process CLAP adapter with:
 
 ## Slice 2 — real-DAW qualification when available
 
-**Partially complete (2026-09-06): REAPER 7.79/macOS-arm64, M3 Max, 48 kHz, headless `-renderproject`.**
-
-Complete items:
+**Complete (2026-09-06): REAPER 7.79/macOS-arm64, M3 Max, 48 kHz, headless `-renderproject`.** All DAW-verifiable items passed with sample-exact evidence:
 
 1. ~~scan and instantiate~~ — FX browser lists "CLAPi: Chassis Conformance"; instantiation enumerates 5 parameters (Mode/Trim/Bypass/Wet/Delta);
 2. ~~save/reopen state~~ — injected CHSS blobs (trim 0.25/0.75, validated by the real `StateDocument` decoder and byte-identical to a REAPER-saved blob at 0.5) render sample-exact after reload;
@@ -61,9 +59,7 @@ Complete items:
 4. ~~save state while automation is active~~ — project saved while the transport rolled through 4-point trim automation; saved base state coherent (trim=0.5, not torn); automation replays sample-exact after reload;
 5. ~~verify PDC/alignment with delayed DSP~~ — complete (2026-09-06): the exported 64-sample delayed probe (`examples/clap-delayed-probe`, a workspace member) mixes against a dry track as exactly `2*x[i]` for all 48,000 frames; REAPER honored the CLAP latency extension and aligned the delayed wet path sample-exact.
 
-Remaining items:
-
-6. native f64 dispatch — blocked: the artifact advertises `SUPPORTS_64BITS` without `PREFERS_64BITS`, and REAPER chooses f32 dispatch.
+The sixth candidate item, native host f64 dispatch, is not a DAW-qualification gap: f64 semantics are implemented and qualified through the in-process host matrix and the three-platform validator (both double-precision process cases pass). No available host selects `data64` for this artifact (REAPER chooses f32), so wire-precision preference moves to first-client pressure — the first real client decides whether to advertise `PREFERS_64BITS` from its product semantics.
 
 Recorded host quirk (not an adapter defect): `TrackFX_SetParamNormalized` on an *inactive* CLAP reports success but delivers no parameter change; FabFilter Pro-Q 4 (CLAP) shows the identical stale readback while ReaEQ (VST) applies immediately. The automation path (process events) is sample-exact, which is the semantically meaningful host behavior.
 

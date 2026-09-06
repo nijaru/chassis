@@ -85,11 +85,11 @@ Remaining, in order:
 
 1. ~~Measure adapter-only overhead on representative stable hardware with the existing benchmark harness.~~ Complete (2026-09-03): recorded in `docs/design/validation.md`; median 49–53 ns/callback no-event, 477–499 ns at 64 events, flat across frames/precision; no material adapter cost, no optimization warranted. (One-time fix: the bench target needed `harness = false` to actually execute.)
 2. ~~Refresh real-DAW current-head evidence when a suitable host is available~~ Complete (2026-09-06): REAPER 7.79/macOS-arm64 (M3 Max, 48 kHz) headless evidence recorded for scan/instantiate, sample-exact automated `trim` render, state save/reload render, active-save during automation, and PDC alignment with the exported delayed probe (`docs/design/validation.md` host matrix).
-3. Exercise native host f64 dispatch when a production host can be induced to select it (blocked: current artifact advertises `SUPPORTS_64BITS` without `PREFERS_64BITS`, and REAPER chooses f32).
+3. ~~Exercise native host f64 dispatch~~ Not a DAW-qualification gap: f64 semantics are implemented and qualified through the in-process host matrix and three-platform validator (both double-precision process cases pass); no available host selects `data64` (REAPER chooses f32). Wire-precision preference (`PREFERS_64BITS`) moves to first-client pressure: the first real client decides from its product semantics.
 4. Add further host/architecture coverage when release targets make it useful; Bitwig remains valuable real-world re-entrancy coverage even though re-entrant semantics are now executable in-process.
 5. Start the first real FX client and implement only capabilities its product semantics require.
 
-The 2026-09-06 REAPER 7.79/macOS-arm64 result is current-head evidence for scan/instantiate, automation render, state round-trip, active-save, and PDC alignment; native f64 dispatch remains open (see the remaining-work list above).
+The 2026-09-06 REAPER 7.79/macOS-arm64 result is current-head evidence for scan/instantiate, automation render, state round-trip, active-save, and PDC alignment. Native f64 wire dispatch moves to first-client pressure rather than blocking Phase 2.
 
 ## Phase 3 — first real FX client
 

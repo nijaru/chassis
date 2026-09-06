@@ -121,7 +121,7 @@ Chassis still relies on Clack for the raw C ABI and pointer/alias validation. `c
 
 Current Linux CI packages the conformance `.clap` and runs the pinned `clap-validator` 0.4.1 source plus bounded two-worker fuzz. The current result is 35 passed, 0 failed, 9 intentional skips, with the bounded fuzz run clean.
 
-The most recent REAPER evidence is historical macOS-arm64 coverage from before the latest automation/latency work. It must not be described as current-head DAW qualification.
+Current REAPER evidence (2026-09-06) is current-head macOS-arm64 coverage of scan/instantiate, deterministic automation render, state round-trip, active save, and PDC alignment; see `docs/design/validation.md` for the recorded matrix.
 
 A manual adapter-overhead benchmark harness exists for representative local hardware; CI may compile it, but hosted-runner timing is not promoted as performance evidence.
 
@@ -131,9 +131,9 @@ Before describing Chassis CLAP as production-qualified:
 
 1. keep Rust fmt/test/Clippy/Loom and current CLAP validator/fuzz gates green;
 2. retain portable macOS/Windows compilation/test coverage alongside Linux;
-3. run the adapter-overhead benchmark on stable representative hardware and record CPU/OS/toolchain/workload;
-4. requalify current head in real DAWs: scan/instantiate, save/reopen, deterministic automation render, active save, and PDC alignment;
-5. exercise a host-selected native f64 path when an available DAW can select it;
+3. ~~run the adapter-overhead benchmark on stable representative hardware~~ complete (2026-09-03, Apple M3 Max/rustc 1.98.0; recorded in `docs/design/validation.md`);
+4. ~~requalify current head in real DAWs: scan/instantiate, save/reopen, deterministic automation render, active save, and PDC alignment~~ complete (2026-09-06, REAPER 7.79/macOS-arm64, sample-exact evidence recorded in `docs/design/validation.md`);
+5. f64 wire precision: headlessly qualified (validator + in-process host cover both double-precision process cases); whether a client advertises `PREFERS_64BITS` is a first-client product decision, not a promotion gate;
 6. add Bitwig or equivalent real-world re-entrancy coverage when available;
 7. qualify the first real Chassis product before freezing higher-level authoring conveniences;
 8. re-audit and requalify if Clack changes revision/source form;

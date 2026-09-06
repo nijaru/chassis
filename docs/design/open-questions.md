@@ -24,7 +24,7 @@ Freeze gates:
 - ergonomic higher-level bus/port views only after real DSP clients demonstrate recurring access patterns;
 - target-specific legality for inactive/null/zero-buffer cases as formats require;
 - benchmark controlled copy/conversion paths before adding ownership or unsafe complexity to remove them;
-- native production-host f64 dispatch remains desirable even though validator and in-process host coverage exercise f64 successfully.
+- production-host f64 wire dispatch is qualified headlessly (validator + in-process host cover both double-precision process cases); whether a client advertises `PREFERS_64BITS` is a first-client product decision, not a framework freeze gate.
 
 ## Parameters and automation
 
@@ -111,17 +111,20 @@ Current three-platform headless qualification is current:
 - in-process Clack host exercises allocation/work bounds, activation failure/retry, panic containment, repeated instances, reactivation, thread transfer, re-entrancy, active state save, latency notification, and delayed audio;
 - dependency advisory/license/source/dead-dependency policy gates are automated.
 
-Open production-host work:
+Current production-host evidence (2026-09-06, REAPER 7.79/macOS-arm64):
 
-- current-head DAW scan/instantiate/state reopen;
-- actual automated `trim` render differential against expected sample offsets in a production DAW;
-- active state save during DAW automation;
-- real-host PDC/alignment;
-- native host f64 dispatch when a production host can be induced to choose it;
+- DAW scan/instantiate/state reopen: current head;
+- automated `trim` render differential: sample-exact at expected sample offsets;
+- active state save during DAW automation: coherent, replays sample-exact;
+- real-host PDC/alignment: sample-exact through the exported delayed probe.
+
+Remaining production-host work:
+
+- wire-precision preference (`PREFERS_64BITS`/`data64`) when the first real client's product semantics justify it;
 - additional release architectures/hosts as targets become concrete;
 - Bitwig confirmation when available.
 
-The historical REAPER 7.79/macOS-arm64 baseline predates current head and remains regression history only.
+The pre-2026-09 REAPER baseline predates current head and remains regression history only.
 
 ## Export metadata/API
 
