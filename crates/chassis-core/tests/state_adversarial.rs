@@ -5,7 +5,7 @@ use std::convert::Infallible;
 use chassis_core::{
     parameters::{ParameterDescriptor, ParameterValue},
     runtime::{InstanceRuntime, Processor},
-    state::{StateDocument, StateEntry, StateLimits, StateMigration, StateValue},
+    state::{StateDecodeError, StateDocument, StateEntry, StateLimits, StateMigration, StateValue},
 };
 
 const PRODUCT_ID: &str = "com.example.adversarial";
@@ -187,5 +187,25 @@ fn every_truncated_runtime_load_is_failure_atomic() {
     assert_eq!(
         runtime.parameters().get("gain"),
         Some(&ParameterValue::Float(0.25))
+    );
+}
+
+#[test]
+fn declared_entry_count_cannot_allocate_beyond_backing_input() {
+    let mut encoded = StateDocument::new("x", 1)
+        .expect("valid identity")
+        .encode()
+        .expect("empty state encodes");
+    encoded[12..16].copy_from_slice(&u32::MAX.to_le_bytes());
+    let limits = StateLimits {
+        max_entries: u32::MAX,
+        ..StateLimits::default()
+    };
+    assert_eq!(
+        StateDocument::decode_with_limits(&encoded, limits),
+        Err(StateDecodeError::EntryCountExceedsInput {
+            actual: u32::MAX,
+            maximum: 0,
+        })
     );
 }

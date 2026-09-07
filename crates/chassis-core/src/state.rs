@@ -354,7 +354,18 @@ impl StateDocument {
                 StateDocumentError::EmptyProductId,
             ));
         }
-        let mut entries = Vec::with_capacity(entry_count as usize);
+        // Each entry needs at least its fixed header. Reject impossible counts
+        // before allocating, even when callers deliberately raise max_entries.
+        let maximum_from_input = reader.remaining() / ENTRY_HEADER_LEN;
+        let entry_count_usize =
+            usize::try_from(entry_count).map_err(|_| StateDecodeError::LengthUnrepresentable)?;
+        if entry_count_usize > maximum_from_input {
+            return Err(StateDecodeError::EntryCountExceedsInput {
+                actual: entry_count,
+                maximum: maximum_from_input,
+            });
+        }
+        let mut entries = Vec::with_capacity(entry_count_usize);
 
         for _ in 0..entry_count {
             let key_len = usize::from(reader.read_u16()?);
@@ -1010,6 +1021,13 @@ pub enum StateDecodeError {
         /// Configured maximum entry count.
         maximum: u32,
     },
+    /// The input cannot contain the declared number of entry headers.
+    EntryCountExceedsInput {
+        /// Declared entry count.
+        actual: u32,
+        /// Maximum entry count supported by the remaining encoded bytes.
+        maximum: usize,
+    },
     /// Product identity was not UTF-8.
     InvalidProductIdUtf8(Utf8Error),
     /// Entry key was not UTF-8.
@@ -1089,6 +1107,10 @@ impl fmt::Display for StateDecodeError {
                     "state has {actual} entries but {maximum} are allowed"
                 )
             }
+            Self::EntryCountExceedsInput { actual, maximum } => write!(
+                formatter,
+                "state declares {actual} entries but input can contain at most {maximum} headers"
+            ),
             Self::InvalidProductIdUtf8(error) => write!(
                 formatter,
                 "state product identity is invalid UTF-8: {error}"
