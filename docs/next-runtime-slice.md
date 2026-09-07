@@ -19,7 +19,25 @@ The first client is opted in: the **Tonal EQ** port from Truce `audio-plugins` (
 
 The EQ exercises the framework at parameter scale the conformance artifact does not reach — a 28-parameter surface, per-band shape choice params — while needing no lookahead, oversampling, or telemetry for the parity pass. Use it as the primary API pressure: promote framework helpers only after the port code demonstrates recurring framework-owned behavior.
 
-The client should drive:
+The first parity/runtime checkpoint is implemented (2026-09-07). The client has
+28 mapped parameters, exact-offset automation, state restoration, f32/f64 wire
+processing, and actual 0/64-sample activation latency. Its frozen-core differential
+suite checks 221,184 f32 samples across 108 configurations. Product callback tests
+check dense 4,096-event blocks without heap allocation or reclamation. This client
+exposed stepped display conversion and activation-restart notification gaps, now
+covered in Chassis's own regressions.
+
+REAPER 7.79/macOS-arm64 rendered the client's analog automation and settled linear
+PDC cases bit exactly (96,000 samples each); the static linear state also survived
+save/reopen unchanged. The host fixture uses a normal message loop for restart
+and waits for completed render statistics. Single-shot offline rendering can
+still defer activation changes until after rendering. The client is usable via
+host-generic parameter controls; a production editor and VST3/AU remain unqualified.
+Client Linux/macOS CI is configured but its initial private-repository run was
+blocked before execution by account billing limits; these client results are
+local macOS evidence, separate from Chassis's passing cross-platform CI.
+
+Remaining client pressure includes:
 
 - real parameter-count scale (28 parameters, choice params) through descriptor publication, dense-index mapping, and state save/load;
 - real product latency policy and restart semantics (Tonal EQ minimum phase is zero latency; its linear-phase path requires 64 samples);
