@@ -31,7 +31,7 @@ Each mutable semantic guarantee has one authority. A host/shared/editor represen
 
 ## Construction and activation
 
-`InstanceRuntime::new()` validates the immutable parameter schema before product activation. Activation then:
+`InstanceRuntime::new()` validates the immutable parameter schema before product activation. `parameters_mut()` returns a value-only mutation view: callers can update or reset validated values but cannot replace the store or its schema. Activation then:
 
 1. verifies the component schema still matches the runtime;
 2. validates the proposed structural audio configuration;

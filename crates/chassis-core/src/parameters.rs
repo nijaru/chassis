@@ -883,7 +883,54 @@ pub struct ParameterStore {
     lookup: Vec<usize>,
 }
 
+/// Mutable parameter values borrowed without authority to replace their schema.
+///
+/// The store remains owned by its instance. This view deliberately exposes no
+/// mutable reference to the store itself, so activation-time dense indices stay
+/// meaningful for the entire instance lifetime.
+pub struct ParameterValuesMut<'a> {
+    store: &'a mut ParameterStore,
+}
+
+impl ParameterValuesMut<'_> {
+    /// Replace a value after validating its stable key and domain.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParameterStoreError`] when the key or value is invalid.
+    pub fn set(
+        &mut self,
+        key: impl AsRef<str>,
+        value: ParameterValue,
+    ) -> Result<(), ParameterStoreError> {
+        self.store.set(key, value)
+    }
+
+    /// Replace a value after validating its dense index and domain.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParameterStoreError`] when the index or value is invalid.
+    pub fn set_index(
+        &mut self,
+        index: ParameterIndex,
+        value: ParameterValue,
+    ) -> Result<(), ParameterStoreError> {
+        self.store.set_index(index, value)
+    }
+
+    /// Restore all values to their validated defaults.
+    pub fn reset(&mut self) {
+        self.store.reset();
+    }
+}
+
 impl ParameterStore {
+    /// Borrow value mutation authority without allowing schema replacement.
+    pub fn values_mut(&mut self) -> ParameterValuesMut<'_> {
+        ParameterValuesMut { store: self }
+    }
+
     /// Construct an owned store with conventional bounds and descriptor defaults.
     ///
     /// # Errors

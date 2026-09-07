@@ -12,7 +12,10 @@ use crate::{
         DEFAULT_EFFECT_PORTS,
     },
     buffer::ChannelBuffer,
-    parameters::{ParameterDescriptor, ParameterStateError, ParameterStore, ParameterStoreError},
+    parameters::{
+        ParameterDescriptor, ParameterStateError, ParameterStore, ParameterStoreError,
+        ParameterValuesMut,
+    },
     process::{
         ActivationConfig, ChannelBufferSlice, ProcessBlock, ProcessBlockError, ProcessBufferSource,
         ProcessConfig, ProcessContext,
@@ -508,8 +511,17 @@ where
     ///
     /// Cross-thread adapters must synchronize before entering this single-owner
     /// semantic store; this method itself does not make the runtime `Sync`.
-    pub fn parameters_mut(&mut self) -> &mut ParameterStore {
-        &mut self.parameters
+    /// The returned view cannot replace the immutable schema:
+    ///
+    /// ```compile_fail
+    /// use chassis_core::{parameters::ParameterStore, runtime::{InstanceRuntime, Processor}};
+    /// struct Dsp;
+    /// impl Processor for Dsp {}
+    /// let mut runtime = InstanceRuntime::<Dsp>::new(&[]).unwrap();
+    /// *runtime.parameters_mut() = ParameterStore::new(&[]).unwrap();
+    /// ```
+    pub fn parameters_mut(&mut self) -> ParameterValuesMut<'_> {
+        self.parameters.values_mut()
     }
 
     /// Return the durable validated non-parameter semantic state entries.

@@ -3,8 +3,8 @@ use std::{fmt, string::String, vec::Vec};
 use chassis_core::{
     automation::{ParameterEvent, ParameterEventChange, ParameterEventValue},
     parameters::{
-        ChoiceId, ChoiceOption, ParameterDescriptor, ParameterIndex, ParameterKind, ParameterStore,
-        ParameterValue,
+        ChoiceId, ChoiceOption, ParameterDescriptor, ParameterIndex, ParameterKind, ParameterValue,
+        ParameterValuesMut,
     },
     state::{
         StateDocument, StateDocumentError, StateEncodeError, StateEntry, StateLimits, StateValue,
@@ -444,7 +444,7 @@ impl ClapParameterState {
 
     pub(crate) fn sync_into(
         &self,
-        store: &mut ParameterStore,
+        mut store: ParameterValuesMut<'_>,
         scratch: &mut [f64],
     ) -> Result<(), ParameterSyncError> {
         if scratch.len() != self.publication.len() {
@@ -708,7 +708,7 @@ mod tests {
     use super::*;
     use chassis_core::{
         automation::{ParameterEventChange, ParameterEvents},
-        parameters::{ChoiceId, ChoiceOption, ParameterDescriptor},
+        parameters::{ChoiceId, ChoiceOption, ParameterDescriptor, ParameterStore},
         state::StateEntry,
     };
     use clack_plugin::events::Pckn;
@@ -805,7 +805,7 @@ mod tests {
         let mut store = ParameterStore::new(&descriptors).expect("schema is valid");
         let mut scratch = vec![0.0; 3];
         state
-            .sync_into(&mut store, &mut scratch)
+            .sync_into(store.values_mut(), &mut scratch)
             .expect("projection syncs");
         assert_eq!(store.get("gain"), Some(&ParameterValue::Float(0.75)));
         assert_eq!(store.get("steps"), Some(&ParameterValue::Integer(-2)));
@@ -813,7 +813,7 @@ mod tests {
         store.reset();
         state.request_sync();
         state
-            .sync_into(&mut store, &mut scratch)
+            .sync_into(store.values_mut(), &mut scratch)
             .expect("explicit reactivation sync succeeds");
         assert_eq!(store.get("gain"), Some(&ParameterValue::Float(0.75)));
         assert_eq!(store.get("steps"), Some(&ParameterValue::Integer(-2)));
@@ -987,7 +987,7 @@ mod tests {
         let mut store = ParameterStore::new(&descriptors).expect("schema is valid");
         let mut scratch = vec![0.0; 2];
         state
-            .sync_into(&mut store, &mut scratch)
+            .sync_into(store.values_mut(), &mut scratch)
             .expect("control choice syncs");
         assert_eq!(
             store.get("mode"),
@@ -1013,7 +1013,7 @@ mod tests {
             .publish_events(&events, &mut scratch)
             .expect("automation publication succeeds");
         state
-            .sync_into(&mut store, &mut scratch)
+            .sync_into(store.values_mut(), &mut scratch)
             .expect("automation choice syncs");
         assert_eq!(
             store.get("mode"),
