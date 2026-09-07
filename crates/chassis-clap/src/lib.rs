@@ -497,6 +497,7 @@ where
         else {
             return Err(core::fmt::Error);
         };
+        let value = binding.display_plain(value).ok_or(core::fmt::Error)?;
         if let ParameterKind::Choice { options, .. } = binding.descriptor().kind() {
             // Stepped parameters must convert any in-range plain value; hosts
             // legitimately present fractional positions between options.

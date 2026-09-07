@@ -108,6 +108,18 @@ impl ClapParameterBinding {
         }
     }
 
+    /// Quantize display-only positions without weakening semantic value validation.
+    pub(crate) fn display_plain(&self, value: f64) -> Option<f64> {
+        let (minimum, maximum) = self.plain_range();
+        if !value.is_finite() || !(minimum..=maximum).contains(&value) {
+            return None;
+        }
+        Some(match self.descriptor.kind() {
+            ParameterKind::Float { .. } => value,
+            _ => value.round(),
+        })
+    }
+
     pub(crate) fn flags(&self) -> clack_extensions::params::ParamInfoFlags {
         use clack_extensions::params::ParamInfoFlags;
 
@@ -750,6 +762,34 @@ mod tests {
             ParameterDescriptor::boolean("bypass", "Bypass", false)
                 .expect("boolean parameter is valid"),
         ]
+    }
+
+    #[test]
+    fn display_quantizes_fractional_positions_without_accepting_semantic_values() {
+        let state =
+            ClapParameterState::new(&descriptors(), &[("gain", 1), ("steps", 2), ("bypass", 3)])
+                .unwrap();
+        let integer = &state.bindings()[1];
+        let boolean = &state.bindings()[2];
+        for (plain, expected) in [
+            (0.0, 0.0),
+            (0.0101, 0.0),
+            (0.49, 0.0),
+            (0.5, 1.0),
+            (0.99, 1.0),
+            (1.0, 1.0),
+        ] {
+            assert_eq!(boolean.display_plain(plain), Some(expected));
+        }
+        assert_eq!(integer.display_plain(-2.7), Some(-3.0));
+        for invalid in [f64::NAN, f64::INFINITY, -0.1, 1.1] {
+            assert_eq!(boolean.display_plain(invalid), None);
+        }
+        for binding in [integer, boolean] {
+            assert!(binding.parameter_value(0.25).is_none());
+            assert!(binding.event_value(0.25).is_none());
+            assert!(binding.state_value(0.25).is_none());
+        }
     }
 
     #[test]
