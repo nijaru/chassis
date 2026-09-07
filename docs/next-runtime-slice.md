@@ -33,11 +33,10 @@ save/reopen unchanged. The host fixture uses a normal message loop for restart
 and waits for completed render statistics. Single-shot offline rendering can
 still defer activation changes until after rendering. The client is usable via
 host-generic parameter controls; a production editor and VST3/AU remain unqualified.
-Client Linux/macOS CI is configured but its initial private-repository run was
-blocked before execution by account billing limits; these client results are
-local macOS evidence, separate from Chassis's passing cross-platform CI.
+These client results are local macOS evidence, separate from Chassis's passing
+cross-platform CI.
 
-Remaining client pressure includes:
+The ongoing client validation contract covers:
 
 - real parameter-count scale (28 parameters, choice params) through descriptor publication, dense-index mapping, and state save/load;
 - real product latency policy and restart semantics (Tonal EQ minimum phase is zero latency; its linear-phase path requires 64 samples);
