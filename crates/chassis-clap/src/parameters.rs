@@ -272,6 +272,7 @@ pub(crate) struct ClapParameterState {
     id_lookup: Vec<usize>,
     key_lookup: Vec<usize>,
     publication: ScalarPublication,
+    maximum_input_events: u32,
 }
 
 impl ClapParameterState {
@@ -302,8 +303,7 @@ impl ClapParameterState {
                 ParameterKind::Float { .. } | ParameterKind::Boolean { .. } => {}
                 ParameterKind::Integer {
                     minimum, maximum, ..
-                } if integer_to_plain(*minimum) >= -EXACT_INTEGER_LIMIT
-                    && integer_to_plain(*maximum) <= EXACT_INTEGER_LIMIT => {}
+                } if *minimum >= -(1_i64 << 53) && *maximum <= (1_i64 << 53) => {}
                 ParameterKind::Integer { .. } => {
                     return Err(ParameterMappingError::IntegerRangeNotRepresentable(
                         descriptor.key().as_str().to_owned(),
@@ -366,7 +366,17 @@ impl ClapParameterState {
             id_lookup,
             key_lookup,
             publication: ScalarPublication::new(&initial_values),
+            maximum_input_events: 1024,
         })
+    }
+
+    pub(crate) fn with_input_event_bound(mut self, maximum: u32) -> Self {
+        self.maximum_input_events = maximum;
+        self
+    }
+
+    pub(crate) fn begin_block(&self) -> Option<u64> {
+        self.publication.completed_generation()
     }
 
     pub(crate) fn bindings(&self) -> &[ClapParameterBinding] {
@@ -400,10 +410,17 @@ impl ClapParameterState {
     }
 
     pub(crate) fn apply_input(&self, input: &InputEvents<'_>) {
+        // Flush has no failure return: reject oversized batches before mutation.
+        if input.len() > self.maximum_input_events {
+            return;
+        }
         for event in input {
             let Some(event) = event.as_event::<ParamValueEvent>() else {
                 continue;
             };
+            if !event.pckn().matches_all() {
+                continue;
+            }
             let Some(id) = event.param_id() else {
                 continue;
             };
@@ -481,6 +498,7 @@ impl ClapParameterState {
     pub(crate) fn publish_events(
         &self,
         events: &[ParameterEvent<'_>],
+        expected_generation: Option<u64>,
         scratch: &mut [f64],
     ) -> Result<(), ParameterSyncError> {
         if events.is_empty() {
@@ -492,6 +510,10 @@ impl ClapParameterState {
         let Some(generation) = self.publication.try_snapshot_into(scratch) else {
             return Ok(());
         };
+        // A state/control write during this block owns the newer generation.
+        if Some(generation) != expected_generation {
+            return Ok(());
+        }
         for event in events {
             let index = usize::try_from(event.parameter().get())
                 .map_err(|_| ParameterSyncError::InvalidPublishedValue)?;
@@ -685,10 +707,16 @@ pub(crate) fn normalized_events<'a>(
     output: &mut Vec<ParameterEvent<'a>>,
 ) -> Result<(), &'static str> {
     output.clear();
+    if input.len() > state.maximum_input_events {
+        return Err("CLAP input event count exceeds the activation bound");
+    }
     for event in input {
         let Some(event) = event.as_event::<ParamValueEvent>() else {
             continue;
         };
+        if !event.pckn().matches_all() {
+            return Err("CLAP targeted parameter events are unsupported");
+        }
         let Some(id) = event.param_id() else {
             continue;
         };
@@ -754,6 +782,65 @@ mod tests {
             ClapParameterState::new(&descriptors, &[("gain", 1), ("steps", 2), ("bypass", 3)])
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn integer_mapping_rejects_values_rounded_into_the_exact_boundary() {
+        for value in [-(1_i64 << 53) - 1, (1_i64 << 53) + 1] {
+            let descriptor = ParameterDescriptor::integer("large", "Large", value, value, value)
+                .expect("integer schema is valid");
+            assert!(matches!(
+                ClapParameterState::new(&[descriptor], &[("large", 1)]),
+                Err(ParameterMappingError::IntegerRangeNotRepresentable(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn total_input_bound_rejects_unknown_events_and_entire_flush_batch() {
+        let descriptor =
+            ParameterDescriptor::float("gain", "Gain", 0.0, 1.0, 0.0).expect("schema is valid");
+        let state = ClapParameterState::new(&[descriptor], &[("gain", 1)])
+            .expect("mapping is valid")
+            .with_input_event_bound(1);
+        let raw = [
+            ParamValueEvent::new(0, ClapId::new(1), Pckn::match_all(), 0.25),
+            ParamValueEvent::new(0, ClapId::new(999), Pckn::match_all(), 0.75),
+        ];
+        let input = InputEvents::from_buffer(&raw);
+        let mut normalized = Vec::with_capacity(2);
+        assert_eq!(
+            normalized_events(&state, &input, &mut normalized),
+            Err("CLAP input event count exceeds the activation bound")
+        );
+        assert!(normalized.is_empty());
+        state.apply_input(&input);
+        assert_eq!(state.value(0).to_bits(), 0.0_f64.to_bits());
+    }
+
+    #[test]
+    fn targeted_parameter_events_never_become_global_updates() {
+        use clack_plugin::events::Match;
+        let descriptor =
+            ParameterDescriptor::float("gain", "Gain", 0.0, 1.0, 0.0).expect("schema is valid");
+        let state =
+            ClapParameterState::new(&[descriptor], &[("gain", 1)]).expect("mapping is valid");
+        for target in [
+            Pckn::new(0_u16, Match::All, Match::All, Match::All),
+            Pckn::new(Match::All, 0_u16, Match::All, Match::All),
+            Pckn::new(Match::All, Match::All, 60_u16, Match::All),
+            Pckn::new(Match::All, Match::All, Match::All, 1_u32),
+        ] {
+            let raw = [ParamValueEvent::new(0, ClapId::new(1), target, 0.75)];
+            let input = InputEvents::from_buffer(&raw);
+            let mut normalized = Vec::with_capacity(1);
+            assert_eq!(
+                normalized_events(&state, &input, &mut normalized),
+                Err("CLAP targeted parameter events are unsupported")
+            );
+            state.apply_input(&input);
+            assert_eq!(state.value(0).to_bits(), 0.0_f64.to_bits());
+        }
     }
 
     #[test]
@@ -832,7 +919,7 @@ mod tests {
         ];
         let mut scratch = vec![0.0; 3];
         state
-            .publish_events(&events, &mut scratch)
+            .publish_events(&events, state.begin_block(), &mut scratch)
             .expect("automation publication succeeds");
         assert!((state.value(0) - 0.75).abs() <= f64::EPSILON);
         assert!((state.value(1) + 2.0).abs() <= f64::EPSILON);
@@ -1010,7 +1097,7 @@ mod tests {
             ),
         ];
         state
-            .publish_events(&events, &mut scratch)
+            .publish_events(&events, state.begin_block(), &mut scratch)
             .expect("automation publication succeeds");
         state
             .sync_into(store.values_mut(), &mut scratch)

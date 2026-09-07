@@ -100,9 +100,11 @@ The CLAP host lifetime splits durable shared/main-thread state from the active a
 
 The bridge uses even completed generations and odd in-progress writer tokens. Realtime publication is one-shot/nonblocking; realtime snapshots have a fixed retry bound; non-realtime control/state snapshots may wait for an in-progress writer.
 
-A realtime automation endpoint is published only from the generation observed before processing. If a newer control edit or state load has already advanced the generation, the stale realtime publication is rejected.
+A realtime automation endpoint is published only from the generation observed before processing. If a newer control edit or state load has already advanced the generation, the stale realtime publication is rejected. The adapter captures that token before synchronizing block state and entering product DSP; reading a fresh token at completion would incorrectly let older automation replace a state loaded during processing.
 
 `u64::MAX - 1` is the terminal stable generation; generation wraparound is not a correctness assumption.
+
+`CLAP_MAX_INPUT_EVENTS` bounds all input-event inspection, including unknown event types and parameter IDs, separately from `CLAP_MAX_PARAMETER_EVENTS` normalization capacity. The default total bound is 1,024; products whose declared parameter budget exceeds it must raise the total bound. Process rejects an oversized batch before DSP, while parameter flush rejects the complete batch without mutation because that CLAP callback cannot return failure. Targeted parameter values (port/channel/key/note ID) are unsupported: process rejects them and flush ignores them instead of turning them into global changes.
 
 ## Active state save
 

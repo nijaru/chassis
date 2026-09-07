@@ -101,6 +101,13 @@ pub trait ClapStereoEffect: Component + Default + 'static {
     /// component that has no parameter projection.
     const CLAP_MAX_PARAMETER_EVENTS: u32 = 0;
 
+    /// Maximum total input events inspected by process or parameter flush.
+    ///
+    /// Includes unknown events and IDs, independently of normalized parameter
+    /// capacity. Process rejects oversized batches; flush ignores the complete
+    /// batch because CLAP provides no failure return for that callback.
+    const CLAP_MAX_INPUT_EVENTS: u32 = 1024;
+
     /// Chassis parameter-state schema version projected through CLAP state.
     const CLAP_STATE_SCHEMA: u32 = 1;
 }
@@ -269,9 +276,15 @@ where
             "CLAP parameter projection requires a positive event bound",
         ));
     }
+    if C::CLAP_MAX_PARAMETER_EVENTS > C::CLAP_MAX_INPUT_EVENTS {
+        return Err(PluginError::Message(
+            "CLAP parameter event bound exceeds total input event bound",
+        ));
+    }
     let parameters =
         ClapParameterState::new(component.parameter_descriptors(), C::CLAP_PARAMETER_IDS)
-            .map_err(|error| parameter_mapping_error(&error))?;
+            .map_err(|error| parameter_mapping_error(&error))?
+            .with_input_event_bound(C::CLAP_MAX_INPUT_EVENTS);
     Ok(ChassisShared {
         parameters: Arc::new(parameters),
         render: Arc::new(RenderState::default()),
@@ -668,6 +681,7 @@ where
         P: ChassisProcess<S>,
         S: ClapSample,
     {
+        let generation = self.shared.parameters.begin_block();
         self.sync_parameters()?;
         let transport = map_transport(process.transport)?;
         let mut buffers = ClapBufferSource::<S>::new(audio, &self.process_slots)?;
@@ -696,7 +710,11 @@ where
 
         self.shared
             .parameters
-            .publish_events(&self.normalized_events, &mut self.control_values)
+            .publish_events(
+                &self.normalized_events,
+                generation,
+                &mut self.control_values,
+            )
             .map_err(sync_error)?;
         self.sync_parameters()?;
 

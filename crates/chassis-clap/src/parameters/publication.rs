@@ -31,6 +31,11 @@ impl ScalarPublication {
         }
     }
 
+    pub(super) fn completed_generation(&self) -> Option<u64> {
+        let generation = self.generation.load(Ordering::Acquire);
+        generation.is_multiple_of(2).then_some(generation)
+    }
+
     pub(super) fn len(&self) -> usize {
         self.values.len()
     }

@@ -246,5 +246,19 @@ fn active_save_linearizes_before_or_after_audio_endpoint_publication() {
     assert!((parameter_value(&after, "second") - 0.75).abs() <= f64::EPSILON);
     assert_ne!(after, initial);
 
+    let processor = std::thread::scope(|scope| {
+        let worker = scope.spawn(move || run_automation_callback(processor));
+        entered.wait();
+        state
+            .load(&plugin.plugin_handle(), &mut initial.as_slice())
+            .expect("state load succeeds during processing");
+        release.wait();
+        worker.join().expect("audio worker returns processor")
+    });
+    assert_eq!(
+        save_state(&mut plugin, state),
+        initial,
+        "newer loaded state must win over in-flight automation"
+    );
     plugin.deactivate(processor);
 }
