@@ -67,19 +67,20 @@ Methodology notes: RPP files must stay CRLF (LF-only makes `-renderproject` stal
 
 ## Slice 3 — first real FX client
 
-Once a product explicitly opts into Chassis, use it as the primary API pressure. A mastering-limiter class of client is the intended first case because it exercises the right missing capabilities. Do not duplicate or silently migrate the existing Truce `audio-plugins` implementation.
+The first client is opted in: the **Tonal EQ** port from Truce `audio-plugins` (decision recorded 2026-09-06, `audio-plugins` `docs/migration.md` commit `92c2b52`). Port order is fixed on the client side: DSP parity against the frozen JUCE four-band oracle (`plugins-juce/eq`, 28 parameters) first, then the five-slot product changes as separate verified changes. Do not duplicate or silently migrate the existing Truce implementation.
+
+The EQ exercises the framework at parameter scale the conformance artifact does not reach — a 28-parameter surface, per-band shape choice params — while needing no lookahead, oversampling, or telemetry for the parity pass. Use it as the primary API pressure: promote framework helpers only after the port code demonstrates recurring framework-owned behavior.
 
 The client should drive:
 
-- activation-time lookahead and oversampling resources;
-- real product latency/restart behavior;
+- real parameter-count scale (28 parameters, choice params) through descriptor publication, dense-index mapping, and state save/load;
+- real product latency policy (zero for the parity pass) and restart semantics;
 - offline/realtime parity;
-- automation and explicit smoothing policy;
-- state/preset behavior;
-- bounded meter/gain-reduction telemetry;
-- deterministic host renders and reopen tests.
+- automation and explicit smoothing policy at product scale;
+- state/preset behavior under product use;
+- deterministic host renders and reopen tests (the REAPER methodology from Slice 2 applies directly).
 
-Promote framework helpers only after client code demonstrates recurring framework-owned behavior.
+The originally intended mastering-limiter pressure (activation-time lookahead and oversampling resources, bounded meter/gain-reduction telemetry) moves to the Invisibull opt-in. The decision trail is recorded here so the delayed client does not silently drop it.
 
 ## Slice 4 — editor-facing capabilities driven by the client
 

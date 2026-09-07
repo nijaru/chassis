@@ -85,7 +85,7 @@ CI actions should be exact-version/commit pinned when practical. `actions/checko
 1. Keep repository authority docs synchronized with executable evidence.
 2. Run the adapter benchmark on stable representative hardware; do not use shared CI timing as production performance evidence.
 3. When a production DAW is available, refresh current-head scan/instantiate/save-reopen, automated `trim` render, active-save-during-automation, PDC alignment, and native precision behavior.
-4. Let the first product that explicitly opts into Chassis drive the next framework surface. A mastering-limiter class of client is the intended pressure case for lookahead resources, offline parity, smoothing, telemetry, state, and deterministic rendering.
+4. Let the first product that explicitly opts into Chassis drive the next framework surface. The Tonal EQ port opted in 2026-09-06 (`audio-plugins` commit `92c2b52`): DSP parity against the frozen JUCE oracle first, five-slot product changes after parity. A mastering-limiter class of client (Invisibull) follows at its own opt-in and is the intended pressure case for lookahead resources, offline parity, smoothing, telemetry, and deterministic rendering.
 5. Do not duplicate or silently migrate the existing Truce `audio-plugins` implementation to Chassis.
 6. Add product-originated gesture/edit and meter/telemetry infrastructure when a real Chassis client needs them; defer note/MIDI until an instrument/event client exists.
 7. Then qualify VST3/AU projection and editor lifecycle through the same product semantics and differential tests.

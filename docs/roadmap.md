@@ -93,9 +93,11 @@ The 2026-09-06 REAPER 7.79/macOS-arm64 result is current-head evidence for scan/
 
 ## Phase 3 — first real FX client
 
-Start a mastering-limiter class of client before broadening the framework speculatively. Do not duplicate or migrate an existing Truce product unless that product explicitly opts into Chassis.
+The first real client is the **Tonal EQ** port from Truce `audio-plugins`, opted in 2026-09-06 (`audio-plugins` `docs/migration.md`, commit `92c2b52`). Port order is fixed on the client side: DSP parity against the frozen JUCE four-band oracle (`plugins-juce/eq`, 28 parameters) first, then five-slot product changes as separate verified changes. Do not duplicate or silently migrate Truce; the port moves only as the recorded opt-in directs.
 
-The first real delayed/dynamics client should pressure-test:
+The EQ is the right first client for the current framework surface: zero-latency static-coefficient DSP, parameters/state/automation/latency already qualified, and no lookahead/oversampling/telemetry requirements. It pressures real scale the conformance artifact does not: a 28-parameter surface and per-band shape choice params. Chassis adds surface only where the port demonstrates recurring need.
+
+A mastering-limiter class of client (Truce Invisibull) is the intended second client. When it opts in, it should pressure-test:
 
 - production lookahead resources whose declared latency matches delayed audio;
 - latency changes across activation/restart rather than live drift;
@@ -108,7 +110,7 @@ The first real delayed/dynamics client should pressure-test:
 
 Graduate only repeated or clearly framework-owned behavior into Chassis.
 
-A tonal EQ and compressor/dynamics client follow when they add distinct pressure: many controls/custom GUI for EQ, sidechain/routing/metering for dynamics.
+A compressor/dynamics client follows when it adds distinct pressure: sidechain/routing/metering.
 
 ## Phase 4 — desktop formats and editor lifecycle
 
