@@ -75,7 +75,7 @@ Current cases include:
 - `host_frame_bounds.rs`: activation frame extremes and over-bound rejection;
 - `host_activation_failure.rs`: product activation failure and same-instance retry;
 - `host_latency_audio.rs`: nonzero reported latency matching actual delayed audio;
-- `host_restart.rs`: one restart request per activation, unchanged active latency, and reactivation using the completed automation endpoint;
+- `host_restart.rs`: one processor restart request per activation, immediate successful-state-load restart notification before processing, rejected state without restart, unchanged active latency, and reactivation using published state;
 - `host_active_state_save.rs`: coherent CLAP state save while processing is active;
 - `host_reentrancy.rs`: plugin -> host -> plugin main-thread re-entry through parameter-rescan and latency-change callbacks;
 - `host_panic_containment.rs`: activation/process panic containment at the Clack FFI boundary.

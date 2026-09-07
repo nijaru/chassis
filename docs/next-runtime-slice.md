@@ -67,7 +67,12 @@ A processor whose observed controls require different activation resources sets
 until the host deactivates it. `InstanceRuntime::restart_requested()` exposes this
 semantic signal to embeddings. The CLAP adapter publishes completed parameter
 endpoints before forwarding at most one host restart request per activation.
-Controls received through active flush or state load are evaluated on the next
-process call; a host may defer restart, so processing must remain valid meanwhile.
+Controls received through active flush are evaluated on the next process call.
+A successful CLAP state load requests restart immediately after publication and
+value rescan because it may replace activation-time resources before processing.
+This conservative request also applies while inactive and is separate from the
+once-per-activation processor request. A host may defer either request, so
+processing must remain valid meanwhile; a request does not guarantee that a
+single-shot offline render will start with the newly requested resources.
 The in-process `host_restart` test checks request coalescing, fixed active latency,
 and activation from the published parameter values.

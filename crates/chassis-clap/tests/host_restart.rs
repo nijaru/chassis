@@ -304,3 +304,60 @@ fn restart_is_bounded_and_reactivation_uses_published_parameters() {
     assert_eq!(requests.load(Ordering::Relaxed), 1);
     plugin.deactivate(processor.stop_processing());
 }
+
+#[test]
+fn state_load_requests_restart_before_processing_and_reactivation_uses_loaded_state() {
+    use chassis_core::state::{StateDocument, StateEntry, StateValue};
+    use clack_extensions::state::PluginState;
+    let entry = PluginEntry::load_from_clack::<SingleComponentEntry<DelayedProbe>>(c"").unwrap();
+    let host_info = HostInfo::new("chassis-test", "", "", "").unwrap();
+    let requests = Arc::new(AtomicUsize::new(0));
+    let mut plugin = PluginInstance::<TestHostHandlers>::new(
+        |()| TestHostShared(Arc::clone(&requests)),
+        |_| TestHostMainThread,
+        &entry,
+        c"org.nijaru.chassis.delayed-probe",
+        &host_info,
+    )
+    .unwrap();
+    let config = PluginAudioConfiguration {
+        sample_rate: 48_000.0,
+        min_frames_count: 1,
+        max_frames_count: 128,
+    };
+    let processor = plugin
+        .activate(|_, _| TestHostAudioProcessor, config)
+        .unwrap();
+    let handle = plugin.plugin_handle();
+    let state = handle.get_extension::<PluginState>().unwrap();
+    assert!(state.load(&handle, &mut b"invalid".as_slice()).is_err());
+    assert_eq!(requests.load(Ordering::Relaxed), 0);
+    let mut document =
+        StateDocument::new(DelayedProbe::CLAP_ID, DelayedProbe::CLAP_STATE_SCHEMA).unwrap();
+    document
+        .insert(StateEntry::new("parameter/phase", StateValue::Float(1.0)))
+        .unwrap();
+    let encoded = document.encode().unwrap();
+    state.load(&handle, &mut encoded.as_slice()).unwrap();
+    assert_eq!(requests.load(Ordering::Relaxed), 1);
+    assert_eq!(
+        handle
+            .get_extension::<PluginLatency>()
+            .unwrap()
+            .get(&handle),
+        64
+    );
+    plugin.deactivate(processor);
+    let processor = plugin
+        .activate(|_, _| TestHostAudioProcessor, config)
+        .unwrap();
+    let handle = plugin.plugin_handle();
+    assert_eq!(
+        handle
+            .get_extension::<PluginLatency>()
+            .unwrap()
+            .get(&handle),
+        128
+    );
+    plugin.deactivate(processor);
+}

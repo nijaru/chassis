@@ -576,6 +576,9 @@ where
         {
             params.rescan(&self.host, ParamRescanFlags::VALUES);
         }
+        // State can replace activation-time resources before another process call.
+        // Request preparation now; the host may still defer the restart.
+        self.host.as_shared().request_restart();
         Ok(())
     }
 }
