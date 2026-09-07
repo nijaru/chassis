@@ -175,6 +175,8 @@ where
     P: Processor,
 {
     runtime: InstanceRuntime<P>,
+    host: HostAudioProcessorHandle<'a>,
+    restart_sent: bool,
     shared: &'a ChassisShared,
     normalized_events: Vec<chassis_core::automation::ParameterEvent<'a>>,
     control_values: Vec<f64>,
@@ -329,6 +331,7 @@ impl<'host, C> PluginMainThread<'host, ChassisShared> for ChassisMainThread<'hos
 }
 
 fn activate_processor<'a, C, P, M>(
+    host: HostAudioProcessorHandle<'a>,
     main_thread: &ChassisMainThread<'_, C>,
     shared: &'a ChassisShared,
     audio_config: PluginAudioConfiguration,
@@ -368,6 +371,8 @@ where
 
     let mut processor = ChassisAudioProcessor {
         runtime,
+        host,
+        restart_sent: false,
         shared,
         normalized_events,
         control_values,
@@ -581,12 +586,12 @@ where
     P: ChassisProcess<f32> + Processor + Send + 'static,
 {
     fn activate(
-        _host: HostAudioProcessorHandle<'a>,
+        host: HostAudioProcessorHandle<'a>,
         main_thread: &ChassisMainThread<'_, C>,
         shared: &'a ChassisShared,
         audio_config: PluginAudioConfiguration,
     ) -> Result<Self, PluginError> {
-        activate_processor::<C, P, F32Only>(main_thread, shared, audio_config)
+        activate_processor::<C, P, F32Only>(host, main_thread, shared, audio_config)
     }
 
     fn process(
@@ -614,12 +619,12 @@ where
     P: ChassisProcess<f32> + ChassisProcess<f64> + Processor + Send + 'static,
 {
     fn activate(
-        _host: HostAudioProcessorHandle<'a>,
+        host: HostAudioProcessorHandle<'a>,
         main_thread: &ChassisMainThread<'_, C>,
         shared: &'a ChassisShared,
         audio_config: PluginAudioConfiguration,
     ) -> Result<Self, PluginError> {
-        activate_processor::<C, P, F32AndF64>(main_thread, shared, audio_config)
+        activate_processor::<C, P, F32AndF64>(host, main_thread, shared, audio_config)
     }
 
     fn process(
@@ -717,6 +722,11 @@ where
             )
             .map_err(sync_error)?;
         self.sync_parameters()?;
+
+        if !self.restart_sent && self.runtime.restart_requested() {
+            self.restart_sent = true;
+            self.host.as_shared().request_restart();
+        }
 
         Ok(ProcessStatus::Continue)
     }

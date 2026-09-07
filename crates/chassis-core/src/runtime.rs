@@ -155,6 +155,18 @@ pub trait Processor {
     /// Stateless processors may use the default no-op implementation.
     fn reset(&mut self) {}
 
+    /// Request a new activation after processing observes an incompatible control change.
+    ///
+    /// Keep the current activation's resources and latency intact until deactivation.
+    /// Deployment adapters inspect this after a completed block and publish its
+    /// parameter endpoints before requesting a host restart. Control or state changes
+    /// received between blocks are observed on the next process call. This request
+    /// does not guarantee that the host will restart immediately.
+    #[must_use]
+    fn restart_requested(&self) -> bool {
+        false
+    }
+
     /// Return the latency established by this activation.
     ///
     /// Products that allocate lookahead, oversampling, convolution, or other
@@ -550,6 +562,14 @@ where
     #[must_use]
     pub fn active_latency(&self) -> Option<LatencySamples> {
         self.active.as_ref().map(|active| active.latency)
+    }
+
+    /// Whether the active processor requests replacement through a new activation.
+    #[must_use]
+    pub fn restart_requested(&self) -> bool {
+        self.active
+            .as_ref()
+            .is_some_and(|active| active.processor.restart_requested())
     }
 
     /// Activate this instance after validating and owning its accepted I/O layout.

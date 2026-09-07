@@ -58,6 +58,7 @@ Implemented:
 - `LatencySamples` in core;
 - `Processor::latency()` with zero default;
 - activation-scoped latency snapshot in `InstanceRuntime`;
+- `Processor::restart_requested()` exposed through the runtime and forwarded by CLAP once per activation after completed parameter publication;
 - lifecycle tests proving the value cannot drift within one activation and is recomputed on reactivation;
 - CLAP `PluginLatency` projection plus host latency-change notification when a new activation changes the value;
 - deliberate delayed CLAP probe proving reported 64-sample latency corresponds to an impulse delayed by exactly 64 samples.

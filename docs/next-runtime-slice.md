@@ -22,7 +22,7 @@ The EQ exercises the framework at parameter scale the conformance artifact does 
 The client should drive:
 
 - real parameter-count scale (28 parameters, choice params) through descriptor publication, dense-index mapping, and state save/load;
-- real product latency policy (zero for the parity pass) and restart semantics;
+- real product latency policy and restart semantics (Tonal EQ minimum phase is zero latency; its linear-phase path requires 64 samples);
 - offline/realtime parity;
 - automation and explicit smoothing policy at product scale;
 - state/preset behavior under product use;
@@ -59,3 +59,15 @@ After native CLAP semantics are coherent under a real client:
 - custom allocator/SIMD/zero-copy work without measurements;
 - API convenience macros before real-client repetition exists;
 - replacing Truce in existing products without an explicit migration decision.
+
+## Processor restart requests
+
+A processor whose observed controls require different activation resources sets
+`Processor::restart_requested()`. It preserves the active resources and latency
+until the host deactivates it. `InstanceRuntime::restart_requested()` exposes this
+semantic signal to embeddings. The CLAP adapter publishes completed parameter
+endpoints before forwarding at most one host restart request per activation.
+Controls received through active flush or state load are evaluated on the next
+process call; a host may defer restart, so processing must remain valid meanwhile.
+The in-process `host_restart` test checks request coalescing, fixed active latency,
+and activation from the published parameter values.
