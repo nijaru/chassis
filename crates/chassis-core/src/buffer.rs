@@ -313,7 +313,9 @@ impl<'a, S> ChannelBuffer<'a, S> {
     /// # Errors
     ///
     /// Returns [`BufferAccessError::MissingOutput`] for input-only channels or
-    /// [`BufferAccessError::MissingInput`] for output-only channels.
+    /// [`BufferAccessError::MissingInput`] for output-only channels, or
+    /// [`BufferAccessError::FrameCountMismatch`] for directly constructed separate
+    /// buffers with unequal lengths.
     pub fn make_in_place(&mut self) -> Result<&mut [S], BufferAccessError>
     where
         S: Copy,
@@ -325,6 +327,12 @@ impl<'a, S> ChannelBuffer<'a, S> {
                 output_samples,
                 ..
             } => {
+                if input_samples.len() != output_samples.len() {
+                    return Err(BufferAccessError::FrameCountMismatch {
+                        input: input_samples.len(),
+                        output: output_samples.len(),
+                    });
+                }
                 output_samples.copy_from_slice(input_samples);
                 Ok(&mut **output_samples)
             }
@@ -398,6 +406,13 @@ impl std::error::Error for ChannelBufferError {}
 /// Invalid convenience access for a channel relationship.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BufferAccessError {
+    /// Separate input and output slices have different lengths.
+    FrameCountMismatch {
+        /// Input sample count.
+        input: usize,
+        /// Output sample count.
+        output: usize,
+    },
     /// An input-only channel has no writable output.
     MissingOutput,
     /// An output-only channel has no readable input to copy/process in place.
@@ -407,6 +422,10 @@ pub enum BufferAccessError {
 impl fmt::Display for BufferAccessError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::FrameCountMismatch { input, output } => write!(
+                formatter,
+                "input buffer has {input} samples but output buffer has {output}"
+            ),
             Self::MissingOutput => formatter.write_str("channel has no output buffer"),
             Self::MissingInput => formatter.write_str("channel has no input buffer"),
         }
@@ -462,6 +481,20 @@ mod tests {
             .make_in_place()
             .expect("paired buffer has input and output");
         assert_eq!(output_view, input);
+    }
+
+    #[test]
+    fn direct_separate_rejects_unequal_lengths_without_copying() {
+        let input = [1_u32, 2];
+        let mut output = [9_u32];
+        let mut buffer = ChannelBuffer::Separate {
+            input: InputEndpoint::new(MAIN_INPUT, 0),
+            input_samples: &input,
+            output: OutputEndpoint::new(MAIN_OUTPUT, 0),
+            output_samples: &mut output,
+        };
+        assert!(buffer.make_in_place().is_err());
+        assert_eq!(output, [9]);
     }
 
     #[test]

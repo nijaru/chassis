@@ -458,12 +458,13 @@ impl<'samples, S> ProcessBufferSource<S> for ChannelBufferSlice<'_, 'samples, S>
         S: 'a;
 
     fn validate_frame_count(&mut self, expected: usize) -> Result<(), ProcessBlockError> {
-        for buffer in &*self.buffers {
-            if buffer.frame_count() != expected {
-                return Err(ProcessBlockError::BufferFrameCountMismatch {
-                    expected,
-                    actual: buffer.frame_count(),
-                });
+        for buffer in &mut *self.buffers {
+            let input_length = buffer.input().map(<[S]>::len);
+            let output_length = buffer.output_mut().map(|samples| samples.len());
+            for actual in [input_length, output_length].into_iter().flatten() {
+                if actual != expected {
+                    return Err(ProcessBlockError::BufferFrameCountMismatch { expected, actual });
+                }
             }
         }
         Ok(())
@@ -851,6 +852,28 @@ mod tests {
             ProcessBlock::new(&activation, &parameters, 2, context, &mut source),
             Err(ProcessBlockError::BufferFrameCountMismatch { .. })
         ));
+    }
+
+    #[test]
+    fn materialized_source_rejects_mismatched_output_length() {
+        for output_length in [1, 3] {
+            let input = [0.0_f32; 2];
+            let mut output = vec![0.0_f32; output_length];
+            let mut buffers = [ChannelBuffer::Separate {
+                input: InputEndpoint::new(MAIN_INPUT, 0),
+                input_samples: &input,
+                output: OutputEndpoint::new(MAIN_OUTPUT, 0),
+                output_samples: &mut output,
+            }];
+            let mut source = ChannelBufferSlice::new(&mut buffers);
+            assert_eq!(
+                source.validate_frame_count(2),
+                Err(ProcessBlockError::BufferFrameCountMismatch {
+                    expected: 2,
+                    actual: output_length,
+                })
+            );
+        }
     }
 
     #[test]
