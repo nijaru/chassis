@@ -102,7 +102,7 @@ Do not promise that arbitrary DSP state is valid for continued processing after 
 
 ## CLAP production qualification
 
-Current three-platform headless qualification is current:
+The three-platform headless workflows cover the following gates. Consult the [validation record](validation.md) and workflow results for the revision being qualified:
 
 - Linux/macOS/Windows workspace portability tests/checks;
 - Linux/macOS/Windows packaged `.clap` artifacts;
@@ -113,7 +113,7 @@ Current three-platform headless qualification is current:
 
 Current production-host evidence (2026-09-06, REAPER 7.79/macOS-arm64):
 
-- DAW scan/instantiate/state reopen: current head;
+- DAW scan/instantiate/state reopen: recorded 2026-09-06 baseline;
 - automated `trim` render differential: sample-exact at expected sample offsets;
 - active state save during DAW automation: coherent, replays sample-exact;
 - real-host PDC/alignment: sample-exact through the exported delayed probe.

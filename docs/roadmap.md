@@ -4,11 +4,11 @@ This roadmap is ordered by architectural proof and real-client pressure, not fea
 
 ## Current position
 
-Chassis is in **Phase 2: native CLAP qualification**.
+Chassis is in **Phase 3: first real FX client**. The native CLAP foundation has recorded headless, REAPER, and representative hardware evidence.
 
 The format-independent runtime/state/parameter architecture, generic process-buffer source, mapped f32/f64 CLAP audio path, render-mode projection, typed parameter/state projection, audible exported automation, activation-scoped latency, active-save publication, and adapter realtime/lifecycle semantics are implemented.
 
-Current head is qualified through the automated Linux/macOS/Windows Rust and CLAP headless matrix. Production DAW behavior and representative hardware performance remain separate gates.
+The Linux/macOS/Windows Rust and CLAP workflows define the automated matrix. See the [validation record](design/validation.md) for executed checks and dated host/performance results; new changes require fresh evidence.
 
 ## Phase 0 — semantic foundation
 
@@ -89,7 +89,7 @@ Remaining, in order:
 4. Add further host/architecture coverage when release targets make it useful; Bitwig remains valuable real-world re-entrancy coverage even though re-entrant semantics are now executable in-process.
 5. Start the first real FX client and implement only capabilities its product semantics require.
 
-The 2026-09-06 REAPER 7.79/macOS-arm64 result is current-head evidence for scan/instantiate, automation render, state round-trip, active-save, and PDC alignment. Native f64 wire dispatch moves to first-client pressure rather than blocking Phase 2.
+The 2026-09-06 REAPER 7.79/macOS-arm64 result is a recorded baseline for scan/instantiate, automation render, state round-trip, active-save, and PDC alignment. Native f64 wire dispatch moves to first-client pressure rather than blocking Phase 2.
 
 ## Phase 3 — first real FX client
 

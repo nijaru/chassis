@@ -18,7 +18,7 @@ repository: https://github.com/prokopyl/clack
 revision:   c5975f9f89f0953b00768680357985d46178078a
 ```
 
-The revision identifies Clack's development 0.2.0 workspace after the plugin-side reentrancy fix and the immediately following safety/lifetime work. `clack-plugin` and `clack-extensions` are consumed from that same pinned source; only `audio-ports` + plugin-side extension support are enabled directly.
+The revision identifies Clack's development 0.2.0 workspace after the plugin-side reentrancy fix and the immediately following safety/lifetime work. `clack-plugin` and `clack-extensions` are consumed from that same pinned source; `audio-ports`, `latency`, `params`, `render`, and `state` extensions are enabled for the plugin. Tests additionally enable host-side support.
 
 ### Why this git exception exists
 
@@ -84,7 +84,7 @@ Dependencies are acceptable at non-realtime edges much more readily than on the 
 | --- | --- | --- | --- |
 | Chassis workspace | framework | AGPL-3.0-or-later + intended separate commercial license | current |
 | Clack pinned revision `c5975f9` | low-level safe CLAP plugin boundary | MIT OR Apache-2.0 | adopted safety-fixed source for initial adapter proof; qualification still required |
-| `clack-extensions` from same revision | CLAP extension wrappers | MIT OR Apache-2.0 | adopted narrowly for audio ports |
+| `clack-extensions` from same revision | CLAP extension wrappers | MIT OR Apache-2.0 | audio ports, latency, parameters, render mode, and state |
 | `clap-sys` | raw CLAP ABI used by Clack | MIT OR Apache-2.0 | transitive; inspect exact lockfile resolution |
 | CLAP SDK | CLAP ABI specification | MIT | compatible |
 | `clap-wrapper` | project CLAP into VST3/AU/AAX/standalone | MIT | preferred initial projection candidate; validate semantics per target |
@@ -115,7 +115,7 @@ Do not add wildcard dependency versions. Avoid duplicate major/version trees whe
 
 ## Checks
 
-`deny.toml` is the machine-readable license/advisory/source policy. The repository currently has no authoritative hosted CI, so run checks locally and report them accurately:
+`deny.toml` is the machine-readable license/advisory/source policy. CI defines the following checks. Run them locally when changing the corresponding code and report actual results; the [validation guide](design/validation.md) records evidence boundaries:
 
 ```text
 cargo fmt --all -- --check

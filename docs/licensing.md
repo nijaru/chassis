@@ -15,7 +15,7 @@ The intended long-term model is:
 
 AGPL does not prohibit selling software. A developer can charge money for an AGPL-covered product while complying with the license. The commercial license is intended for developers and organizations that want to distribute proprietary/closed-source products incorporating Chassis.
 
-Commercial pricing and contract terms are intentionally not defined during the private pre-alpha phase.
+Commercial pricing and contract terms are intentionally not defined during the pre-alpha phase.
 
 ## Why AGPL
 

@@ -49,7 +49,21 @@ The current validator suite reports **35 passed, 0 failed, 9 intentional skips**
 
 These gates do not establish production DAW behavior or representative performance.
 
-**CI status note (2026-09-06):** the repository is private, and GitHub Actions on private repositories requires paid minutes — no spending allowance is configured, so CI jobs have been rejected since 2026-09-04 13:18 UTC and will continue to fail while the repo remains private. This is expected, not a billing defect. No commits after `c7744a9` have CI coverage; the same gates were run locally at current head (`2285fbb`) as the interim evidence: full workspace fmt/tests (112 passed)/strict Clippy/cargo-deny/cargo-machete, plus both packaged artifacts through the pinned `clap-validator` (conformance: 35 passed / 0 failed / 9 intentional skips; delayed probe: 21 / 0 / 23) with clean bounded five-second two-worker fuzz. The public CI matrix must go green (paid minutes or public repo) before the next release-oriented claim.
+Hosted workflows and local results are separate evidence. Before publication, hosted jobs were rejected and local checks supplied the interim record. Consult the actual workflow run for the revision under review before claiming Linux/macOS/Windows coverage. The dated validator, host, and benchmark results below are baselines, not automatic qualification of later commits.
+
+
+### Local validation — 2026-09-07
+
+At code revision `bd0a153` on macOS arm64 with Rust 1.98.1:
+
+- workspace tests: 119 passed, including Loom, allocation probes, active-load/automation concurrency, and the schema-replacement compile-fail check;
+- formatting, strict all-feature/all-target Clippy, and release workspace build: passed;
+- `cargo deny check`: passed (unused license allowances reported as warnings); `cargo machete`: no unused dependencies;
+- packaged conformance artifact: 35 passed / 0 failed / 9 skipped;
+- packaged delayed probe: 21 passed / 0 failed / 23 skipped;
+- pinned `clap-validator` 0.4.1: both five-second, two-worker fuzz runs passed.
+
+The REAPER and performance baselines below were not rerun for this revision.
 
 ## Current in-process CLAP evidence
 
@@ -113,7 +127,7 @@ cargo bench -p chassis-clap --bench adapter_overhead
 
 It exercises 32/64/128/512-frame blocks, f32/f64, zero/max event load, and stereo main + sidechain. Run it on stable representative hardware and record CPU/architecture, OS, Rust version, release profile, sample rate, topology, and event load. Shared CI VM timing is not production performance evidence.
 
-Representative measurement (first recording, 2026-09-03, Nick's Mac15,9 / Apple M3 Max / arm64, macOS 26.6.2, rustc 1.98.0 (88d9e12ae 2026-08-18), cargo bench release profile, 48 kHz, stereo main + stereo sidechain, trivial no-op DSP):
+Representative measurement (first recording, 2026-09-03, Mac15,9 / Apple M3 Max / arm64, macOS 26.6.2, rustc 1.98.0 (88d9e12ae 2026-08-18), cargo bench release profile, 48 kHz, stereo main + stereo sidechain, trivial no-op DSP):
 
 - no-event load: median 49–53 ns/callback across every block size and precision, ~19–20 M callbacks/s;
 - configured 64-event load: median 477–499 ns/callback, ~2.0 M callbacks/s;
@@ -196,7 +210,7 @@ Retain golden fixtures for every released schema. The current CHSS envelope rema
 | --- | --- | --- | --- |
 | Clack in-process host harness | Linux/macOS/Windows CI | current | adapter process/allocation, f32/f64, lifecycle, active state save, latency, re-entrancy, panic containment |
 | `clap-validator` 0.4.1 | Linux/macOS/Windows CI | current | 35 pass / 0 fail / 9 skip + bounded fuzz |
-| REAPER 7.79 | macOS arm64 (M3 Max, 48 kHz) | current head | 2026-09-06 headless `-renderproject` qualification: scan + instantiate (FX browser, 5 params enumerated), square `trim` automation render sample-exact against the deterministic reference (value changes land at exact sample offsets 24000/36000), injected-CHSS state load render sample-exact (trim 0.25/0.75; blobs byte-identical to a REAPER-saved blob at 0.5 and validated by the real `StateDocument` decoder), project save while the transport rolled through automation with coherent base state (trim=0.5, not torn) and sample-exact automation replay after reload, no-FX baseline render bit-identical to the source fixture, and PDC alignment: a wet track carrying the exported 64-sample delayed probe (`examples/clap-delayed-probe`) mixes against a dry track as exactly `2*x[i]` for all 48,000 frames — REAPER honored the CLAP latency extension and aligned the delayed DSP sample-exact. Host-quirk recorded: `TrackFX_SetParamNormalized` on an inactive CLAP reports success but delivers no change; the differential shows FabFilter Pro-Q 4 (CLAP) behaving identically while ReaEQ (VST) applies immediately, so this is REAPER's inactive-CLAP delivery behavior, not an adapter defect — the automation path (process events) is sample-exact. |
+| REAPER 7.79 | macOS arm64 (M3 Max, 48 kHz) | 2026-09-06 baseline | 2026-09-06 headless `-renderproject` qualification: scan + instantiate (FX browser, 5 params enumerated), square `trim` automation render sample-exact against the deterministic reference (value changes land at exact sample offsets 24000/36000), injected-CHSS state load render sample-exact (trim 0.25/0.75; blobs byte-identical to a REAPER-saved blob at 0.5 and validated by the real `StateDocument` decoder), project save while the transport rolled through automation with coherent base state (trim=0.5, not torn) and sample-exact automation replay after reload, no-FX baseline render bit-identical to the source fixture, and PDC alignment: a wet track carrying the exported 64-sample delayed probe (`examples/clap-delayed-probe`) mixes against a dry track as exactly `2*x[i]` for all 48,000 frames — REAPER honored the CLAP latency extension and aligned the delayed DSP sample-exact. Host-quirk recorded: `TrackFX_SetParamNormalized` on an inactive CLAP reports success but delivers no change; the differential shows FabFilter Pro-Q 4 (CLAP) behaving identically while ReaEQ (VST) applies immediately, so this is REAPER's inactive-CLAP delivery behavior, not an adapter defect — the automation path (process events) is sample-exact. |
 | Bitwig | — | not run | production-host re-entrancy confirmation remains useful when available |
 
 When a production DAW is available, refresh current-head scan/save-reopen/automation/PDC evidence rather than treating the headless harnesses as equivalent.

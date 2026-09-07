@@ -121,7 +121,7 @@ Chassis still relies on Clack for the raw C ABI and pointer/alias validation. `c
 
 Current Linux CI packages the conformance `.clap` and runs the pinned `clap-validator` 0.4.1 source plus bounded two-worker fuzz. The current result is 35 passed, 0 failed, 9 intentional skips, with the bounded fuzz run clean.
 
-Current REAPER evidence (2026-09-06) is current-head macOS-arm64 coverage of scan/instantiate, deterministic automation render, state round-trip, active save, and PDC alignment; see `docs/design/validation.md` for the recorded matrix.
+The REAPER baseline (2026-09-06) records macOS-arm64 coverage of scan/instantiate, deterministic automation render, state round-trip, active save, and PDC alignment; see `docs/design/validation.md` for the recorded matrix.
 
 A manual adapter-overhead benchmark harness exists for representative local hardware; CI may compile it, but hosted-runner timing is not promoted as performance evidence.
 

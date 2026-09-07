@@ -159,7 +159,7 @@ Chassis distinguishes:
 2. process-time automated trajectories derived from host events for a block;
 3. effective/modulated values consumed by DSP.
 
-The process view is derived and cannot independently become a second persistent authority. The current core validates borrowed block automation against the canonical schema and exposes lazy set/linear trajectories. Before the API freezes, Chassis must specify how realtime automation updates are reflected into canonical base state and how a coherent state save behaves when processing is active.
+The process view is derived and cannot independently become a second persistent authority. The current core validates borrowed block automation against the canonical schema and exposes lazy set/linear trajectories. Realtime endpoint publication is conditional on the generation observed before processing; a newer control edit or state load wins. Active state save serializes one coherent completed generation. See [parameters and state](design/parameters-state.md) for the publication contract.
 
 State loading is transactional from the product's perspective: decode, validate, and migrate into temporary non-live state first, then publish the accepted state through one defined runtime boundary. Partial state loads never mutate the active product.
 
@@ -185,7 +185,7 @@ They are not prerequisites for plugin v0.1 and must not pull DAW/application con
 
 ## Rust and dependency policy
 
-Development follows the repository's `stable` Rust toolchain and Edition 2024. During private pre-alpha there is no promised MSRV beyond what Edition 2024/tooling require; do not pin a compiler merely to chase the latest release, and do not raise a future declared MSRV without an explicit reason.
+Development follows the repository's `stable` Rust toolchain and Edition 2024. During pre-alpha there is no promised MSRV beyond what Edition 2024/tooling require; do not pin a compiler merely to chase the latest release, and do not raise a future declared MSRV without an explicit reason.
 
 Format-independent crates deny unsafe code. FFI adapters isolate necessary unsafe code, use `unsafe extern` where required by Edition 2024, require a `// SAFETY:` explanation for every unsafe block, and keep `unsafe_op_in_unsafe_fn` denied.
 
