@@ -142,10 +142,11 @@ for path in root.rglob('*.rs'):
         path.write_text(text)
 
 # The old standalone lookup import is no longer needed where all consumers moved
-# to ComponentSchema::audio_port_index().
+# to ComponentSchema::audio_port_index(). A method call such as
+# `schema.audio_port_index(...)` does not count as a free-function use.
 for path in root.rglob('*.rs'):
     text = path.read_text()
-    if 'audio_port_index(' not in text:
+    if not re.search(r'(?<![.\w])audio_port_index\(', text):
         text = text.replace('audio_port_index, ', '')
         text = text.replace(', audio_port_index', '')
         path.write_text(text)
