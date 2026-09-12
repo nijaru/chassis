@@ -14,7 +14,7 @@ use std::{
 
 use chassis_clap::{ClapStereoEffect, SingleComponentEntryWithF64};
 use chassis_core::{
-    audio::{MAIN_INPUT, MAIN_OUTPUT},
+    audio::{AudioPortIndex, MAIN_INPUT, MAIN_OUTPUT, audio_port_index},
     parameters::{ParameterDescriptor, ParameterValue},
     process::{ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessChannel},
     runtime::{Component, LatencySamples, Process, Processor},
@@ -113,12 +113,18 @@ impl Component for ProbeComponent {
         };
         Ok(ProbeProcessor {
             latency: LatencySamples::new(latency),
+            main_input: audio_port_index(self.audio_ports(), MAIN_INPUT)
+                .expect("default effect schema has main input"),
+            main_output: audio_port_index(self.audio_ports(), MAIN_OUTPUT)
+                .expect("default effect schema has main output"),
         })
     }
 }
 
 struct ProbeProcessor {
     latency: LatencySamples,
+    main_input: AudioPortIndex,
+    main_output: AudioPortIndex,
 }
 
 impl Processor for ProbeProcessor {
@@ -142,10 +148,10 @@ impl Process<f32> for ProbeProcessor {
         for mut channel in block.channels() {
             if channel
                 .input_endpoint()
-                .is_some_and(|endpoint| endpoint.port() == MAIN_INPUT)
+                .is_some_and(|endpoint| endpoint.port_index() == Some(self.main_input))
                 && channel
                     .output_endpoint()
-                    .is_some_and(|endpoint| endpoint.port() == MAIN_OUTPUT)
+                    .is_some_and(|endpoint| endpoint.port_index() == Some(self.main_output))
             {
                 let mut trim = events
                     .float_cursor(trim_index, base)
@@ -179,10 +185,10 @@ impl Process<f64> for ProbeProcessor {
         for mut channel in block.channels() {
             if channel
                 .input_endpoint()
-                .is_some_and(|endpoint| endpoint.port() == MAIN_INPUT)
+                .is_some_and(|endpoint| endpoint.port_index() == Some(self.main_input))
                 && channel
                     .output_endpoint()
-                    .is_some_and(|endpoint| endpoint.port() == MAIN_OUTPUT)
+                    .is_some_and(|endpoint| endpoint.port_index() == Some(self.main_output))
             {
                 let mut trim = events
                     .float_cursor(trim_index, base)
