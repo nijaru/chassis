@@ -1,6 +1,6 @@
 # Authoring API and Convention Model
 
-Status: explicit manual runtime/state/process APIs are implemented and pre-alpha. `ComponentSchema` + `InstanceRuntime<P>` are now the semantic ownership target; historical per-family schema accessors and conventional-effect defaults remain temporary migration surfaces.
+Status: explicit manual runtime/state/process APIs are implemented and pre-alpha. `ComponentSchema` + `InstanceRuntime<P>` are the semantic ownership model; direct coherent schema authority, dense process identities, owned audio/event metadata, whole-I/O policy, and schema-owned runtime state identity are implemented. Remaining work is audio-semantic closure and higher-layer authoring ergonomics, not migration from proof-era core APIs.
 
 ## Goal
 
@@ -15,7 +15,7 @@ Chassis should own repeated audio-runtime plumbing, state lifecycle, timing/even
 
 Plugins should be especially easy to author because they are a common Chassis deployment, but the component API must remain equally valid for embedded processors, graph nodes, standalone applications, hosts, and audio engines.
 
-## Target explicit model
+## Current explicit model
 
 ```text
 Component
@@ -24,18 +24,18 @@ Component
   activate_with_state(...) -> Processor
 
 ComponentSchema
-  semantic state identity/version
-  audio ports
-  event ports
+  semantic state identity/version when persistent
+  owned-capable audio ports
+  AudioIoPolicy
+  owned-capable event ports
   parameters
   stable -> dense setup lookup
-  future common capabilities / I/O policy
 
 InstanceRuntime<P>
   owns one validated ComponentSchema generation
   durable ParameterStore + custom semantic state
   inactive/active lifecycle
-  validated accepted audio configuration
+  validated + policy-accepted audio configuration
   active Processor ownership
   activation-scoped latency snapshot
 
@@ -49,11 +49,11 @@ Process<S>
   process(ProcessBlock<S>)
 ```
 
-The ownership split is the durable contract; exact Rust method spelling is still being simplified.
+The ownership split is the durable contract; exact convenience API spelling remains pre-alpha.
 
 ## Runtime construction
 
-The preferred format-independent path is now:
+The format-independent path is:
 
 ```rust,ignore
 let mut runtime = InstanceRuntime::for_component(&component)?;
@@ -71,15 +71,11 @@ runtime.process(frame_count, context, buffers)?;
 runtime.deactivate()?;
 ```
 
-`InstanceRuntime::new(...)` and `new_with_event_ports(...)` are proof-era migration constructors and are not the intended stable API. They should be deleted after remaining fixtures migrate.
+The proof-order `InstanceRuntime::new(...)` / `new_with_event_ports(...)` constructors are removed. `from_schema(...)` and `for_component(...)` are the coherent construction paths.
 
 ## Component schema authority
 
-The current `Component` trait still exposes historical methods such as `audio_ports()`, `event_ports()`, and `parameter_descriptors()`, with a default `schema()` method that folds them into `ComponentSchema`.
-
-This is temporary.
-
-The stable direction is one coherent schema authority so audio/event/parameter metadata cannot drift independently and deployment/application layers can inspect the same definition.
+`Component::schema()` is the sole component metadata authority. Audio ports, event ports, parameters, audio-I/O policy, and semantic state identity are one validated generation rather than separate trait methods that can drift.
 
 A component schema owns semantic persistence identity separately from deployment identities:
 
@@ -91,7 +87,9 @@ CLAP ID / VST3 class ID / AU codes / bundle IDs
     deployment projections
 ```
 
-Do not require a plugin-format identifier merely to instantiate an embedded Chassis processor.
+Identity-less schemas remain valid for transient/embedded components; a deployment that persists state can require an identified schema.
+
+The model has been exercised through direct non-plugin runtime clients and CLAP deployment with conventional effects, zero-audio event processors, instruments, multiple output buses, multiple legal layouts/sidechain, and runtime-owned dynamic metadata. These cases share the same component/runtime lifecycle.
 
 ## Stable versus dense identity
 
@@ -105,42 +103,48 @@ ParameterKey  -> ParameterIndex
 
 Stable keys are readable compatibility identities. Dense indices are immutable schema-local projections used after setup.
 
-Processors that need named ports resolve them during activation and store the dense indices in processor state. They should not perform stable-string lookup in the callback.
-
-Example direction:
+Processors that need named ports resolve them during activation and store the dense indices in processor state. They do not perform stable-string lookup in the callback.
 
 ```rust,ignore
-fn activate(&self, ...) -> Result<MyProcessor, Error> {
+fn activate(&self, config: &ActivationConfig<'_>) -> Result<MyProcessor, Error> {
     Ok(MyProcessor {
-        main_in: schema.audio_port_index(MAIN_INPUT).unwrap(),
-        main_out: schema.audio_port_index(MAIN_OUTPUT).unwrap(),
+        main_in: config.schema().audio_port_index(&MAIN_INPUT).unwrap(),
+        main_out: config.schema().audio_port_index(&MAIN_OUTPUT).unwrap(),
         // DSP resources...
     })
 }
 ```
 
-The current callback endpoint type temporarily carries both stable key and optional dense index while old fixtures migrate. The target endpoint is dense-only.
+Audio callback endpoints are dense-only. Note/event callback addressing likewise uses `EventPortIndex`; stable audio/event strings remain in setup/schema metadata.
 
 ## Effect conventions belong above neutral core
 
-The historical core `Component::audio_ports()` default creates conventional stereo main input/output plus an optional sidechain. That was useful for the first effect/CLAP proof but is not the desired neutral core contract.
+Neutral core semantics do not assume a plugin or stereo effect. Conventional helpers provide the common case without changing that model.
 
-The target layering is:
+`ComponentSchema::stereo_effect(...)` and `stereo_effect_with_state(...)` create an ordinary schema with stereo main input/output and an optional stereo sidechain, backed by an explicit `AudioIoPolicy`.
+
+The layering is:
 
 ```text
 neutral ComponentSchema
      |
-     +-- effect convenience
-     +-- instrument convenience
-     +-- event processor convenience
+     +-- conventional effect helper
+     +-- future instrument/helper conveniences when repeated use earns them
      +-- custom/multibus schema
 ```
 
-A gain/compressor author should still get an ergonomic stereo-effect path, but zero-audio event processors, instruments, analyzers, hosted/dynamic components, and application graph nodes must not be modeled as unusual exceptions to an effect-shaped core.
+Do not add helper-specific lifecycle or processor traits. Add another convenience only when materially different clients repeat the same declaration pattern.
 
-Do not remove useful conventions; relocate them to the author-facing facade/helpers where they do not become semantic defaults.
+## Audio I/O and buffers
 
-## Buffers
+Port descriptors define what ports exist. `AudioIoPolicy` defines which complete active-port/layout combinations are supported. Runtime activation performs structural validation, policy acceptance, and stable-key -> dense-index resolution before product resources are created.
+
+The initial policy forms are deliberately small:
+
+- any structurally valid configuration, chosen explicitly;
+- one of an enumerated set of whole configurations.
+
+That is sufficient for current effect, instrument, sidechain/layout-switching, multi-output, and dynamically constructed fixtures. Do not add a rule language until a real component needs a configuration family that is impractical to enumerate.
 
 `ChannelBuffer<S>` / `ProcessChannel<S>` preserve already-proved relationships:
 
@@ -151,11 +155,9 @@ Do not remove useful conventions; relocate them to the author-facing facade/help
 
 `ProcessBufferSource<S>` lets adapters, devices, graphs, and embeddings expose arbitrary channel storage lazily without constructing callback-owned channel vectors.
 
+`InstanceRuntime` validates dense endpoints against the activation-owned resolved configuration before product DSP, rejecting unknown/inactive ports, wrong direction, and out-of-range channels. Adapters still own raw-pointer, aliasing, null-buffer, and other backend-specific proofs before constructing safe core views.
+
 `make_in_place()` may perform one bounded input -> output copy for separate buffers. Keep that simple behavior unless representative measurement justifies additional complexity.
-
-The next process-boundary requirement is endpoint legality validation. Generic embeddings must not be able to present an inactive port, output as input, or an out-of-range channel and have product DSP receive it merely because the slice length matched.
-
-That validation should consume an activation-resolved dense audio configuration, not rescan stable keys on every callback.
 
 ## Parameters and state
 
@@ -168,18 +170,18 @@ Processing distinguishes:
 3. modulation;
 4. effective DSP value after product policy.
 
-The first two are implemented; explicit modulation remains a pre-v1 completion item.
+The first two are implemented; explicit sample-accurate modulation remains a pre-v1 completion item and must not be folded into durable state or automation merely for convenience.
 
-Complete semantic state now derives component identity/version from `ComponentSchema`. Normal runtime save/load does not accept duplicate product identity arguments:
+Complete semantic state derives component identity/version from `ComponentSchema`. Runtime save/load has one identity authority:
 
 ```rust,ignore
 let bytes = runtime.encode_state(limits)?;
 runtime.apply_state_bytes(&bytes, limits, migrations, validate)?;
 ```
 
-Explicit `*_for_product` methods remain migration-only until deployment adapters adopt schema-owned identity.
+The old runtime explicit-product-ID and parameter-only compatibility paths are removed. Loads remain complete transactional replacements. Product custom fields remain semantic entries rather than arbitrary Rust-layout serialization.
 
-Loads remain complete transactional replacements. Product custom fields remain semantic entries rather than arbitrary Rust-layout serialization.
+Parameter formatting/value mapping still needs a clear authoring contract with round-trip/domain tests.
 
 ## Sample representation
 
@@ -200,9 +202,13 @@ Lookahead, convolution, oversampling, models, FFT plans, resamplers, scratch sto
 
 Do not create generic lookahead/oversampling/model wrappers merely to make the framework appear broad. Add helpers when several materially different processors demonstrate the same lifecycle/resource pattern.
 
-## Smoothing and gestures
+Common tail and bypass semantics remain open and should be added only when their cross-environment meaning is explicit.
+
+## Smoothing, modulation, and gestures
 
 Explicit host/application ramps are reproduced without automatic extra smoothing. Smoothing is DSP policy; reusable ramp/smoother utilities may live in the DSP utility layer without changing automation semantics.
+
+Sample-accurate modulation needs a separate process-time contract from durable/base parameter state and ordinary automation.
 
 Editor/application-originated parameter edits need typed begin/change/end gesture semantics, observation, and echo suppression. They must never expose unrestricted mutable processor access.
 
@@ -246,6 +252,8 @@ A convenience earns promotion when:
 - authors can still reach the explicit lower-level model.
 
 Plugin/effect conveniences should be excellent, but they are facades over the neutral component/runtime model rather than the model itself.
+
+The current heterogeneous schema/runtime fixtures did not expose a need for more constructors or a richer I/O-policy language. Treat that as evidence against speculative authoring abstraction until real clients provide pressure.
 
 ## Tooling direction
 
