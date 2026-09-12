@@ -624,7 +624,10 @@ mod tests {
         let wildcard = NoteAddress::with_optional_port(None, None, None, NoteKey::new(60));
         assert_eq!(wildcard.port(), None);
 
-        let events = [NoteEvent::new(0, NoteEventKind::Choke { address: wildcard })];
+        let events = [NoteEvent::new(
+            0,
+            NoteEventKind::Choke { address: wildcard },
+        )];
         let validated = NoteEvents::new(&events, 1, 1).expect("event is valid");
         assert_eq!(validated.for_port(EventPortIndex::new(4)).count(), 1);
     }
