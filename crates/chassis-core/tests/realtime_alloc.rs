@@ -11,7 +11,7 @@ use std::{
 };
 
 use chassis_core::{
-    audio::{DEFAULT_EFFECT_CONFIGURATION, MAIN_INPUT, MAIN_OUTPUT},
+    audio::{AudioPortIndex, DEFAULT_EFFECT_CONFIGURATION, MAIN_INPUT, MAIN_OUTPUT},
     automation::ParameterEvents,
     buffer::{ChannelBuffer, InputEndpoint, OutputEndpoint},
     process::{
@@ -20,6 +20,9 @@ use chassis_core::{
     },
     runtime::{Component, InstanceRuntime, Process, Processor},
 };
+
+const MAIN_INPUT_INDEX: AudioPortIndex = AudioPortIndex::new(0);
+const MAIN_OUTPUT_INDEX: AudioPortIndex = AudioPortIndex::new(1);
 
 struct CountingAllocator;
 
@@ -147,15 +150,15 @@ fn repeated_post_activation_process_calls_do_not_allocate_or_deallocate() {
     for _ in 0..1_000 {
         let mut buffers = [
             ChannelBuffer::in_place(
-                InputEndpoint::new(MAIN_INPUT, 0),
-                OutputEndpoint::new(MAIN_OUTPUT, 0),
+                InputEndpoint::resolved(MAIN_INPUT, MAIN_INPUT_INDEX, 0),
+                OutputEndpoint::resolved(MAIN_OUTPUT, MAIN_OUTPUT_INDEX, 0),
                 &mut left,
                 512,
             )
             .expect("left buffer is valid"),
             ChannelBuffer::in_place(
-                InputEndpoint::new(MAIN_INPUT, 1),
-                OutputEndpoint::new(MAIN_OUTPUT, 1),
+                InputEndpoint::resolved(MAIN_INPUT, MAIN_INPUT_INDEX, 1),
+                OutputEndpoint::resolved(MAIN_OUTPUT, MAIN_OUTPUT_INDEX, 1),
                 &mut right,
                 512,
             )
