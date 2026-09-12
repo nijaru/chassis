@@ -93,12 +93,10 @@ impl fmt::Display for ComponentIdError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Empty => formatter.write_str("component identity is empty"),
-            Self::Whitespace(character) => {
-                write!(
-                    formatter,
-                    "component identity contains whitespace {character:?}"
-                )
-            }
+            Self::Whitespace(character) => write!(
+                formatter,
+                "component identity contains whitespace {character:?}"
+            ),
             Self::Control(character) => write!(
                 formatter,
                 "component identity contains control character {character:?}"
@@ -127,23 +125,54 @@ impl StateSchemaVersion {
     }
 }
 
+/// Stable semantic state identity owned by one component schema.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct StateIdentity {
+    component: ComponentId,
+    schema: StateSchemaVersion,
+}
+
+impl StateIdentity {
+    /// Construct one semantic state identity/version pair.
+    #[must_use]
+    pub const fn new(component: ComponentId, schema: StateSchemaVersion) -> Self {
+        Self { component, schema }
+    }
+
+    /// Return the stable semantic component identity.
+    #[must_use]
+    pub const fn component(&self) -> &ComponentId {
+        &self.component
+    }
+
+    /// Return the semantic state-schema version.
+    #[must_use]
+    pub const fn schema(&self) -> StateSchemaVersion {
+        self.schema
+    }
+}
+
 /// One coherent immutable semantic schema for a component instance generation.
 ///
 /// The schema owns setup-domain metadata so dynamically constructed components
 /// are not forced to rely on Rust declaration order as compatibility identity.
 /// The current audio/event descriptor types still contain static strings; those
 /// identities will migrate to owned validated keys before this surface freezes.
+///
+/// `state_identity` is temporarily optional while the existing adapters/runtime
+/// state APIs are migrated from caller-supplied identity. New identified schemas
+/// should use [`Self::new`]. [`Self::unidentified`] exists only as a pre-alpha
+/// migration bridge and is not the target stable authoring surface.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ComponentSchema {
-    id: ComponentId,
-    state_schema: StateSchemaVersion,
+    state_identity: Option<StateIdentity>,
     audio_ports: Vec<AudioPortDescriptor>,
     event_ports: Vec<EventPortDescriptor>,
     parameters: Vec<ParameterDescriptor>,
 }
 
 impl ComponentSchema {
-    /// Construct and validate one complete immutable schema.
+    /// Construct and validate one complete identified immutable schema.
     ///
     /// # Errors
     ///
@@ -156,29 +185,54 @@ impl ComponentSchema {
         event_ports: Vec<EventPortDescriptor>,
         parameters: Vec<ParameterDescriptor>,
     ) -> Result<Self, ComponentSchemaError> {
+        Self::build(
+            Some(StateIdentity::new(id, state_schema)),
+            audio_ports,
+            event_ports,
+            parameters,
+        )
+    }
+
+    /// Construct a validated schema without semantic state identity.
+    ///
+    /// This is a migration bridge for current pre-alpha components whose state
+    /// identity is still supplied by deployment adapters/callers. Do not use it
+    /// as the basis of a stable public API.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ComponentSchemaError`] when the audio, event, or parameter
+    /// schema is invalid.
+    pub fn unidentified(
+        audio_ports: Vec<AudioPortDescriptor>,
+        event_ports: Vec<EventPortDescriptor>,
+        parameters: Vec<ParameterDescriptor>,
+    ) -> Result<Self, ComponentSchemaError> {
+        Self::build(None, audio_ports, event_ports, parameters)
+    }
+
+    fn build(
+        state_identity: Option<StateIdentity>,
+        audio_ports: Vec<AudioPortDescriptor>,
+        event_ports: Vec<EventPortDescriptor>,
+        parameters: Vec<ParameterDescriptor>,
+    ) -> Result<Self, ComponentSchemaError> {
         validate_audio_port_schema(&audio_ports).map_err(ComponentSchemaError::AudioPorts)?;
         validate_event_port_schema(&event_ports).map_err(ComponentSchemaError::EventPorts)?;
         ParameterStore::new(&parameters).map_err(ComponentSchemaError::Parameters)?;
 
         Ok(Self {
-            id,
-            state_schema,
+            state_identity,
             audio_ports,
             event_ports,
             parameters,
         })
     }
 
-    /// Return the semantic component/state identity.
+    /// Return semantic state identity when this schema has been fully migrated.
     #[must_use]
-    pub const fn id(&self) -> &ComponentId {
-        &self.id
-    }
-
-    /// Return the semantic state-schema version.
-    #[must_use]
-    pub const fn state_schema(&self) -> StateSchemaVersion {
-        self.state_schema
+    pub const fn state_identity(&self) -> Option<&StateIdentity> {
+        self.state_identity.as_ref()
     }
 
     /// Return the immutable audio-port schema.
@@ -246,7 +300,7 @@ impl std::error::Error for ComponentSchemaError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::audio::{DEFAULT_EFFECT_PORTS, MAIN_INPUT};
+    use crate::audio::{AudioPortIndex, DEFAULT_EFFECT_PORTS, MAIN_INPUT};
     use crate::events::{EventDialect, EventPortDirection};
     use crate::parameters::ParameterDescriptor;
 
@@ -272,8 +326,9 @@ mod tests {
         )
         .expect("component schema is valid");
 
-        assert_eq!(schema.id().as_str(), "org.nijaru.schema-probe");
-        assert_eq!(schema.state_schema(), StateSchemaVersion::new(1));
+        let identity = schema.state_identity().expect("identified schema");
+        assert_eq!(identity.component().as_str(), "org.nijaru.schema-probe");
+        assert_eq!(identity.schema(), StateSchemaVersion::new(1));
         assert_eq!(
             schema.audio_port_index(MAIN_INPUT),
             Some(AudioPortIndex::new(0))
@@ -283,6 +338,13 @@ mod tests {
             Some(EventPortIndex::new(0))
         );
         assert_eq!(schema.parameters().len(), 1);
+    }
+
+    #[test]
+    fn unidentified_schema_is_explicitly_identity_free() {
+        let schema = ComponentSchema::unidentified(DEFAULT_EFFECT_PORTS.to_vec(), vec![], vec![])
+            .expect("migration schema is valid");
+        assert_eq!(schema.state_identity(), None);
     }
 
     #[test]
