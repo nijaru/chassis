@@ -46,16 +46,21 @@ Package boundaries are implementation decisions, not domain declarations. Add cr
 ## Architecture and ownership
 
 - `Component` is immutable schema/capability/factory definition, not a synonym for plugin.
+- `ComponentSchema` is the coherent immutable authority for semantic state identity, audio ports, whole-audio-I/O policy, event ports, parameters, and stable -> dense lookup.
 - `InstanceRuntime<P>` is the durable format-independent authority for canonical parameter/custom semantic state and active lifecycle coordination.
 - `Processor` owns active DSP history and reports activation-established processing latency.
 - Active latency is snapshotted for one activation; changed latency requires reactivation/restart at the deployment boundary.
+- Stable audio/event/parameter identities are setup/persistence identities; callback-facing audio/event/parameter identities are dense schema-local indices.
+- Audio/event schema metadata may be borrowed static data or runtime-owned metadata; owned strings must not become callback identity.
+- `AudioIoPolicy` is schema-owned whole-component configuration authority. Adapters must not infer independent cross-bus policy.
 - `MainThread`, `Shared`, editor, device, graph, and host bridges expose deliberate orchestration/projections; they are not second authorities.
 - Deployment adapters add `Send`/thread-transfer constraints only where the environment requires them.
 - Keep CLAP/VST3/AU/Clack/clap-wrapper/toolkit/device-backend/platform types out of product-facing core APIs.
 - Keep stable product/parameter/port identities independent from Rust names, labels, declaration order, runtime dense indices, and backend IDs.
 - Map adapter semantics faithfully or reject unsupported input; never silently change meaning to satisfy a host.
-- Effects, instruments, event processors, plugins, standalone applications, graph nodes, embedded processors, and offline processing should share the same component/runtime model rather than growing parallel frameworks.
+- Effects, instruments, event processors, plugins, standalone applications, graph nodes, embedded processors, and offline processing share the same component/runtime model rather than parallel frameworks.
 - Graph, device, host, media, and deployment layers sit above the semantic core and must not move application-specific concepts downward.
+- The current `ComponentSchema` / `InstanceRuntime` ownership shape has passed heterogeneous effect/event/instrument/multi-output/layout/dynamic-metadata proofs. Treat it as candidate-stable architecture; do not reopen it for speculative generality without a concrete client that exposes a real mismatch.
 
 ## Realtime path
 
@@ -82,15 +87,18 @@ Chassis should provide a coherent audio/DSP authoring surface, but coherence doe
 - Keep specialized/novel algorithms in clients until repeated use demonstrates a reusable abstraction.
 - Do not force `no_std` or embedded-microcontroller constraints onto the main framework unless a concrete supported target requires them.
 
-## Parameters, automation, and state
+## Parameters, automation, modulation, and state
 
-Keep three concepts distinct:
+Keep four concepts distinct:
 
 1. durable/base parameter state;
 2. host/application automation trajectory for a block;
-3. effective DSP value after modulation/product policy.
+3. sample-accurate modulation;
+4. effective DSP value after product policy.
 
-Realtime automation endpoint publication must lose to newer control/state generations. State save while active must serialize one coherent completed semantic generation. State load is decode -> migrate -> validate -> transactional publish. Do not automatically smooth explicit host ramps.
+The first two are implemented. Do not implement modulation by mutating durable/base state or pretending modulation is ordinary automation if a deployment distinguishes them.
+
+Realtime automation endpoint publication must lose to newer control/state generations. State save while active must serialize one coherent completed semantic generation. Runtime state identity/version comes from `ComponentSchema`; do not reintroduce explicit product-ID state authority at `InstanceRuntime`. State load is decode -> migrate -> validate -> transactional publish. Do not automatically smooth explicit host ramps.
 
 ## Validation and claims
 
@@ -126,18 +134,19 @@ Finish Chassis into a stable, broadly useful Rust audio framework. Work in the o
 
 Immediate priorities are:
 
-1. audit and refactor core APIs that still encode proof-era effect/plugin assumptions;
-2. close the remaining core authoring/API gaps across effects, instruments, event processors, graph nodes, embedded use, and offline processing;
-3. complete bounded realtime communication/background-work primitives;
-4. complete event/note/MIDI/modulation input/output and prove instruments/event processors;
-5. establish a coherent common DSP utility layer without duplicating mature dependencies unnecessarily;
-6. establish a production editor contract and toolkit adapters;
-7. qualify CLAP, VST3, and Audio Unit against the same semantic contract;
-8. add standalone/device deployment;
-9. add graph/scheduling and plugin-hosting infrastructure for larger audio applications;
-10. add media/offline-render integration needed by general audio applications;
-11. finish packaging, validation, compatibility, examples, documentation, and release tooling;
-12. only then freeze the supported public surface and make stability/compatibility promises.
+1. close the remaining core authoring contracts: parameter formatting/value mapping, sample-accurate modulation, tail, and bypass;
+2. complete bounded realtime communication/background-work/reclamation primitives;
+3. finish event/note/MIDI/expression input/output and deployment projection, using a real non-effect CLAP fixture to generalize effect-shaped adapter surfaces when needed;
+4. establish a coherent common DSP utility layer without duplicating mature dependencies unnecessarily;
+5. establish a production editor contract and toolkit adapters;
+6. qualify CLAP, VST3, and Audio Unit against the same semantic contract;
+7. add standalone/device deployment;
+8. add graph/scheduling and plugin-hosting infrastructure for larger audio applications;
+9. add media/offline-render integration needed by general audio applications;
+10. finish packaging, validation, compatibility, examples, documentation, and release tooling;
+11. only then freeze the supported public surface and make stability/compatibility promises.
+
+Do not spend a new slice inventing richer component schema, I/O-policy, metadata, or constructor abstractions merely because the core is pre-alpha. The current heterogeneous fixtures are evidence that the explicit model is sufficient until a later real client proves otherwise.
 
 Tonal EQ, the delayed probe, conformance plugins, and future limiter/restoration/instrument/DAW clients are evidence sources. They do not get to block framework work solely for parity with an old implementation. Preserve useful differential tests where they prove Chassis semantics; discard migration constraints that do not.
 
