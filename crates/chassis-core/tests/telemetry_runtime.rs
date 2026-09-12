@@ -110,12 +110,14 @@ fn processor_publishes_meter_snapshot_without_owning_display_state() {
             InputEndpoint::new(MAIN_INPUT, 0),
             OutputEndpoint::new(MAIN_OUTPUT, 0),
             &mut left,
+            2,
         )
         .expect("left meter buffer is valid"),
         ChannelBuffer::in_place(
             InputEndpoint::new(MAIN_INPUT, 1),
             OutputEndpoint::new(MAIN_OUTPUT, 1),
             &mut right,
+            2,
         )
         .expect("right meter buffer is valid"),
     ];
