@@ -39,6 +39,7 @@ struct MeterProcessor {
 impl Processor for MeterProcessor {}
 
 impl Process<f32> for MeterProcessor {
+    #[allow(clippy::cast_precision_loss)]
     fn process<B>(&mut self, block: &mut ProcessBlock<'_, '_, '_, f32, B>)
     where
         B: ProcessBufferSource<f32> + ?Sized,
