@@ -1,22 +1,19 @@
 # Component Schema and Runtime Identity
 
-Status: active pre-alpha architecture. The complete schema/runtime authority and dense audio endpoint model are implemented; the remaining work is removal of proof-era authoring bridges, owned dynamic metadata, and explicit whole-I/O policy.
+Status: active pre-alpha architecture. Direct component-schema authority, runtime ownership, frozen activation schema, and dense audio endpoints are implemented. Remaining work centers on deployment/state identity cleanup, owned dynamic metadata, and explicit whole-I/O policy.
 
 ## Goal
 
-One Chassis component should have one coherent immutable semantic schema that can describe an effect, instrument, event processor, graph node, embedded processor, offline processor, or deployment target without assuming plugin or stereo-effect semantics.
+One Chassis component has one coherent immutable semantic schema that can describe an effect, instrument, event processor, graph node, embedded processor, offline processor, or deployment target without assuming plugin or stereo-effect semantics.
 
 The schema is control/setup-domain data. Realtime paths use validated dense indices derived from it.
 
-## Implemented foundation
-
-The current core now has one runtime-owned component schema model:
+## Implemented model
 
 ```text
 Component
-  |
-  `-> ComponentSchema
-        |- semantic component/state identity + state-schema version
+  `-> schema() -> ComponentSchema
+        |- semantic component/state identity + state-schema version when present
         |- audio-port schema
         |- event-port schema
         |- parameter schema
@@ -43,44 +40,26 @@ Processor / ProcessBlock
 
 Implemented details include:
 
+- `Component::schema()` as the sole component metadata authority;
+- no separate `Component::audio_ports`, `event_ports`, or `parameter_descriptors` authorities;
+- neutral core semantics with no implicit stereo-effect `Component` default;
+- explicit `ComponentSchema::stereo_effect(...)` authoring convenience for the common effect shape;
 - `ComponentSchema`, `ComponentId`, `StateIdentity`, and `StateSchemaVersion`;
 - one immutable schema snapshot owned by `InstanceRuntime`;
+- `InstanceRuntime::from_schema` / `for_component` as the coherent construction paths; proof-order `new` / `new_with_event_ports` constructors are removed;
 - activation rejection for audio/event/parameter/state-identity drift;
 - runtime-owned semantic state identity/version for complete save/load/migration APIs;
-- the exact runtime-frozen schema exposed through `ActivationConfig::schema()` so processor setup never needs to regenerate component metadata;
+- the exact runtime-frozen schema exposed through `ActivationConfig::schema()` so processor setup never regenerates component metadata;
 - stable audio keys resolved to `AudioPortIndex` before processing;
 - `ResolvedAudioIoConfiguration` for activation-local port/layout/direction legality;
 - `InputEndpoint` / `OutputEndpoint` containing only dense `AudioPortIndex` plus channel;
 - process-boundary rejection of inactive, unknown, wrong-direction, and out-of-range endpoints before DSP;
-- CLAP setup mapping that resolves Chassis audio indices before the callback;
+- CLAP setup projecting audio and parameters from the same coherent `ComponentSchema`;
 - processor/conformance fixtures using dense process identity rather than stable-key comparisons.
-
-## Remaining proof-era API
-
-The current `Component` trait still exposes separate incremental methods for audio ports, event ports, and parameters. Its default `schema()` folds those methods into one `ComponentSchema` as a migration bridge.
-
-Likewise, conventional stereo-effect defaults still live on the core trait, and transitional runtime/state helpers remain for older tests/adapters.
-
-These are compatibility bridges inside an unpublished pre-alpha repository, not intended stable API.
-
-Before freezing the authoring surface:
-
-- make `Component::schema()` the direct component authority;
-- remove separate schema methods as independent authorities;
-- remove the core semantic default that every component is a conventional stereo effect;
-- keep conventional effect helpers/facades above neutral core semantics;
-- remove `InstanceRuntime::new` / `new_with_event_ports` and other proof-order constructors;
-- remove caller-supplied complete-state identity paths after all adapters use schema identity;
-- make stable audio/event metadata ownable for dynamically constructed/hosted components;
-- add explicit whole-I/O policy for components with multiple legal configurations.
 
 ## Stable identities versus dense indices
 
-Stable identities exist for persistence, authoring, inspection, and setup.
-
-Dense indices exist for active processing.
-
-Use the same pattern consistently:
+Stable identities exist for persistence, authoring, inspection, and setup. Dense indices exist for active processing.
 
 ```text
 AudioPortKey  -> AudioPortIndex
@@ -100,7 +79,7 @@ Rules:
 
 ## Audio process endpoints
 
-Audio endpoints are now dense-only process values:
+Audio endpoints are dense-only process values:
 
 ```text
 stable audio schema
@@ -120,15 +99,13 @@ InputEndpoint / OutputEndpoint
 
 Stable keys remain on schema/configuration/setup APIs. They are not stored in callback endpoint values.
 
-`InstanceRuntime` validates each process endpoint against the activation-owned resolved configuration before product DSP runs. This makes the same core contract usable by plugin adapters, devices, graphs, embedded callers, and offline runtimes rather than relying on any one adapter to be trusted implicitly.
+`InstanceRuntime` validates each process endpoint against the activation-owned resolved configuration before product DSP runs. This gives plugin adapters, devices, graphs, embedded callers, and offline runtimes the same core legality contract rather than relying on one deployment adapter to be trusted implicitly.
 
-The current runtime may traverse a buffer source once for endpoint legality and again for block dimensions/processing. Keep that simple bounded behavior until representative measurement justifies a combined process plan or stronger source qualification API.
+The current runtime may traverse a buffer source once for endpoint legality and again for block dimensions/processing. Keep that simple bounded behavior until representative measurement justifies a combined process plan or stronger source-qualification API.
 
 ## `ComponentSchema`
 
-A component should expose one coherent schema rather than several independently queried authorities.
-
-Target authoring shape:
+The authoring contract is now one coherent schema factory:
 
 ```rust,ignore
 pub trait Component {
@@ -142,19 +119,19 @@ pub trait Component {
 
 Returning a validated schema by value is acceptable because schema construction is a setup/control-domain operation. `InstanceRuntime` snapshots that result immutably, and `ActivationConfig::schema()` gives activation code the exact frozen generation rather than asking product code to reconstruct it again.
 
-A dynamic component assembled at runtime must be representable. Core schema identity therefore must not require every name/key to be an `&'static str` merely because plugin definitions are commonly static.
+Common effect authoring remains concise through `ComponentSchema::stereo_effect(parameters)`. Zero-audio/event processors and custom I/O components construct their actual schema explicitly rather than inheriting a hidden effect default.
 
 ## Owned schema metadata
 
-Schema construction is a non-realtime operation. Prefer owned validated identifiers where dynamic construction is useful.
+The remaining metadata limitation is that several stable audio/event identities and display fields are still source-static. That is acceptable for current plugin fixtures but not sufficient for dynamically discovered/hosted components.
 
-Potential implementation choices include `Arc<str>` or validated owned strings. Do not introduce a global interner merely to avoid small setup-domain allocations; dense indices already remove strings from processing.
+Schema construction is non-realtime. Prefer owned validated identifiers/metadata where dynamic construction is useful. `Arc<str>` or another validated owned string representation is preferable to a hidden global interner merely to avoid small setup-domain allocations; dense indices already remove strings from processing.
 
-Display names and other metadata can likewise be owned non-realtime data when that improves generality.
+Do not change every metadata type merely for aesthetic consistency. Migrate the fields that materially block dynamic/hosted components, then let real host/graph/device clients determine whether further ownership abstraction is warranted.
 
 ## State identity
 
-Persistent semantic state has one component-owned identity/version authority through `ComponentSchema` and `InstanceRuntime`.
+Persistent semantic state has one component-owned identity/version authority in `ComponentSchema` and `InstanceRuntime`.
 
 Distinguish:
 
@@ -163,31 +140,28 @@ Distinguish:
 
 A product manifest may connect the two, but a plugin ABI identifier must not become core state identity accidentally.
 
-Explicit product-ID runtime helpers currently remain only as migration paths and should disappear after deployment adapters use schema-owned identity directly.
+Core complete-state APIs already use schema-owned identity. The remaining duplication is in deployment adapters—most importantly the current CLAP state bridge—which still accepts/uses explicit deployment identity values. Migrate those before deciding whether every `ComponentSchema` must carry state identity or whether identity-less transient/embedded components remain legitimate.
 
 ## Conventional helpers
 
 Neutral core semantics do not imply verbose common cases.
 
-Provide helpers/facade constructors for patterns such as:
+`ComponentSchema::stereo_effect(...)` is the first explicit convention helper. Additional helpers should only be added for repeated real patterns such as:
 
 ```text
-stereo effect
 mono effect
-stereo effect + optional sidechain
+stereo effect + optional sidechain variants
 stereo instrument output
 zero-audio event processor
 ```
 
-A helper creates an ordinary schema/configuration. It does not create a separate lifecycle model or special processor trait.
-
-Plugin-focused documentation can make conventional helpers the easy path while core remains accurate for other audio software.
+A helper creates an ordinary schema/configuration. It does not create a separate lifecycle model or processor trait.
 
 ## Runtime construction
 
-`InstanceRuntime::from_schema` and `InstanceRuntime::for_component` are the intended construction direction: consume/clone/validate one complete schema snapshot, then derive mutable base state from it.
+`InstanceRuntime::from_schema` and `InstanceRuntime::for_component` consume one complete validated schema snapshot and derive mutable base state from it.
 
-Avoid retaining a constructor family whose differences only reflect the historical order features were implemented.
+Do not reintroduce constructor families whose differences only reflect the historical order features were implemented.
 
 ## Schema drift
 
@@ -228,12 +202,11 @@ The architecture should continue to preserve:
 
 ## Next migration order
 
-1. finish direct `Component::schema()` authority;
-2. delete proof-era constructors and default-effect assumptions from neutral core;
-3. migrate remaining deployment state identity to the schema-owned path;
-4. make stable port/event metadata dynamically ownable where required;
-5. implement explicit whole-I/O configuration policy;
-6. exercise the resulting API with materially different component classes before freezing it.
+1. migrate deployment state persistence to schema-owned semantic identity and remove redundant explicit-ID paths where no longer needed;
+2. make stable audio/event metadata dynamically ownable where real hosted/dynamic clients require it;
+3. implement explicit whole-I/O configuration policy;
+4. exercise the resulting API with materially different component classes before freezing it;
+5. only then move outward into broader background lifecycle, UI, device, graph, and hosting layers.
 
 Do not preserve source compatibility with unpublished proof APIs at the expense of the target model.
 
