@@ -12,6 +12,10 @@ use crate::{
         DEFAULT_EFFECT_PORTS,
     },
     buffer::ChannelBuffer,
+    events::{
+        EventPortDescriptor, EventPortIndex, EventPortKey, EventPortSchemaError,
+        validate_event_port_schema,
+    },
     parameters::{
         ParameterDescriptor, ParameterStateError, ParameterStore, ParameterStoreError,
         ParameterValuesMut,
@@ -29,9 +33,10 @@ use crate::{
 /// Immutable product definition/factory for one Chassis component type.
 ///
 /// The component is not the live mutable processor. An ordinary effect can use
-/// the default stereo-main/optional-sidechain port schema and only implement
-/// activation. Instruments and unusual processors override [`Self::audio_ports`]
-/// without changing the processor lifecycle model.
+/// the default stereo-main/optional-sidechain audio schema and empty event-port
+/// schema, then only implement activation. Instruments and unusual processors
+/// override [`Self::audio_ports`] and/or [`Self::event_ports`] without changing
+/// the processor lifecycle model.
 pub trait Component {
     /// Realtime processor created for one successful activation.
     type Processor: Processor;
@@ -46,6 +51,16 @@ pub trait Component {
     #[must_use]
     fn audio_ports(&self) -> &[AudioPortDescriptor] {
         &DEFAULT_EFFECT_PORTS
+    }
+
+    /// Return the stable event-port schema for this component.
+    ///
+    /// Event ports are format-independent product identity. Runtime/backend
+    /// indices are derived projections and must not become persistence identity.
+    /// Audio-only components use the empty default schema.
+    #[must_use]
+    fn event_ports(&self) -> &[EventPortDescriptor] {
+        &[]
     }
 
     /// Return the immutable parameter schema for this component instance.
@@ -192,12 +207,15 @@ pub trait Process<S>: Processor {
 pub enum InstanceRuntimeError {
     /// The component's immutable parameter schema failed validation.
     InvalidParameters(ParameterStoreError),
+    /// The component's immutable event-port schema failed validation.
+    InvalidEventPorts(EventPortSchemaError),
 }
 
 impl fmt::Display for InstanceRuntimeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidParameters(error) => write!(formatter, "invalid parameters: {error}"),
+            Self::InvalidEventPorts(error) => write!(formatter, "invalid event ports: {error}"),
         }
     }
 }
@@ -206,6 +224,7 @@ impl std::error::Error for InstanceRuntimeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::InvalidParameters(error) => Some(error),
+            Self::InvalidEventPorts(error) => Some(error),
         }
     }
 }
@@ -215,8 +234,10 @@ impl std::error::Error for InstanceRuntimeError {
 pub enum ActivateError<E> {
     /// The instance already owns an active processor.
     AlreadyActive,
-    /// The component schema no longer matches the instance schema.
+    /// The component parameter schema no longer matches the instance schema.
     ParameterSchemaMismatch,
+    /// The component event-port schema no longer matches the instance schema.
+    EventPortSchemaMismatch,
     /// The proposed whole-component I/O configuration failed structural validation.
     InvalidAudioIo(AudioIoConfigurationError),
     /// Product activation failed after the framework configuration was validated.
@@ -232,6 +253,8 @@ where
             Self::AlreadyActive => formatter.write_str("component instance is already active"),
             Self::ParameterSchemaMismatch => formatter
                 .write_str("component parameter schema does not match its instance runtime"),
+            Self::EventPortSchemaMismatch => formatter
+                .write_str("component event-port schema does not match its instance runtime"),
             Self::InvalidAudioIo(error) => write!(formatter, "invalid audio I/O: {error}"),
             Self::Product(error) => write!(formatter, "product activation failed: {error}"),
         }
@@ -244,7 +267,9 @@ where
 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::AlreadyActive | Self::ParameterSchemaMismatch => None,
+            Self::AlreadyActive
+            | Self::ParameterSchemaMismatch
+            | Self::EventPortSchemaMismatch => None,
             Self::InvalidAudioIo(error) => Some(error),
             Self::Product(error) => Some(error),
         }
@@ -458,21 +483,23 @@ impl<P> ActiveRuntime<P> {
 
 /// Durable framework-owned runtime for one component instance.
 ///
-/// The runtime owns canonical base parameter state and validated custom semantic
-/// state across activation cycles, and optionally owns the active processor plus
-/// its accepted I/O configuration and activation-scoped latency. The component
-/// definition itself remains outside this object and is borrowed only while
-/// activating, so deployment boundaries need to transfer only the concrete
-/// processor/runtime state rather than requiring `Component: Send`.
+/// The runtime owns canonical base parameter state, immutable event-port schema,
+/// and validated custom semantic state across activation cycles, and optionally
+/// owns the active processor plus its accepted I/O configuration and
+/// activation-scoped latency. The component definition itself remains outside
+/// this object and is borrowed only while activating, so deployment boundaries
+/// need to transfer only the concrete processor/runtime state rather than
+/// requiring `Component: Send`.
 ///
-/// The accepted port list is copied once while inactive. Dynamically negotiated
-/// layouts therefore do not create self-referential lifetimes and require no
-/// callback-time port allocation.
+/// The accepted audio-port list is copied once while inactive. Dynamically
+/// negotiated layouts therefore do not create self-referential lifetimes and
+/// require no callback-time port allocation.
 pub struct InstanceRuntime<P>
 where
     P: Processor,
 {
     parameters: ParameterStore,
+    event_ports: Vec<EventPortDescriptor>,
     custom_state: Vec<StateEntry>,
     active: Option<ActiveRuntime<P>>,
 }
@@ -481,42 +508,81 @@ impl<P> InstanceRuntime<P>
 where
     P: Processor,
 {
-    /// Construct one inactive instance from a validated parameter schema.
+    /// Construct one inactive audio-only instance from a validated parameter schema.
     ///
     /// Custom semantic state starts empty. Products may interpret missing custom
-    /// fields as defaults until a complete state replacement is accepted.
+    /// fields as defaults until a complete state replacement is accepted. Use
+    /// [`Self::new_with_event_ports`] for components with event I/O.
     ///
     /// # Errors
     ///
     /// Returns [`InstanceRuntimeError::InvalidParameters`] if the immutable
     /// parameter schema is invalid.
     pub fn new(descriptors: &[ParameterDescriptor]) -> Result<Self, InstanceRuntimeError> {
+        Self::new_with_event_ports(descriptors, &[])
+    }
+
+    /// Construct one inactive instance from validated parameter and event schemas.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InstanceRuntimeError::InvalidParameters`] or
+    /// [`InstanceRuntimeError::InvalidEventPorts`] when either immutable schema
+    /// is invalid.
+    pub fn new_with_event_ports(
+        descriptors: &[ParameterDescriptor],
+        event_ports: &[EventPortDescriptor],
+    ) -> Result<Self, InstanceRuntimeError> {
         let parameters =
             ParameterStore::new(descriptors).map_err(InstanceRuntimeError::InvalidParameters)?;
+        validate_event_port_schema(event_ports).map_err(InstanceRuntimeError::InvalidEventPorts)?;
         Ok(Self {
             parameters,
+            event_ports: event_ports.to_vec(),
             custom_state: Vec::new(),
             active: None,
         })
     }
 
-    /// Construct one inactive runtime from a component's immutable schema.
+    /// Construct one inactive runtime from a component's immutable schemas.
     ///
     /// # Errors
     ///
-    /// Returns [`InstanceRuntimeError::InvalidParameters`] if the component's
-    /// parameter schema is invalid.
+    /// Returns [`InstanceRuntimeError`] if the component's parameter or event-port
+    /// schema is invalid.
     pub fn for_component<C>(component: &C) -> Result<Self, InstanceRuntimeError>
     where
         C: Component<Processor = P>,
     {
-        Self::new(component.parameter_descriptors())
+        Self::new_with_event_ports(
+            component.parameter_descriptors(),
+            component.event_ports(),
+        )
     }
 
     /// Return the durable current base/control parameter values.
     #[must_use]
     pub const fn parameters(&self) -> &ParameterStore {
         &self.parameters
+    }
+
+    /// Return the immutable validated event-port schema.
+    #[must_use]
+    pub fn event_ports(&self) -> &[EventPortDescriptor] {
+        &self.event_ports
+    }
+
+    /// Resolve a stable event-port key to the activation-local dense index.
+    ///
+    /// Dense indices are derived from this immutable runtime schema and are not
+    /// persistent product identity.
+    #[must_use]
+    pub fn event_port_index(&self, key: EventPortKey) -> Option<EventPortIndex> {
+        self.event_ports
+            .iter()
+            .position(|descriptor| descriptor.key == key)
+            .and_then(|index| u32::try_from(index).ok())
+            .map(EventPortIndex::new)
     }
 
     /// Mutably access durable base/control values from the owning control context.
@@ -583,8 +649,9 @@ where
     /// # Errors
     ///
     /// Returns [`ActivateError::AlreadyActive`] if already active,
-    /// [`ActivateError::ParameterSchemaMismatch`] if the supplied component no
-    /// longer matches the instance schema, [`ActivateError::InvalidAudioIo`] for
+    /// [`ActivateError::ParameterSchemaMismatch`] or
+    /// [`ActivateError::EventPortSchemaMismatch`] if the supplied component no
+    /// longer matches the instance schemas, [`ActivateError::InvalidAudioIo`] for
     /// malformed configuration, or [`ActivateError::Product`] when product
     /// activation fails.
     pub fn activate<C>(
@@ -601,6 +668,9 @@ where
         }
         if self.parameters.descriptors() != component.parameter_descriptors() {
             return Err(ActivateError::ParameterSchemaMismatch);
+        }
+        if self.event_ports.as_slice() != component.event_ports() {
+            return Err(ActivateError::EventPortSchemaMismatch);
         }
         audio_io
             .validate(component.audio_ports())
@@ -681,6 +751,7 @@ where
     {
         let Self {
             parameters,
+            event_ports: _,
             custom_state: _,
             active,
         } = self;
