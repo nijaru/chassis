@@ -161,6 +161,19 @@ pub fn validate_event_port_schema(
     Ok(())
 }
 
+/// Resolve a stable event-port key to a dense index for one immutable schema.
+#[must_use]
+pub fn event_port_index(
+    descriptors: &[EventPortDescriptor],
+    key: EventPortKey,
+) -> Option<EventPortIndex> {
+    descriptors
+        .iter()
+        .position(|descriptor| descriptor.key == key)
+        .and_then(|index| u32::try_from(index).ok())
+        .map(EventPortIndex::new)
+}
+
 /// Backend-independent note identity when a source supplies one.
 ///
 /// `None` in [`NoteAddress`] represents an unspecified/wildcard address field;
@@ -381,6 +394,49 @@ impl NoteEvent {
     }
 }
 
+/// A semantic note stream targeted an invalid event-port capability.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoteEventPortError {
+    /// A dense event-port index could not be represented by platform `usize`.
+    PortIndexNotRepresentable(EventPortIndex),
+    /// A dense event-port index was not present in the component schema.
+    UnknownPort(EventPortIndex),
+    /// Semantic note input targeted an output-only event port.
+    PortIsNotInput(EventPortIndex),
+    /// Semantic note input targeted a port that does not declare note semantics.
+    PortDoesNotSupportNotes(EventPortIndex),
+    /// A wildcard-port note event had no input note port it could target.
+    NoInputNotePort,
+}
+
+impl fmt::Display for NoteEventPortError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::PortIndexNotRepresentable(port) => write!(
+                formatter,
+                "note event port index {} is not representable on this platform",
+                port.get()
+            ),
+            Self::UnknownPort(port) => {
+                write!(formatter, "note event targets unknown port {}", port.get())
+            }
+            Self::PortIsNotInput(port) => {
+                write!(formatter, "note event targets output port {}", port.get())
+            }
+            Self::PortDoesNotSupportNotes(port) => write!(
+                formatter,
+                "note event targets port {} without note semantics",
+                port.get()
+            ),
+            Self::NoInputNotePort => {
+                formatter.write_str("wildcard note event has no input note port to target")
+            }
+        }
+    }
+}
+
+impl std::error::Error for NoteEventPortError {}
+
 /// Validated borrowed semantic note events for one process block.
 ///
 /// Events preserve source order for equal offsets and require nondecreasing
@@ -485,6 +541,48 @@ impl<'a> NoteEvents<'a> {
                 .is_none_or(|target| target == port)
         })
     }
+
+    /// Validate every note event against one immutable component event-port schema.
+    ///
+    /// This validates process-time dense indices and semantic input capability;
+    /// adapters remain responsible for faithfully mapping source backend ports to
+    /// those indices before constructing the note stream.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NoteEventPortError`] when a specific target is unknown, output
+    /// only, or lacks note semantics, or when a wildcard has no compatible input
+    /// note port in the component schema.
+    pub fn validate_ports(
+        self,
+        descriptors: &[EventPortDescriptor],
+    ) -> Result<(), NoteEventPortError> {
+        let has_input_note_port = descriptors.iter().any(|descriptor| {
+            descriptor.direction == EventPortDirection::Input
+                && descriptor.dialects.contains(&EventDialect::Notes)
+        });
+
+        for event in self.events {
+            let Some(port) = event.kind.address().port() else {
+                if !has_input_note_port {
+                    return Err(NoteEventPortError::NoInputNotePort);
+                }
+                continue;
+            };
+            let index = usize::try_from(port.get())
+                .map_err(|_| NoteEventPortError::PortIndexNotRepresentable(port))?;
+            let descriptor = descriptors
+                .get(index)
+                .ok_or(NoteEventPortError::UnknownPort(port))?;
+            if descriptor.direction != EventPortDirection::Input {
+                return Err(NoteEventPortError::PortIsNotInput(port));
+            }
+            if !descriptor.dialects.contains(&EventDialect::Notes) {
+                return Err(NoteEventPortError::PortDoesNotSupportNotes(port));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Invalid borrowed semantic note events.
@@ -580,6 +678,7 @@ mod tests {
             dialects: NOTE_DIALECTS,
         }];
         assert_eq!(validate_event_port_schema(&ports), Ok(()));
+        assert_eq!(event_port_index(&ports, NOTE_INPUT), Some(EventPortIndex::new(0)));
     }
 
     #[test]
@@ -630,6 +729,51 @@ mod tests {
         )];
         let validated = NoteEvents::new(&events, 1, 1).expect("event is valid");
         assert_eq!(validated.for_port(EventPortIndex::new(4)).count(), 1);
+    }
+
+    #[test]
+    fn note_port_validation_rejects_unknown_and_output_ports() {
+        const OUTPUT_PORTS: &[EventPortDescriptor] = &[EventPortDescriptor {
+            key: EventPortKey::new("notes.out"),
+            name: "Notes Out",
+            direction: EventPortDirection::Output,
+            dialects: NOTE_DIALECTS,
+        }];
+        let events = [NoteEvent::new(
+            0,
+            NoteEventKind::On {
+                address: address(),
+                velocity: velocity(0.5),
+            },
+        )];
+        let validated = NoteEvents::new(&events, 1, 1).expect("event is valid");
+        assert_eq!(
+            validated.validate_ports(OUTPUT_PORTS),
+            Err(NoteEventPortError::PortIsNotInput(EventPortIndex::new(0)))
+        );
+        assert_eq!(
+            validated.validate_ports(&[]),
+            Err(NoteEventPortError::UnknownPort(EventPortIndex::new(0)))
+        );
+    }
+
+    #[test]
+    fn note_port_validation_accepts_declared_input_note_port() {
+        const INPUT_PORTS: &[EventPortDescriptor] = &[EventPortDescriptor {
+            key: NOTE_INPUT,
+            name: "Notes",
+            direction: EventPortDirection::Input,
+            dialects: NOTE_DIALECTS,
+        }];
+        let events = [NoteEvent::new(
+            0,
+            NoteEventKind::On {
+                address: address(),
+                velocity: velocity(0.5),
+            },
+        )];
+        let validated = NoteEvents::new(&events, 1, 1).expect("event is valid");
+        assert_eq!(validated.validate_ports(INPUT_PORTS), Ok(()));
     }
 
     #[test]
