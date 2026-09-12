@@ -30,6 +30,28 @@ impl fmt::Display for PortKey {
     }
 }
 
+/// Dense schema-local identity for an audio port.
+///
+/// An `AudioPortIndex` is meaningful only relative to one validated immutable
+/// audio-port schema. It is never persistent identity and must not be serialized
+/// or treated as a backend port ID.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct AudioPortIndex(u32);
+
+impl AudioPortIndex {
+    /// Construct an audio-port index from validated setup mapping.
+    #[must_use]
+    pub const fn new(value: u32) -> Self {
+        Self(value)
+    }
+
+    /// Return the dense numeric index.
+    #[must_use]
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
+
 /// Direction of an audio port from the component's point of view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PortDirection {
@@ -118,6 +140,46 @@ pub struct AudioPortDescriptor {
     pub optional: bool,
 }
 
+/// Validate the immutable audio-port schema without requiring an active layout.
+///
+/// # Errors
+///
+/// Returns [`AudioIoConfigurationError::EmptyDescriptorKey`] when a stable key
+/// is empty or [`AudioIoConfigurationError::DuplicateDescriptorPort`] when a
+/// key is repeated.
+pub fn validate_audio_port_schema(
+    descriptors: &[AudioPortDescriptor],
+) -> Result<(), AudioIoConfigurationError> {
+    for (index, descriptor) in descriptors.iter().enumerate() {
+        if descriptor.key.as_str().is_empty() {
+            return Err(AudioIoConfigurationError::EmptyDescriptorKey);
+        }
+
+        if descriptors[..index]
+            .iter()
+            .any(|previous| previous.key == descriptor.key)
+        {
+            return Err(AudioIoConfigurationError::DuplicateDescriptorPort(
+                descriptor.key,
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Resolve a stable audio-port key to its dense schema-local index.
+#[must_use]
+pub fn audio_port_index(
+    descriptors: &[AudioPortDescriptor],
+    key: PortKey,
+) -> Option<AudioPortIndex> {
+    descriptors
+        .iter()
+        .position(|descriptor| descriptor.key == key)
+        .and_then(|index| u32::try_from(index).ok())
+        .map(AudioPortIndex::new)
+}
+
 /// One active audio port within a whole-component I/O configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ConfiguredAudioPort {
@@ -163,20 +225,7 @@ impl<'a> AudioIoConfiguration<'a> {
         self,
         descriptors: &[AudioPortDescriptor],
     ) -> Result<(), AudioIoConfigurationError> {
-        for (index, descriptor) in descriptors.iter().enumerate() {
-            if descriptor.key.as_str().is_empty() {
-                return Err(AudioIoConfigurationError::EmptyDescriptorKey);
-            }
-
-            if descriptors[..index]
-                .iter()
-                .any(|previous| previous.key == descriptor.key)
-            {
-                return Err(AudioIoConfigurationError::DuplicateDescriptorPort(
-                    descriptor.key,
-                ));
-            }
-        }
+        validate_audio_port_schema(descriptors)?;
 
         for (index, configured) in self.ports.iter().enumerate() {
             if !descriptors
@@ -254,7 +303,7 @@ pub const MAIN_OUTPUT: PortKey = PortKey::new("audio.main.out");
 /// Canonical sidechain key for the default effect convention.
 pub const SIDECHAIN_INPUT: PortKey = PortKey::new("audio.sidechain");
 
-/// Conventional port schema for an effect that does not specify otherwise.
+/// Conventional port schema for a stereo effect helper.
 pub const DEFAULT_EFFECT_PORTS: [AudioPortDescriptor; 3] = [
     AudioPortDescriptor {
         key: MAIN_INPUT,
@@ -303,6 +352,11 @@ mod tests {
     fn default_effect_convention_is_stereo_with_optional_sidechain() {
         assert_eq!(DEFAULT_EFFECT_PORTS.len(), 3);
         assert!(DEFAULT_EFFECT_PORTS[2].optional);
+        assert_eq!(validate_audio_port_schema(&DEFAULT_EFFECT_PORTS), Ok(()));
+        assert_eq!(
+            audio_port_index(&DEFAULT_EFFECT_PORTS, MAIN_INPUT),
+            Some(AudioPortIndex::new(0))
+        );
 
         let configured = DEFAULT_EFFECT_CONFIGURATION.ports();
         assert_eq!(configured.len(), 2);
