@@ -140,12 +140,7 @@ impl F32Telemetry {
         let completed = expected + 2;
         if self
             .sequence
-            .compare_exchange(
-                expected,
-                expected + 1,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            )
+            .compare_exchange(expected, expected + 1, Ordering::AcqRel, Ordering::Acquire)
             .is_err()
         {
             return Err(TelemetryPublishError::Busy);
@@ -207,6 +202,16 @@ mod tests {
 
     use super::*;
 
+    fn assert_same_bits(actual: &[f32], expected: &[f32]) {
+        assert_eq!(actual.len(), expected.len());
+        assert!(
+            actual
+                .iter()
+                .zip(expected)
+                .all(|(actual, expected)| actual.to_bits() == expected.to_bits())
+        );
+    }
+
     #[test]
     fn initial_snapshot_is_generation_zero() {
         let telemetry = F32Telemetry::new(&[1.0, -2.0, 3.5]);
@@ -217,7 +222,7 @@ mod tests {
             .expect("initial telemetry should be readable");
 
         assert_eq!(generation, TelemetryGeneration(0));
-        assert_eq!(output, [1.0, -2.0, 3.5]);
+        assert_same_bits(&output, &[1.0, -2.0, 3.5]);
     }
 
     #[test]
@@ -234,7 +239,7 @@ mod tests {
             .try_snapshot_into(&mut output)
             .expect("completed telemetry should be readable");
         assert_eq!(observed, generation);
-        assert_eq!(output, [0.25, 0.75]);
+        assert_same_bits(&output, &[0.25, 0.75]);
     }
 
     #[test]
@@ -251,7 +256,10 @@ mod tests {
             telemetry.try_snapshot_into(&mut output),
             Err(TelemetryReadError::InvalidValueCount)
         );
-        assert_eq!(telemetry.completed_generation(), Some(TelemetryGeneration(0)));
+        assert_eq!(
+            telemetry.completed_generation(),
+            Some(TelemetryGeneration(0))
+        );
     }
 
     #[test]
@@ -279,7 +287,8 @@ mod tests {
             .is_none_or(|generation| generation.get() < u64::from(LAST))
         {
             if telemetry.try_snapshot_into(&mut output).is_ok() {
-                assert!(output.iter().all(|value| *value == output[0]));
+                let expected = output[0].to_bits();
+                assert!(output.iter().all(|value| value.to_bits() == expected));
             }
             yield_now();
         }
@@ -289,6 +298,6 @@ mod tests {
             .try_snapshot_into(&mut output)
             .expect("final telemetry should be readable");
         assert_eq!(generation.get(), u64::from(LAST));
-        assert_eq!(output, [f32::from(LAST); 4]);
+        assert_same_bits(&output, &[f32::from(LAST); 4]);
     }
 }
