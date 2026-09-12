@@ -678,7 +678,10 @@ mod tests {
             dialects: NOTE_DIALECTS,
         }];
         assert_eq!(validate_event_port_schema(&ports), Ok(()));
-        assert_eq!(event_port_index(&ports, NOTE_INPUT), Some(EventPortIndex::new(0)));
+        assert_eq!(
+            event_port_index(&ports, NOTE_INPUT),
+            Some(EventPortIndex::new(0))
+        );
     }
 
     #[test]
