@@ -208,7 +208,11 @@ impl NoteKey {
     /// Construct a note key.
     #[must_use]
     pub const fn new(value: u8) -> Option<Self> {
-        if value <= 127 { Some(Self(value)) } else { None }
+        if value <= 127 {
+            Some(Self(value))
+        } else {
+            None
+        }
     }
 
     /// Return the key number.
@@ -583,7 +587,10 @@ mod tests {
         assert_eq!(NormalizedValue::new(-0.01), None);
         assert_eq!(NormalizedValue::new(1.01), None);
         assert_eq!(NormalizedValue::new(f64::NAN), None);
-        assert_eq!(NormalizedValue::new(0.5).map(NormalizedValue::get), Some(0.5));
+        assert_eq!(
+            NormalizedValue::new(0.5).map(NormalizedValue::get),
+            Some(0.5)
+        );
     }
 
     #[test]
@@ -612,18 +619,8 @@ mod tests {
     #[test]
     fn note_events_reject_decreasing_offsets_and_bounds() {
         let events = [
-            NoteEvent::new(
-                4,
-                NoteEventKind::Choke {
-                    address: address(),
-                },
-            ),
-            NoteEvent::new(
-                3,
-                NoteEventKind::End {
-                    address: address(),
-                },
-            ),
+            NoteEvent::new(4, NoteEventKind::Choke { address: address() }),
+            NoteEvent::new(3, NoteEventKind::End { address: address() }),
         ];
         assert_eq!(
             NoteEvents::new(&events, 8, 8),
@@ -634,12 +631,7 @@ mod tests {
             })
         );
 
-        let outside = [NoteEvent::new(
-            8,
-            NoteEventKind::End {
-                address: address(),
-            },
-        )];
+        let outside = [NoteEvent::new(8, NoteEventKind::End { address: address() })];
         assert_eq!(
             NoteEvents::new(&outside, 8, 8),
             Err(NoteEventsError::OffsetOutOfRange {
