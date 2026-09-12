@@ -568,8 +568,12 @@ struct ActiveRuntime<P> {
 }
 
 impl<P> ActiveRuntime<P> {
-    fn config(&self) -> ActivationConfig<'_> {
-        ActivationConfig::new(self.process, AudioIoConfiguration::new(&self.audio_ports))
+    fn config<'a>(&'a self, schema: &'a ComponentSchema) -> ActivationConfig<'a> {
+        ActivationConfig::new(
+            self.process,
+            AudioIoConfiguration::new(&self.audio_ports),
+            schema,
+        )
     }
 }
 
@@ -742,7 +746,9 @@ where
     /// Return the current activation configuration when active.
     #[must_use]
     pub fn active_config(&self) -> Option<ActivationConfig<'_>> {
-        self.active.as_ref().map(ActiveRuntime::config)
+        self.active
+            .as_ref()
+            .map(|active| active.config(&self.schema))
     }
 
     /// Return the activation-owned dense audio configuration when active.
@@ -812,7 +818,11 @@ where
             .resolve(self.schema.audio_ports())
             .map_err(ActivateError::InvalidAudioIo)?;
         let audio_ports = audio_io.ports().to_vec();
-        let config = ActivationConfig::new(process, AudioIoConfiguration::new(&audio_ports));
+        let config = ActivationConfig::new(
+            process,
+            AudioIoConfiguration::new(&audio_ports),
+            &self.schema,
+        );
         let processor = component
             .activate_with_state(&config, &self.parameters, &self.custom_state)
             .map_err(ActivateError::Product)?;
@@ -904,7 +914,8 @@ where
         validate_audio_endpoints(source, resolved_audio)
             .map_err(InstanceProcessError::InvalidAudioEndpoint)?;
 
-        let config = ActivationConfig::new(*process, AudioIoConfiguration::new(audio_ports));
+        let config =
+            ActivationConfig::new(*process, AudioIoConfiguration::new(audio_ports), schema);
         let mut block = ProcessBlock::new(&config, parameters, frame_count, context, source)
             .map_err(InstanceProcessError::InvalidBlock)?;
         parameters

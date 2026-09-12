@@ -16,7 +16,6 @@ use chassis_core::{
     audio::{
         AudioIoConfiguration, AudioIoConfigurationError, AudioPortIndex, ChannelLayout,
         ConfiguredAudioPort, DEFAULT_EFFECT_CONFIGURATION, MAIN_INPUT, MAIN_OUTPUT,
-        audio_port_index,
     },
     automation::{ParameterEventValue, ParameterEvents},
     buffer::{ChannelBuffer, InputEndpoint, OutputEndpoint},
@@ -88,15 +87,19 @@ impl Component for ConformanceEffect {
 
     fn activate(
         &self,
-        _config: &ActivationConfig<'_>,
+        config: &ActivationConfig<'_>,
     ) -> Result<Self::Processor, Self::ActivationError> {
         self.metrics.activations.fetch_add(1, Ordering::Relaxed);
         Ok(ConformanceProcessor {
             metrics: Arc::clone(&self.metrics),
             gain: self.gain,
-            main_input: audio_port_index(self.audio_ports(), MAIN_INPUT)
+            main_input: config
+                .schema()
+                .audio_port_index(MAIN_INPUT)
                 .expect("default effect schema has main input"),
-            main_output: audio_port_index(self.audio_ports(), MAIN_OUTPUT)
+            main_output: config
+                .schema()
+                .audio_port_index(MAIN_OUTPUT)
                 .expect("default effect schema has main output"),
         })
     }

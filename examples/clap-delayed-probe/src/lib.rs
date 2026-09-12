@@ -11,7 +11,7 @@ use core::convert::Infallible;
 
 use chassis_clap::{ClapStereoEffect, SingleComponentEntry, clack_export_entry};
 use chassis_core::{
-    audio::{AudioPortIndex, MAIN_INPUT, MAIN_OUTPUT, audio_port_index},
+    audio::{AudioPortIndex, MAIN_INPUT, MAIN_OUTPUT},
     process::{ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessChannel},
     runtime::{Component, LatencySamples, Process, Processor},
 };
@@ -40,9 +40,13 @@ impl Component for DelayedProbeEffect {
         let length = usize::try_from(samples).expect("probe latency fits usize");
         Ok(DelayedProcessor {
             latency: LatencySamples::new(samples),
-            main_input: audio_port_index(self.audio_ports(), MAIN_INPUT)
+            main_input: config
+                .schema()
+                .audio_port_index(MAIN_INPUT)
                 .expect("default effect schema has main input"),
-            main_output: audio_port_index(self.audio_ports(), MAIN_OUTPUT)
+            main_output: config
+                .schema()
+                .audio_port_index(MAIN_OUTPUT)
                 .expect("default effect schema has main output"),
             delay: [vec![0.0; length], vec![0.0; length]],
             positions: [0, 0],

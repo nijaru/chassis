@@ -12,7 +12,7 @@ use std::{
 
 use chassis_clap::{ClapStereoEffect, SingleComponentEntry};
 use chassis_core::{
-    audio::{AudioPortIndex, MAIN_INPUT, MAIN_OUTPUT, audio_port_index},
+    audio::{AudioPortIndex, MAIN_INPUT, MAIN_OUTPUT},
     process::{ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessChannel},
     runtime::{Component, LatencySamples, Process, Processor},
 };
@@ -45,7 +45,7 @@ impl Component for DelayedProbe {
     }
     fn activate_with_parameters(
         &self,
-        _config: &ActivationConfig<'_>,
+        config: &ActivationConfig<'_>,
         parameters: &ParameterStore,
     ) -> Result<Self::Processor, Self::ActivationError> {
         let samples = if parameters.get("phase") == Some(&ParameterValue::Float(1.0)) {
@@ -57,9 +57,13 @@ impl Component for DelayedProbe {
         Ok(DelayedProcessor {
             restart: false,
             latency: LatencySamples::new(samples),
-            main_input: audio_port_index(self.audio_ports(), MAIN_INPUT)
+            main_input: config
+                .schema()
+                .audio_port_index(MAIN_INPUT)
                 .expect("default effect schema has main input"),
-            main_output: audio_port_index(self.audio_ports(), MAIN_OUTPUT)
+            main_output: config
+                .schema()
+                .audio_port_index(MAIN_OUTPUT)
                 .expect("default effect schema has main output"),
             delay: [vec![0.0; length], vec![0.0; length]],
             positions: [0, 0],

@@ -8,6 +8,7 @@ use crate::{
     buffer::{BufferAccessError, BufferRelationship, ChannelBuffer, InputEndpoint, OutputEndpoint},
     events::NoteEvents,
     parameters::{ParameterAutomationError, ParameterStore},
+    schema::ComponentSchema,
 };
 
 /// Scheduling/quality context for one processing call.
@@ -315,11 +316,20 @@ impl std::error::Error for ProcessConfigError {}
 pub struct ActivationConfig<'a> {
     process: ProcessConfig,
     audio_io: AudioIoConfiguration<'a>,
+    schema: &'a ComponentSchema,
 }
 
 impl<'a> ActivationConfig<'a> {
-    pub(crate) const fn new(process: ProcessConfig, audio_io: AudioIoConfiguration<'a>) -> Self {
-        Self { process, audio_io }
+    pub(crate) const fn new(
+        process: ProcessConfig,
+        audio_io: AudioIoConfiguration<'a>,
+        schema: &'a ComponentSchema,
+    ) -> Self {
+        Self {
+            process,
+            audio_io,
+            schema,
+        }
     }
 
     /// Return the process resource bounds.
@@ -332,6 +342,12 @@ impl<'a> ActivationConfig<'a> {
     #[must_use]
     pub const fn audio_io(self) -> AudioIoConfiguration<'a> {
         self.audio_io
+    }
+
+    /// Return the immutable component schema generation frozen by the runtime.
+    #[must_use]
+    pub const fn schema(self) -> &'a ComponentSchema {
+        self.schema
     }
 }
 
@@ -788,7 +804,7 @@ impl std::error::Error for ProcessBlockError {
 mod tests {
     use super::*;
     use crate::{
-        audio::{AudioPortIndex, DEFAULT_EFFECT_CONFIGURATION},
+        audio::{AudioPortIndex, DEFAULT_EFFECT_CONFIGURATION, DEFAULT_EFFECT_PORTS},
         automation::{ParameterEvent, ParameterEventValue},
         buffer::{ChannelBuffer, InputEndpoint, OutputEndpoint},
         events::{
@@ -803,6 +819,11 @@ mod tests {
 
     fn empty_parameters() -> ParameterStore {
         ParameterStore::new(&[]).expect("empty parameter schema is valid")
+    }
+
+    fn default_effect_schema() -> ComponentSchema {
+        ComponentSchema::unidentified(DEFAULT_EFFECT_PORTS.to_vec(), vec![], vec![])
+            .expect("default effect schema is valid")
     }
 
     fn note_address() -> NoteAddress {
@@ -885,7 +906,8 @@ mod tests {
     fn process_block_does_not_require_one_flat_slice() {
         let process =
             ProcessConfig::new(48_000.0, None, maximum(8), 0).expect("test configuration is valid");
-        let activation = ActivationConfig::new(process, DEFAULT_EFFECT_CONFIGURATION);
+        let schema = default_effect_schema();
+        let activation = ActivationConfig::new(process, DEFAULT_EFFECT_CONFIGURATION, &schema);
         let parameters = empty_parameters();
         let input_left = [1.0_f32, 2.0];
         let input_right = [3.0_f32, 4.0];
@@ -937,7 +959,8 @@ mod tests {
     fn process_block_rejects_mismatched_channel_lengths() {
         let process =
             ProcessConfig::new(48_000.0, None, maximum(8), 0).expect("test configuration is valid");
-        let activation = ActivationConfig::new(process, DEFAULT_EFFECT_CONFIGURATION);
+        let schema = default_effect_schema();
+        let activation = ActivationConfig::new(process, DEFAULT_EFFECT_CONFIGURATION, &schema);
         let parameters = empty_parameters();
         let input = [0.0_f32; 3];
         let mut output = [0.0_f32; 3];
@@ -1014,7 +1037,8 @@ mod tests {
         let process = ProcessConfig::new(48_000.0, None, maximum(8), 0)
             .expect("test configuration is valid")
             .with_max_note_events(2);
-        let activation = ActivationConfig::new(process, DEFAULT_EFFECT_CONFIGURATION);
+        let schema = default_effect_schema();
+        let activation = ActivationConfig::new(process, DEFAULT_EFFECT_CONFIGURATION, &schema);
         let parameters = empty_parameters();
         let raw_notes = [NoteEvent::new(
             1,
@@ -1043,7 +1067,8 @@ mod tests {
     fn process_block_rejects_events_for_another_block_size() {
         let process =
             ProcessConfig::new(48_000.0, None, maximum(8), 0).expect("test configuration is valid");
-        let activation = ActivationConfig::new(process, DEFAULT_EFFECT_CONFIGURATION);
+        let schema = default_effect_schema();
+        let activation = ActivationConfig::new(process, DEFAULT_EFFECT_CONFIGURATION, &schema);
         let parameters = empty_parameters();
         let context = ProcessContext::new(
             ProcessMode::Realtime,
@@ -1082,7 +1107,8 @@ mod tests {
     fn process_block_rejects_invalid_note_event_context() {
         let process =
             ProcessConfig::new(48_000.0, None, maximum(8), 0).expect("test configuration is valid");
-        let activation = ActivationConfig::new(process, DEFAULT_EFFECT_CONFIGURATION);
+        let schema = default_effect_schema();
+        let activation = ActivationConfig::new(process, DEFAULT_EFFECT_CONFIGURATION, &schema);
         let parameters = empty_parameters();
         let raw_notes = [NoteEvent::new(
             0,

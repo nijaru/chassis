@@ -14,7 +14,7 @@ use std::{
 
 use chassis_clap::{ClapStereoEffect, SingleComponentEntryWithF64};
 use chassis_core::{
-    audio::{AudioPortIndex, MAIN_INPUT, MAIN_OUTPUT, audio_port_index},
+    audio::{AudioPortIndex, MAIN_INPUT, MAIN_OUTPUT},
     parameters::{ParameterDescriptor, ParameterValue},
     process::{ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessChannel},
     runtime::{Component, LatencySamples, Process, Processor},
@@ -113,9 +113,13 @@ impl Component for ProbeComponent {
         };
         Ok(ProbeProcessor {
             latency: LatencySamples::new(latency),
-            main_input: audio_port_index(self.audio_ports(), MAIN_INPUT)
+            main_input: config
+                .schema()
+                .audio_port_index(MAIN_INPUT)
                 .expect("default effect schema has main input"),
-            main_output: audio_port_index(self.audio_ports(), MAIN_OUTPUT)
+            main_output: config
+                .schema()
+                .audio_port_index(MAIN_OUTPUT)
                 .expect("default effect schema has main output"),
         })
     }
