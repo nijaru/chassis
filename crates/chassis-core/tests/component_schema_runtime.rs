@@ -4,8 +4,8 @@ use std::{convert::Infallible, num::NonZeroU32};
 
 use chassis_core::{
     audio::{
-        AudioIoConfiguration, AudioPortDescriptor, AudioPortIndex, PortDirection, PortKey,
-        PortRole, DEFAULT_EFFECT_CONFIGURATION, DEFAULT_EFFECT_PORTS, MAIN_INPUT,
+        AudioIoConfiguration, AudioPortDescriptor, AudioPortIndex, DEFAULT_EFFECT_CONFIGURATION,
+        DEFAULT_EFFECT_PORTS, MAIN_INPUT, PortDirection, PortKey, PortRole,
     },
     process::{ActivationConfig, ProcessConfig},
     runtime::{ActivateError, Component, InstanceRuntime, Processor},
@@ -118,11 +118,7 @@ fn activation_rejects_audio_schema_drift() {
         .expect("original schema is valid");
 
     assert!(matches!(
-        runtime.activate(
-            &changed,
-            process_config(),
-            AudioIoConfiguration::new(&[])
-        ),
+        runtime.activate(&changed, process_config(), AudioIoConfiguration::new(&[])),
         Err(ActivateError::AudioPortSchemaMismatch)
     ));
 }
