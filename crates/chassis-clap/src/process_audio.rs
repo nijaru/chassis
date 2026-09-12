@@ -355,11 +355,11 @@ fn map_channel<'a, S>(
 }
 
 fn input_endpoint(port: ClapProcessPort, channel: u32) -> InputEndpoint {
-    InputEndpoint::resolved(port.key, port.index, channel)
+    InputEndpoint::new(port.index, channel)
 }
 
 fn output_endpoint(port: ClapProcessPort, channel: u32) -> OutputEndpoint {
-    OutputEndpoint::resolved(port.key, port.index, channel)
+    OutputEndpoint::new(port.index, channel)
 }
 
 fn validate_audio<S>(audio: &mut Audio<'_>, slots: &[ClapProcessSlot]) -> Result<(), PluginError>

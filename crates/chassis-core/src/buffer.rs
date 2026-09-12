@@ -6,55 +6,30 @@
 
 use core::fmt;
 
-use crate::audio::{AudioPortIndex, PortKey};
+use crate::audio::AudioPortIndex;
 
-/// Semantic address of one input channel within an active audio port.
+/// Dense process-time address of one input channel within an active audio port.
 ///
-/// Stable keys remain temporarily available while existing processors migrate,
-/// but deployment/runtime paths should populate the schema-local dense index.
-/// Once all realtime consumers use `port_index`, the key field and legacy
-/// constructor can be removed from this process-time type.
+/// Stable [`PortKey`](crate::audio::PortKey) identity is resolved before
+/// processing. Callback data carries only this schema-local dense index and the
+/// zero-based channel index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct InputEndpoint {
-    port: PortKey,
-    port_index: Option<AudioPortIndex>,
+    port: AudioPortIndex,
     channel: u32,
 }
 
 impl InputEndpoint {
-    /// Construct a legacy endpoint without a resolved dense audio-port index.
-    ///
-    /// New runtime/adapter code should use [`Self::resolved`]. This constructor
-    /// exists only during the pre-alpha dense-audio-endpoint migration.
+    /// Construct an input endpoint from a setup-resolved dense port index.
     #[must_use]
-    pub const fn new(port: PortKey, channel: u32) -> Self {
-        Self {
-            port,
-            port_index: None,
-            channel,
-        }
+    pub const fn new(port: AudioPortIndex, channel: u32) -> Self {
+        Self { port, channel }
     }
 
-    /// Construct an endpoint after setup resolved stable identity to a dense index.
+    /// Return the setup-resolved dense port index.
     #[must_use]
-    pub const fn resolved(port: PortKey, port_index: AudioPortIndex, channel: u32) -> Self {
-        Self {
-            port,
-            port_index: Some(port_index),
-            channel,
-        }
-    }
-
-    /// Return the stable port key during the endpoint migration.
-    #[must_use]
-    pub const fn port(self) -> PortKey {
+    pub const fn port_index(self) -> AudioPortIndex {
         self.port
-    }
-
-    /// Return the setup-resolved dense port index when available.
-    #[must_use]
-    pub const fn port_index(self) -> Option<AudioPortIndex> {
-        self.port_index
     }
 
     /// Return the zero-based channel index.
@@ -64,50 +39,24 @@ impl InputEndpoint {
     }
 }
 
-/// Semantic address of one output channel within an active audio port.
-///
-/// Stable keys remain temporarily available while existing processors migrate,
-/// but deployment/runtime paths should populate the schema-local dense index.
+/// Dense process-time address of one output channel within an active audio port.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct OutputEndpoint {
-    port: PortKey,
-    port_index: Option<AudioPortIndex>,
+    port: AudioPortIndex,
     channel: u32,
 }
 
 impl OutputEndpoint {
-    /// Construct a legacy endpoint without a resolved dense audio-port index.
-    ///
-    /// New runtime/adapter code should use [`Self::resolved`].
+    /// Construct an output endpoint from a setup-resolved dense port index.
     #[must_use]
-    pub const fn new(port: PortKey, channel: u32) -> Self {
-        Self {
-            port,
-            port_index: None,
-            channel,
-        }
+    pub const fn new(port: AudioPortIndex, channel: u32) -> Self {
+        Self { port, channel }
     }
 
-    /// Construct an endpoint after setup resolved stable identity to a dense index.
+    /// Return the setup-resolved dense port index.
     #[must_use]
-    pub const fn resolved(port: PortKey, port_index: AudioPortIndex, channel: u32) -> Self {
-        Self {
-            port,
-            port_index: Some(port_index),
-            channel,
-        }
-    }
-
-    /// Return the stable port key during the endpoint migration.
-    #[must_use]
-    pub const fn port(self) -> PortKey {
+    pub const fn port_index(self) -> AudioPortIndex {
         self.port
-    }
-
-    /// Return the setup-resolved dense port index when available.
-    #[must_use]
-    pub const fn port_index(self) -> Option<AudioPortIndex> {
-        self.port_index
     }
 
     /// Return the zero-based channel index.
@@ -496,15 +445,14 @@ fn frame_count_to_usize(frame_count: u32) -> Result<usize, ChannelBufferError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::audio::{MAIN_INPUT, MAIN_OUTPUT};
 
     #[test]
     fn exact_alias_uses_one_mutable_slice() {
         let mut samples = [1.0_f32, 2.0, 3.0];
         {
             let mut buffer = ChannelBuffer::in_place(
-                InputEndpoint::new(MAIN_INPUT, 0),
-                OutputEndpoint::new(MAIN_OUTPUT, 0),
+                InputEndpoint::new(AudioPortIndex::new(0), 0),
+                OutputEndpoint::new(AudioPortIndex::new(1), 0),
                 &mut samples,
                 3,
             )
@@ -524,9 +472,9 @@ mod tests {
         let input = [1_u32, 2, 3];
         let mut output = [0_u32; 3];
         let mut buffer = ChannelBuffer::separate(
-            InputEndpoint::new(MAIN_INPUT, 0),
+            InputEndpoint::new(AudioPortIndex::new(0), 0),
             &input,
-            OutputEndpoint::new(MAIN_OUTPUT, 0),
+            OutputEndpoint::new(AudioPortIndex::new(1), 0),
             &mut output,
             3,
         )
@@ -543,9 +491,9 @@ mod tests {
         let input = [1_u32, 2];
         let mut output = [9_u32];
         let mut buffer = ChannelBuffer::Separate {
-            input: InputEndpoint::new(MAIN_INPUT, 0),
+            input: InputEndpoint::new(AudioPortIndex::new(0), 0),
             input_samples: &input,
-            output: OutputEndpoint::new(MAIN_OUTPUT, 0),
+            output: OutputEndpoint::new(AudioPortIndex::new(1), 0),
             output_samples: &mut output,
         };
         assert!(buffer.make_in_place().is_err());
@@ -559,9 +507,9 @@ mod tests {
 
         assert!(matches!(
             ChannelBuffer::separate(
-                InputEndpoint::new(MAIN_INPUT, 0),
+                InputEndpoint::new(AudioPortIndex::new(0), 0),
                 &input,
-                OutputEndpoint::new(MAIN_OUTPUT, 0),
+                OutputEndpoint::new(AudioPortIndex::new(1), 0),
                 &mut output,
                 2,
             ),
@@ -571,10 +519,10 @@ mod tests {
 
     #[test]
     fn resolved_endpoints_retain_dense_schema_indices() {
-        let input = InputEndpoint::resolved(MAIN_INPUT, AudioPortIndex::new(0), 1);
-        let output = OutputEndpoint::resolved(MAIN_OUTPUT, AudioPortIndex::new(1), 1);
-        assert_eq!(input.port_index(), Some(AudioPortIndex::new(0)));
-        assert_eq!(output.port_index(), Some(AudioPortIndex::new(1)));
+        let input = InputEndpoint::new(AudioPortIndex::new(0), 1);
+        let output = OutputEndpoint::new(AudioPortIndex::new(1), 1);
+        assert_eq!(input.port_index(), AudioPortIndex::new(0));
+        assert_eq!(output.port_index(), AudioPortIndex::new(1));
         assert_eq!(input.channel(), 1);
         assert_eq!(output.channel(), 1);
     }

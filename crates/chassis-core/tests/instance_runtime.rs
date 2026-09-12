@@ -31,11 +31,11 @@ const MAIN_INPUT_INDEX: AudioPortIndex = AudioPortIndex::new(0);
 const MAIN_OUTPUT_INDEX: AudioPortIndex = AudioPortIndex::new(1);
 
 fn main_input(channel: u32) -> InputEndpoint {
-    InputEndpoint::resolved(MAIN_INPUT, MAIN_INPUT_INDEX, channel)
+    InputEndpoint::new(MAIN_INPUT_INDEX, channel)
 }
 
 fn main_output(channel: u32) -> OutputEndpoint {
-    OutputEndpoint::resolved(MAIN_OUTPUT, MAIN_OUTPUT_INDEX, channel)
+    OutputEndpoint::new(MAIN_OUTPUT_INDEX, channel)
 }
 
 #[derive(Default)]

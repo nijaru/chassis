@@ -10,10 +10,7 @@ use std::{
 };
 
 use chassis_core::{
-    audio::{
-        AudioEndpointError, AudioPortIndex, DEFAULT_EFFECT_CONFIGURATION, MAIN_INPUT, MAIN_OUTPUT,
-        SIDECHAIN_INPUT,
-    },
+    audio::{AudioEndpointError, AudioPortIndex, DEFAULT_EFFECT_CONFIGURATION},
     automation::ParameterEvents,
     buffer::{ChannelBuffer, InputEndpoint, OutputEndpoint},
     process::{
@@ -95,8 +92,8 @@ fn valid_dense_endpoints_reach_product_dsp() {
     let (process_calls, mut runtime) = active_runtime();
     let mut samples = [1.0_f32];
     let mut buffers = [ChannelBuffer::in_place(
-        InputEndpoint::resolved(MAIN_INPUT, MAIN_INPUT_INDEX, 0),
-        OutputEndpoint::resolved(MAIN_OUTPUT, MAIN_OUTPUT_INDEX, 0),
+        InputEndpoint::new(MAIN_INPUT_INDEX, 0),
+        OutputEndpoint::new(MAIN_OUTPUT_INDEX, 0),
         &mut samples,
         1,
     )
@@ -109,36 +106,14 @@ fn valid_dense_endpoints_reach_product_dsp() {
 }
 
 #[test]
-fn unresolved_endpoint_is_rejected_before_product_dsp() {
-    let (process_calls, mut runtime) = active_runtime();
-    let mut samples = [1.0_f32];
-    let mut buffers = [ChannelBuffer::in_place(
-        InputEndpoint::new(MAIN_INPUT, 0),
-        OutputEndpoint::resolved(MAIN_OUTPUT, MAIN_OUTPUT_INDEX, 0),
-        &mut samples,
-        1,
-    )
-    .expect("buffer is structurally valid")];
-
-    assert!(matches!(
-        runtime.process(1, process_context(1), &mut buffers),
-        Err(InstanceProcessError::InvalidAudioEndpoint(
-            AudioEndpointError::UnresolvedPortIdentity
-        ))
-    ));
-    assert_eq!(process_calls.load(Ordering::Relaxed), 0);
-}
-
-#[test]
 fn inactive_optional_port_is_rejected_before_product_dsp() {
     let (process_calls, mut runtime) = active_runtime();
     let samples = [1.0_f32];
-    let mut buffers = [ChannelBuffer::input_only(
-        InputEndpoint::resolved(SIDECHAIN_INPUT, SIDECHAIN_INPUT_INDEX, 0),
-        &samples,
-        1,
-    )
-    .expect("buffer is structurally valid")];
+    let mut buffers =
+        [
+            ChannelBuffer::input_only(InputEndpoint::new(SIDECHAIN_INPUT_INDEX, 0), &samples, 1)
+                .expect("buffer is structurally valid"),
+        ];
 
     assert!(matches!(
         runtime.process(1, process_context(1), &mut buffers),
@@ -153,12 +128,11 @@ fn inactive_optional_port_is_rejected_before_product_dsp() {
 fn wrong_endpoint_direction_is_rejected_before_product_dsp() {
     let (process_calls, mut runtime) = active_runtime();
     let samples = [1.0_f32];
-    let mut buffers = [ChannelBuffer::input_only(
-        InputEndpoint::resolved(MAIN_OUTPUT, MAIN_OUTPUT_INDEX, 0),
-        &samples,
-        1,
-    )
-    .expect("buffer is structurally valid")];
+    let mut buffers =
+        [
+            ChannelBuffer::input_only(InputEndpoint::new(MAIN_OUTPUT_INDEX, 0), &samples, 1)
+                .expect("buffer is structurally valid"),
+        ];
 
     assert!(matches!(
         runtime.process(1, process_context(1), &mut buffers),
@@ -173,12 +147,11 @@ fn wrong_endpoint_direction_is_rejected_before_product_dsp() {
 fn out_of_range_channel_is_rejected_before_product_dsp() {
     let (process_calls, mut runtime) = active_runtime();
     let samples = [1.0_f32];
-    let mut buffers = [ChannelBuffer::input_only(
-        InputEndpoint::resolved(MAIN_INPUT, MAIN_INPUT_INDEX, 2),
-        &samples,
-        1,
-    )
-    .expect("buffer is structurally valid")];
+    let mut buffers =
+        [
+            ChannelBuffer::input_only(InputEndpoint::new(MAIN_INPUT_INDEX, 2), &samples, 1)
+                .expect("buffer is structurally valid"),
+        ];
 
     assert!(matches!(
         runtime.process(1, process_context(1), &mut buffers),
@@ -198,11 +171,10 @@ fn unknown_dense_port_is_rejected_before_product_dsp() {
     let (process_calls, mut runtime) = active_runtime();
     let samples = [1.0_f32];
     let unknown = AudioPortIndex::new(99);
-    let mut buffers =
-        [
-            ChannelBuffer::input_only(InputEndpoint::resolved(MAIN_INPUT, unknown, 0), &samples, 1)
-                .expect("buffer is structurally valid"),
-        ];
+    let mut buffers = [
+        ChannelBuffer::input_only(InputEndpoint::new(unknown, 0), &samples, 1)
+            .expect("buffer is structurally valid"),
+    ];
 
     assert!(matches!(
         runtime.process(1, process_context(1), &mut buffers),

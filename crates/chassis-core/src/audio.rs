@@ -411,8 +411,6 @@ impl ResolvedAudioIoConfiguration {
 /// Invalid process-time endpoint relative to one active audio configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AudioEndpointError {
-    /// The endpoint still uses the proof-era stable-key-only representation.
-    UnresolvedPortIdentity,
     /// The dense port index cannot be represented by platform `usize`.
     PortIndexNotRepresentable(AudioPortIndex),
     /// The dense index is outside the component schema.
@@ -442,9 +440,6 @@ pub enum AudioEndpointError {
 impl fmt::Display for AudioEndpointError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::UnresolvedPortIdentity => {
-                formatter.write_str("audio endpoint has no resolved AudioPortIndex")
-            }
             Self::PortIndexNotRepresentable(port) => write!(
                 formatter,
                 "audio port index {} is not representable on this platform",

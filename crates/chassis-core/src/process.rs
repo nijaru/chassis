@@ -788,7 +788,7 @@ impl std::error::Error for ProcessBlockError {
 mod tests {
     use super::*;
     use crate::{
-        audio::{DEFAULT_EFFECT_CONFIGURATION, MAIN_INPUT, MAIN_OUTPUT},
+        audio::{AudioPortIndex, DEFAULT_EFFECT_CONFIGURATION},
         automation::{ParameterEvent, ParameterEventValue},
         buffer::{ChannelBuffer, InputEndpoint, OutputEndpoint},
         events::{
@@ -892,17 +892,17 @@ mod tests {
         let mut output_left = [0.0_f32; 2];
         let mut output_right = [0.0_f32; 2];
         let mut first = [ChannelBuffer::separate(
-            InputEndpoint::new(MAIN_INPUT, 0),
+            InputEndpoint::new(AudioPortIndex::new(0), 0),
             &input_left,
-            OutputEndpoint::new(MAIN_OUTPUT, 0),
+            OutputEndpoint::new(AudioPortIndex::new(1), 0),
             &mut output_left,
             2,
         )
         .expect("left buffer is valid")];
         let mut second = [ChannelBuffer::separate(
-            InputEndpoint::new(MAIN_INPUT, 1),
+            InputEndpoint::new(AudioPortIndex::new(0), 1),
             &input_right,
-            OutputEndpoint::new(MAIN_OUTPUT, 1),
+            OutputEndpoint::new(AudioPortIndex::new(1), 1),
             &mut output_right,
             2,
         )
@@ -942,9 +942,9 @@ mod tests {
         let input = [0.0_f32; 3];
         let mut output = [0.0_f32; 3];
         let mut buffers = [ChannelBuffer::separate(
-            InputEndpoint::new(MAIN_INPUT, 0),
+            InputEndpoint::new(AudioPortIndex::new(0), 0),
             &input,
-            OutputEndpoint::new(MAIN_OUTPUT, 0),
+            OutputEndpoint::new(AudioPortIndex::new(1), 0),
             &mut output,
             3,
         )
@@ -968,9 +968,9 @@ mod tests {
             let input = [0.0_f32; 2];
             let mut output = vec![0.0_f32; output_length];
             let mut buffers = [ChannelBuffer::Separate {
-                input: InputEndpoint::new(MAIN_INPUT, 0),
+                input: InputEndpoint::new(AudioPortIndex::new(0), 0),
                 input_samples: &input,
-                output: OutputEndpoint::new(MAIN_OUTPUT, 0),
+                output: OutputEndpoint::new(AudioPortIndex::new(1), 0),
                 output_samples: &mut output,
             }];
             let mut source = ChannelBufferSlice::new(&mut buffers);

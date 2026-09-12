@@ -11,7 +11,7 @@ use std::{
 };
 
 use chassis_core::{
-    audio::{AudioPortIndex, DEFAULT_EFFECT_CONFIGURATION, MAIN_INPUT, MAIN_OUTPUT},
+    audio::{AudioPortIndex, DEFAULT_EFFECT_CONFIGURATION},
     automation::ParameterEvents,
     buffer::{ChannelBuffer, InputEndpoint, OutputEndpoint},
     process::{
@@ -150,15 +150,15 @@ fn repeated_post_activation_process_calls_do_not_allocate_or_deallocate() {
     for _ in 0..1_000 {
         let mut buffers = [
             ChannelBuffer::in_place(
-                InputEndpoint::resolved(MAIN_INPUT, MAIN_INPUT_INDEX, 0),
-                OutputEndpoint::resolved(MAIN_OUTPUT, MAIN_OUTPUT_INDEX, 0),
+                InputEndpoint::new(MAIN_INPUT_INDEX, 0),
+                OutputEndpoint::new(MAIN_OUTPUT_INDEX, 0),
                 &mut left,
                 512,
             )
             .expect("left buffer is valid"),
             ChannelBuffer::in_place(
-                InputEndpoint::resolved(MAIN_INPUT, MAIN_INPUT_INDEX, 1),
-                OutputEndpoint::resolved(MAIN_OUTPUT, MAIN_OUTPUT_INDEX, 1),
+                InputEndpoint::new(MAIN_INPUT_INDEX, 1),
+                OutputEndpoint::new(MAIN_OUTPUT_INDEX, 1),
                 &mut right,
                 512,
             )

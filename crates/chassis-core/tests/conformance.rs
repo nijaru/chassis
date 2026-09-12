@@ -35,11 +35,11 @@ const MAIN_INPUT_INDEX: AudioPortIndex = AudioPortIndex::new(0);
 const MAIN_OUTPUT_INDEX: AudioPortIndex = AudioPortIndex::new(1);
 
 fn main_input(channel: u32) -> InputEndpoint {
-    InputEndpoint::resolved(MAIN_INPUT, MAIN_INPUT_INDEX, channel)
+    InputEndpoint::new(MAIN_INPUT_INDEX, channel)
 }
 
 fn main_output(channel: u32) -> OutputEndpoint {
-    OutputEndpoint::resolved(MAIN_OUTPUT, MAIN_OUTPUT_INDEX, channel)
+    OutputEndpoint::new(MAIN_OUTPUT_INDEX, channel)
 }
 
 #[derive(Default)]
@@ -132,10 +132,10 @@ impl Process<f32> for ConformanceProcessor {
         for mut buffer in block.channels() {
             let is_main_pair = buffer
                 .input_endpoint()
-                .is_some_and(|endpoint| endpoint.port_index() == Some(self.main_input))
+                .is_some_and(|endpoint| endpoint.port_index() == self.main_input)
                 && buffer
                     .output_endpoint()
-                    .is_some_and(|endpoint| endpoint.port_index() == Some(self.main_output));
+                    .is_some_and(|endpoint| endpoint.port_index() == self.main_output);
             if !is_main_pair {
                 continue;
             }

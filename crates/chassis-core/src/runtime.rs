@@ -1281,15 +1281,11 @@ where
 {
     for channel in source.channels() {
         if let Some(endpoint) = channel.input_endpoint() {
-            let port = endpoint
-                .port_index()
-                .ok_or(AudioEndpointError::UnresolvedPortIdentity)?;
+            let port = endpoint.port_index();
             resolved.validate_endpoint(port, endpoint.channel(), PortDirection::Input)?;
         }
         if let Some(endpoint) = channel.output_endpoint() {
-            let port = endpoint
-                .port_index()
-                .ok_or(AudioEndpointError::UnresolvedPortIdentity)?;
+            let port = endpoint.port_index();
             resolved.validate_endpoint(port, endpoint.channel(), PortDirection::Output)?;
         }
     }

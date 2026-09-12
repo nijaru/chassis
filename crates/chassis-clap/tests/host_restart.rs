@@ -99,10 +99,10 @@ impl Process<f32> for DelayedProcessor {
         for mut channel in block.channels() {
             let is_main = channel
                 .input_endpoint()
-                .is_some_and(|endpoint| endpoint.port_index() == Some(self.main_input))
+                .is_some_and(|endpoint| endpoint.port_index() == self.main_input)
                 && channel
                     .output_endpoint()
-                    .is_some_and(|endpoint| endpoint.port_index() == Some(self.main_output));
+                    .is_some_and(|endpoint| endpoint.port_index() == self.main_output);
             if !is_main {
                 continue;
             }
