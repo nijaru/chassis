@@ -163,7 +163,7 @@ pub fn validate_event_port_schema(
 
 /// Backend-independent note identity when a source supplies one.
 ///
-/// `None` in [`NoteAddress`] represents an unspecified/wildcard note identity;
+/// `None` in [`NoteAddress`] represents an unspecified/wildcard address field;
 /// backend sentinel values such as `-1` must not leak into product code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct NoteId(u32);
@@ -243,20 +243,38 @@ impl NormalizedValue {
 /// Semantic target/address for a note event.
 ///
 /// Optional fields preserve source wildcard/unspecified semantics without raw
-/// backend sentinel integers. The event port itself is always explicit.
+/// backend sentinel integers. Note-on sources may impose stricter requirements
+/// than other note operations; adapters validate those source rules before
+/// constructing product-visible events.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NoteAddress {
-    port: EventPortIndex,
+    port: Option<EventPortIndex>,
     note_id: Option<NoteId>,
     channel: Option<NoteChannel>,
     key: Option<NoteKey>,
 }
 
 impl NoteAddress {
-    /// Construct a note address.
+    /// Construct an address targeting one explicit activation-local event port.
     #[must_use]
     pub const fn new(
         port: EventPortIndex,
+        note_id: Option<NoteId>,
+        channel: Option<NoteChannel>,
+        key: Option<NoteKey>,
+    ) -> Self {
+        Self {
+            port: Some(port),
+            note_id,
+            channel,
+            key,
+        }
+    }
+
+    /// Construct an address that preserves an optional/wildcard event port.
+    #[must_use]
+    pub const fn with_optional_port(
+        port: Option<EventPortIndex>,
         note_id: Option<NoteId>,
         channel: Option<NoteChannel>,
         key: Option<NoteKey>,
@@ -269,9 +287,9 @@ impl NoteAddress {
         }
     }
 
-    /// Return the activation-local event port.
+    /// Return the activation-local event port when explicitly targeted.
     #[must_use]
-    pub const fn port(self) -> EventPortIndex {
+    pub const fn port(self) -> Option<EventPortIndex> {
         self.port
     }
 
@@ -453,11 +471,19 @@ impl<'a> NoteEvents<'a> {
         self.events.iter()
     }
 
-    /// Iterate only events targeting one activation-local event port.
+    /// Iterate events that may target one activation-local event port.
+    ///
+    /// Wildcard-port events are included because they may target the requested
+    /// port; callers that need exact-source-port filtering can inspect the
+    /// [`NoteAddress`] directly.
     pub fn for_port(self, port: EventPortIndex) -> impl Iterator<Item = &'a NoteEvent> {
-        self.events
-            .iter()
-            .filter(move |event| event.kind.address().port() == port)
+        self.events.iter().filter(move |event| {
+            event
+                .kind
+                .address()
+                .port()
+                .is_none_or(|target| target == port)
+        })
     }
 }
 
@@ -591,6 +617,16 @@ mod tests {
             NormalizedValue::new(0.5).map(NormalizedValue::get),
             Some(0.5)
         );
+    }
+
+    #[test]
+    fn wildcard_note_ports_are_preserved_and_match_port_filters() {
+        let wildcard = NoteAddress::with_optional_port(None, None, None, NoteKey::new(60));
+        assert_eq!(wildcard.port(), None);
+
+        let events = [NoteEvent::new(0, NoteEventKind::Choke { address: wildcard })];
+        let validated = NoteEvents::new(&events, 1, 1).expect("event is valid");
+        assert_eq!(validated.for_port(EventPortIndex::new(4)).count(), 1);
     }
 
     #[test]
