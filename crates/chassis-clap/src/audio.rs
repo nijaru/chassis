@@ -21,7 +21,7 @@ use clack_plugin::prelude::ClapId;
 /// it must not be derived from declaration order. The layout is the currently
 /// supported CLAP projection for this adapter slice. `in_place_pair` names the
 /// opposite-direction Chassis port that may alias this port in place.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClapAudioPort {
     /// Stable Chassis port key being projected.
     pub key: PortKey,
@@ -55,13 +55,13 @@ impl ClapAudioPort {
 ///
 /// Main input/output intentionally share ID 0 because CLAP IDs are scoped by
 /// direction. The optional sidechain is input ID 1 and has no in-place pair.
-pub const DEFAULT_CLAP_AUDIO_PORTS: [ClapAudioPort; 3] = [
+pub static DEFAULT_CLAP_AUDIO_PORTS: [ClapAudioPort; 3] = [
     ClapAudioPort::new(MAIN_INPUT, 0, ChannelLayout::Stereo, Some(MAIN_OUTPUT)),
     ClapAudioPort::new(MAIN_OUTPUT, 0, ChannelLayout::Stereo, Some(MAIN_INPUT)),
     ClapAudioPort::new(SIDECHAIN_INPUT, 1, ChannelLayout::Stereo, None),
 ];
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct PortBinding {
     descriptor: AudioPortDescriptor,
     index: AudioPortIndex,
@@ -70,7 +70,7 @@ struct PortBinding {
 }
 
 impl PortBinding {
-    fn info(self, supports_f64: bool) -> AudioPortInfo<'static> {
+    fn info(&self, supports_f64: bool) -> AudioPortInfo<'_> {
         let mut flags = if self.descriptor.role == PortRole::Main {
             AudioPortFlags::IS_MAIN
         } else {
@@ -93,8 +93,6 @@ impl PortBinding {
 /// One direction-specific port projected into a dense CLAP process slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ClapProcessPort {
-    /// Stable setup identity retained only while process endpoint consumers migrate.
-    pub(crate) key: PortKey,
     /// Dense Chassis schema-local audio-port identity for callback use.
     pub(crate) index: AudioPortIndex,
     pub(crate) layout: ChannelLayout,
@@ -180,11 +178,7 @@ impl ClapAudioConfiguration {
         u32::try_from(length).unwrap_or(u32::MAX)
     }
 
-    pub(crate) fn info(
-        &self,
-        index: u32,
-        direction: PortDirection,
-    ) -> Option<AudioPortInfo<'static>> {
+    pub(crate) fn info(&self, index: u32, direction: PortDirection) -> Option<AudioPortInfo<'_>> {
         let index = usize::try_from(index).ok()?;
         let ports = match direction {
             PortDirection::Input => &self.inputs,
@@ -192,7 +186,6 @@ impl ClapAudioConfiguration {
         };
         ports
             .get(index)
-            .copied()
             .map(|binding| binding.info(self.supports_f64))
     }
 
@@ -211,19 +204,19 @@ fn validate_mapping_identity(
 ) -> Result<(), AudioMappingError> {
     for (index, mapped) in mapping.iter().enumerate() {
         if mapped.id == u32::MAX {
-            return Err(AudioMappingError::InvalidClapId(mapped.key));
+            return Err(AudioMappingError::InvalidClapId(mapped.key.clone()));
         }
         if mapping[..index]
             .iter()
             .any(|previous| previous.key == mapped.key)
         {
-            return Err(AudioMappingError::DuplicateMappedPort(mapped.key));
+            return Err(AudioMappingError::DuplicateMappedPort(mapped.key.clone()));
         }
         if !descriptors
             .iter()
             .any(|descriptor| descriptor.key == mapped.key)
         {
-            return Err(AudioMappingError::UnknownMappedPort(mapped.key));
+            return Err(AudioMappingError::UnknownMappedPort(mapped.key.clone()));
         }
     }
     Ok(())
@@ -243,7 +236,7 @@ fn configured_ports(
             .find(|candidate| candidate.key == descriptor.key)
         {
             configured.push(ConfiguredAudioPort {
-                key: mapped.key,
+                key: mapped.key.clone(),
                 layout: mapped.layout,
             });
         }
@@ -256,17 +249,17 @@ fn port_binding(
     mapping: &[ClapAudioPort],
     mapped: &ClapAudioPort,
 ) -> Result<PortBinding, AudioMappingError> {
-    let index = audio_port_index(descriptors, mapped.key)
-        .ok_or(AudioMappingError::UnknownMappedPort(mapped.key))?;
+    let index = audio_port_index(descriptors, &mapped.key)
+        .ok_or(AudioMappingError::UnknownMappedPort(mapped.key.clone()))?;
     let descriptor = descriptors
         .get(usize::try_from(index.get()).map_err(|_| AudioMappingError::IndexNotRepresentable)?)
-        .copied()
-        .ok_or(AudioMappingError::UnknownMappedPort(mapped.key))?;
-    let in_place_pair_id = in_place_pair_id(descriptors, mapping, descriptor, *mapped)?;
+        .cloned()
+        .ok_or(AudioMappingError::UnknownMappedPort(mapped.key.clone()))?;
+    let in_place_pair_id = in_place_pair_id(descriptors, mapping, &descriptor, mapped)?;
     Ok(PortBinding {
         descriptor,
         index,
-        mapping: *mapped,
+        mapping: mapped.clone(),
         in_place_pair_id,
     })
 }
@@ -274,44 +267,42 @@ fn port_binding(
 fn in_place_pair_id(
     descriptors: &[AudioPortDescriptor],
     mapping: &[ClapAudioPort],
-    descriptor: AudioPortDescriptor,
-    mapped: ClapAudioPort,
+    descriptor: &AudioPortDescriptor,
+    mapped: &ClapAudioPort,
 ) -> Result<Option<u32>, AudioMappingError> {
-    let Some(pair_key) = mapped.in_place_pair else {
+    let Some(pair_key) = mapped.in_place_pair.as_ref() else {
         return Ok(None);
     };
     let pair_descriptor = descriptors
         .iter()
-        .copied()
-        .find(|candidate| candidate.key == pair_key)
-        .ok_or(AudioMappingError::UnknownInPlacePair {
-            port: mapped.key,
-            pair: pair_key,
+        .find(|candidate| &candidate.key == pair_key)
+        .ok_or_else(|| AudioMappingError::UnknownInPlacePair {
+            port: mapped.key.clone(),
+            pair: pair_key.clone(),
         })?;
     if pair_descriptor.direction == descriptor.direction {
         return Err(AudioMappingError::InPlacePairSameDirection {
-            port: mapped.key,
-            pair: pair_key,
+            port: mapped.key.clone(),
+            pair: pair_key.clone(),
         });
     }
     let pair = mapping
         .iter()
-        .copied()
-        .find(|candidate| candidate.key == pair_key)
-        .ok_or(AudioMappingError::InactiveInPlacePair {
-            port: mapped.key,
-            pair: pair_key,
+        .find(|candidate| &candidate.key == pair_key)
+        .ok_or_else(|| AudioMappingError::InactiveInPlacePair {
+            port: mapped.key.clone(),
+            pair: pair_key.clone(),
         })?;
     if pair.layout.channel_count() != mapped.layout.channel_count() {
         return Err(AudioMappingError::InPlacePairChannelMismatch {
-            port: mapped.key,
-            pair: pair_key,
+            port: mapped.key.clone(),
+            pair: pair_key.clone(),
         });
     }
-    if pair.in_place_pair != Some(mapped.key) {
+    if pair.in_place_pair.as_ref() != Some(&mapped.key) {
         return Err(AudioMappingError::NonReciprocalInPlacePair {
-            port: mapped.key,
-            pair: pair_key,
+            port: mapped.key.clone(),
+            pair: pair_key.clone(),
         });
     }
     Ok(Some(pair.id))
@@ -347,7 +338,10 @@ fn process_rank(binding: &PortBinding) -> u8 {
 }
 
 fn process_pair_key(binding: &PortBinding) -> &str {
-    match (binding.descriptor.direction, binding.mapping.in_place_pair) {
+    match (
+        binding.descriptor.direction,
+        binding.mapping.in_place_pair.as_ref(),
+    ) {
         (PortDirection::Output, Some(input)) => input.as_str(),
         (PortDirection::Input, Some(_)) | (_, None) => binding.mapping.key.as_str(),
     }
@@ -370,24 +364,24 @@ fn validate_pair_alignment(
     outputs: &[PortBinding],
 ) -> Result<(), AudioMappingError> {
     for (index, input) in inputs.iter().enumerate() {
-        let Some(pair) = input.mapping.in_place_pair else {
+        let Some(pair) = input.mapping.in_place_pair.as_ref() else {
             continue;
         };
-        if outputs.get(index).map(|output| output.mapping.key) != Some(pair) {
+        if outputs.get(index).map(|output| &output.mapping.key) != Some(pair) {
             return Err(AudioMappingError::InPlacePairIndexMismatch {
-                port: input.mapping.key,
-                pair,
+                port: input.mapping.key.clone(),
+                pair: pair.clone(),
             });
         }
     }
     for (index, output) in outputs.iter().enumerate() {
-        let Some(pair) = output.mapping.in_place_pair else {
+        let Some(pair) = output.mapping.in_place_pair.as_ref() else {
             continue;
         };
-        if inputs.get(index).map(|input| input.mapping.key) != Some(pair) {
+        if inputs.get(index).map(|input| &input.mapping.key) != Some(pair) {
             return Err(AudioMappingError::InPlacePairIndexMismatch {
-                port: output.mapping.key,
-                pair,
+                port: output.mapping.key.clone(),
+                pair: pair.clone(),
             });
         }
     }
@@ -410,8 +404,8 @@ fn process_slots(
         let output = output_binding.map(process_port);
         let paired = match (input_binding, output_binding) {
             (Some(input), Some(output)) => {
-                input.mapping.in_place_pair == Some(output.mapping.key)
-                    && output.mapping.in_place_pair == Some(input.mapping.key)
+                input.mapping.in_place_pair.as_ref() == Some(&output.mapping.key)
+                    && output.mapping.in_place_pair.as_ref() == Some(&input.mapping.key)
             }
             _ => false,
         };
@@ -426,13 +420,12 @@ fn process_slots(
 
 fn process_port(binding: &PortBinding) -> ClapProcessPort {
     ClapProcessPort {
-        key: binding.mapping.key,
         index: binding.index,
         layout: binding.mapping.layout,
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum AudioMappingError {
     AllocationFailed,
     IndexNotRepresentable,
@@ -584,13 +577,6 @@ mod tests {
             configuration.process_slots()[1]
                 .input
                 .expect("sidechain slot has an input")
-                .key,
-            SIDECHAIN_INPUT
-        );
-        assert_eq!(
-            configuration.process_slots()[1]
-                .input
-                .expect("sidechain slot has an input")
                 .index,
             AudioPortIndex::new(2)
         );
@@ -620,39 +606,30 @@ mod tests {
     #[test]
     fn main_port_is_dense_index_zero_even_when_mapping_order_differs() {
         let reordered = [
-            DEFAULT_CLAP_AUDIO_PORTS[2],
-            DEFAULT_CLAP_AUDIO_PORTS[1],
-            DEFAULT_CLAP_AUDIO_PORTS[0],
+            DEFAULT_CLAP_AUDIO_PORTS[2].clone(),
+            DEFAULT_CLAP_AUDIO_PORTS[1].clone(),
+            DEFAULT_CLAP_AUDIO_PORTS[0].clone(),
         ];
         let configuration =
             ClapAudioConfiguration::new(&chassis_core::audio::DEFAULT_EFFECT_PORTS, &reordered)
                 .expect("reordered mapping is valid");
         let main = configuration.process_slots()[0];
-        assert_eq!(main.input.expect("main input exists").key, MAIN_INPUT);
         assert_eq!(
             main.input.expect("main input exists").index,
             AudioPortIndex::new(0)
         );
-        assert_eq!(main.output.expect("main output exists").key, MAIN_OUTPUT);
         assert_eq!(
             main.output.expect("main output exists").index,
             AudioPortIndex::new(1)
         );
         assert!(main.paired);
-        assert_eq!(
-            configuration.process_slots()[1]
-                .input
-                .expect("sidechain exists")
-                .key,
-            SIDECHAIN_INPUT
-        );
     }
 
     #[test]
     fn duplicate_direction_local_ids_are_rejected() {
         let duplicate = [
-            DEFAULT_CLAP_AUDIO_PORTS[0],
-            DEFAULT_CLAP_AUDIO_PORTS[1],
+            DEFAULT_CLAP_AUDIO_PORTS[0].clone(),
+            DEFAULT_CLAP_AUDIO_PORTS[1].clone(),
             ClapAudioPort::new(SIDECHAIN_INPUT, 0, ChannelLayout::Stereo, None),
         ];
         assert_eq!(
@@ -664,7 +641,7 @@ mod tests {
 
     #[test]
     fn missing_required_mapping_is_rejected() {
-        let incomplete = [DEFAULT_CLAP_AUDIO_PORTS[0]];
+        let incomplete = [DEFAULT_CLAP_AUDIO_PORTS[0].clone()];
         assert!(matches!(
             ClapAudioConfiguration::new(&chassis_core::audio::DEFAULT_EFFECT_PORTS, &incomplete),
             Err(AudioMappingError::InvalidConfiguration(_))
@@ -675,27 +652,27 @@ mod tests {
     fn arbitrary_declared_layouts_can_be_qualified_at_setup_time() {
         const AUX_INPUT: PortKey = PortKey::new("audio.aux.in");
         const PORTS: [AudioPortDescriptor; 3] = [
-            AudioPortDescriptor {
-                key: MAIN_INPUT,
-                name: "Main In",
-                direction: PortDirection::Input,
-                role: PortRole::Main,
-                optional: false,
-            },
-            AudioPortDescriptor {
-                key: AUX_INPUT,
-                name: "Aux In",
-                direction: PortDirection::Input,
-                role: PortRole::Auxiliary,
-                optional: true,
-            },
-            AudioPortDescriptor {
-                key: MAIN_OUTPUT,
-                name: "Main Out",
-                direction: PortDirection::Output,
-                role: PortRole::Main,
-                optional: false,
-            },
+            AudioPortDescriptor::new(
+                MAIN_INPUT,
+                "Main In",
+                PortDirection::Input,
+                PortRole::Main,
+                false,
+            ),
+            AudioPortDescriptor::new(
+                AUX_INPUT,
+                "Aux In",
+                PortDirection::Input,
+                PortRole::Auxiliary,
+                true,
+            ),
+            AudioPortDescriptor::new(
+                MAIN_OUTPUT,
+                "Main Out",
+                PortDirection::Output,
+                PortRole::Main,
+                false,
+            ),
         ];
         let mapping = [
             ClapAudioPort::new(MAIN_INPUT, 10, ChannelLayout::Mono, Some(MAIN_OUTPUT)),
@@ -719,13 +696,6 @@ mod tests {
             configuration.process_slots()[1]
                 .input
                 .expect("aux input exists")
-                .key,
-            AUX_INPUT
-        );
-        assert_eq!(
-            configuration.process_slots()[1]
-                .input
-                .expect("aux input exists")
                 .index,
             AudioPortIndex::new(1)
         );
@@ -736,34 +706,34 @@ mod tests {
         const AUX_INPUT: PortKey = PortKey::new("audio.aux.in");
         const AUX_OUTPUT: PortKey = PortKey::new("audio.aux.out");
         const PORTS: [AudioPortDescriptor; 4] = [
-            AudioPortDescriptor {
-                key: MAIN_INPUT,
-                name: "Main In",
-                direction: PortDirection::Input,
-                role: PortRole::Main,
-                optional: false,
-            },
-            AudioPortDescriptor {
-                key: MAIN_OUTPUT,
-                name: "Main Out",
-                direction: PortDirection::Output,
-                role: PortRole::Main,
-                optional: false,
-            },
-            AudioPortDescriptor {
-                key: AUX_INPUT,
-                name: "Aux In",
-                direction: PortDirection::Input,
-                role: PortRole::Auxiliary,
-                optional: true,
-            },
-            AudioPortDescriptor {
-                key: AUX_OUTPUT,
-                name: "Aux Out",
-                direction: PortDirection::Output,
-                role: PortRole::Auxiliary,
-                optional: true,
-            },
+            AudioPortDescriptor::new(
+                MAIN_INPUT,
+                "Main In",
+                PortDirection::Input,
+                PortRole::Main,
+                false,
+            ),
+            AudioPortDescriptor::new(
+                MAIN_OUTPUT,
+                "Main Out",
+                PortDirection::Output,
+                PortRole::Main,
+                false,
+            ),
+            AudioPortDescriptor::new(
+                AUX_INPUT,
+                "Aux In",
+                PortDirection::Input,
+                PortRole::Auxiliary,
+                true,
+            ),
+            AudioPortDescriptor::new(
+                AUX_OUTPUT,
+                "Aux Out",
+                PortDirection::Output,
+                PortRole::Auxiliary,
+                true,
+            ),
         ];
         let mapping = [
             ClapAudioPort::new(AUX_OUTPUT, 21, ChannelLayout::Mono, Some(AUX_INPUT)),
@@ -775,14 +745,7 @@ mod tests {
             ClapAudioConfiguration::new(&PORTS, &mapping).expect("paired aux mapping is valid");
         let slots = configuration.process_slots();
         assert_eq!(slots.len(), 2);
-        assert_eq!(slots[0].input.expect("main input exists").key, MAIN_INPUT);
-        assert_eq!(
-            slots[0].output.expect("main output exists").key,
-            MAIN_OUTPUT
-        );
         assert!(slots[0].paired);
-        assert_eq!(slots[1].input.expect("aux input exists").key, AUX_INPUT);
-        assert_eq!(slots[1].output.expect("aux output exists").key, AUX_OUTPUT);
         assert!(slots[1].paired);
     }
 
@@ -791,34 +754,34 @@ mod tests {
         const AUX_INPUT: PortKey = PortKey::new("audio.aux.in");
         const AUX_OUTPUT: PortKey = PortKey::new("audio.aux.out");
         const PORTS: [AudioPortDescriptor; 4] = [
-            AudioPortDescriptor {
-                key: MAIN_INPUT,
-                name: "Main In",
-                direction: PortDirection::Input,
-                role: PortRole::Main,
-                optional: false,
-            },
-            AudioPortDescriptor {
-                key: MAIN_OUTPUT,
-                name: "Main Out",
-                direction: PortDirection::Output,
-                role: PortRole::Main,
-                optional: false,
-            },
-            AudioPortDescriptor {
-                key: AUX_INPUT,
-                name: "Aux In",
-                direction: PortDirection::Input,
-                role: PortRole::Auxiliary,
-                optional: true,
-            },
-            AudioPortDescriptor {
-                key: AUX_OUTPUT,
-                name: "Aux Out",
-                direction: PortDirection::Output,
-                role: PortRole::Auxiliary,
-                optional: true,
-            },
+            AudioPortDescriptor::new(
+                MAIN_INPUT,
+                "Main In",
+                PortDirection::Input,
+                PortRole::Main,
+                false,
+            ),
+            AudioPortDescriptor::new(
+                MAIN_OUTPUT,
+                "Main Out",
+                PortDirection::Output,
+                PortRole::Main,
+                false,
+            ),
+            AudioPortDescriptor::new(
+                AUX_INPUT,
+                "Aux In",
+                PortDirection::Input,
+                PortRole::Auxiliary,
+                true,
+            ),
+            AudioPortDescriptor::new(
+                AUX_OUTPUT,
+                "Aux Out",
+                PortDirection::Output,
+                PortRole::Auxiliary,
+                true,
+            ),
         ];
         let mapping = [
             ClapAudioPort::new(MAIN_INPUT, 10, ChannelLayout::Stereo, Some(MAIN_OUTPUT)),
@@ -829,8 +792,6 @@ mod tests {
         let configuration = ClapAudioConfiguration::new(&PORTS, &mapping)
             .expect("independent aux mapping is valid");
         let slot = configuration.process_slots()[1];
-        assert_eq!(slot.input.expect("aux input exists").key, AUX_INPUT);
-        assert_eq!(slot.output.expect("aux output exists").key, AUX_OUTPUT);
         assert!(!slot.paired);
     }
 }

@@ -262,14 +262,8 @@ fn activation_owns_a_dynamic_audio_configuration() {
 
     {
         let ports = vec![
-            ConfiguredAudioPort {
-                key: MAIN_INPUT,
-                layout: ChannelLayout::Stereo,
-            },
-            ConfiguredAudioPort {
-                key: MAIN_OUTPUT,
-                layout: ChannelLayout::Stereo,
-            },
+            ConfiguredAudioPort::new(MAIN_INPUT, ChannelLayout::Stereo),
+            ConfiguredAudioPort::new(MAIN_OUTPUT, ChannelLayout::Stereo),
         ];
         runtime
             .activate(

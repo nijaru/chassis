@@ -98,11 +98,11 @@ impl Component for ConformanceEffect {
             gain: self.gain,
             main_input: config
                 .schema()
-                .audio_port_index(MAIN_INPUT)
+                .audio_port_index(&MAIN_INPUT)
                 .expect("default effect schema has main input"),
             main_output: config
                 .schema()
-                .audio_port_index(MAIN_OUTPUT)
+                .audio_port_index(&MAIN_OUTPUT)
                 .expect("default effect schema has main output"),
         })
     }
@@ -426,10 +426,7 @@ fn exact_in_place_buffers_do_not_require_a_second_alias() {
 fn malformed_audio_configuration_never_reaches_product_activation() {
     let metrics = Arc::new(Metrics::default());
     let component = ConformanceEffect::new(Arc::clone(&metrics), 1.0);
-    let only_input = [ConfiguredAudioPort {
-        key: MAIN_INPUT,
-        layout: ChannelLayout::Stereo,
-    }];
+    let only_input = [ConfiguredAudioPort::new(MAIN_INPUT, ChannelLayout::Stereo)];
     let mut runtime = runtime(&component);
     let result = runtime.activate(
         &component,
@@ -440,8 +437,8 @@ fn malformed_audio_configuration_never_reaches_product_activation() {
     assert!(matches!(
         result,
         Err(ActivateError::InvalidAudioIo(
-            AudioIoConfigurationError::MissingRequiredPort(MAIN_OUTPUT)
-        ))
+            AudioIoConfigurationError::MissingRequiredPort(key)
+        )) if key == MAIN_OUTPUT
     ));
     assert_eq!(metric(&metrics.activations), 0);
 }

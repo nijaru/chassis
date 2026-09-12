@@ -602,7 +602,7 @@ where
 
     /// Resolve a stable audio-port key to its dense schema-local index.
     #[must_use]
-    pub fn audio_port_index(&self, key: PortKey) -> Option<AudioPortIndex> {
+    pub fn audio_port_index(&self, key: &PortKey) -> Option<AudioPortIndex> {
         self.schema.audio_port_index(key)
     }
 

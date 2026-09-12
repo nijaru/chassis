@@ -15,20 +15,20 @@ use chassis_core::{
 const OTHER_INPUT: PortKey = PortKey::new("audio.other.in");
 const OTHER_OUTPUT: PortKey = PortKey::new("audio.other.out");
 const OTHER_PORTS: &[AudioPortDescriptor] = &[
-    AudioPortDescriptor {
-        key: OTHER_INPUT,
-        name: "Other Input",
-        direction: PortDirection::Input,
-        role: PortRole::Main,
-        optional: false,
-    },
-    AudioPortDescriptor {
-        key: OTHER_OUTPUT,
-        name: "Other Output",
-        direction: PortDirection::Output,
-        role: PortRole::Main,
-        optional: false,
-    },
+    AudioPortDescriptor::new(
+        OTHER_INPUT,
+        "Other Input",
+        PortDirection::Input,
+        PortRole::Main,
+        false,
+    ),
+    AudioPortDescriptor::new(
+        OTHER_OUTPUT,
+        "Other Output",
+        PortDirection::Output,
+        PortRole::Main,
+        false,
+    ),
 ];
 
 struct Probe {
@@ -94,7 +94,7 @@ fn runtime_owns_complete_schema_and_dense_audio_lookup() {
     assert_eq!(identity.component().as_str(), "org.nijaru.schema-runtime");
     assert_eq!(identity.schema(), StateSchemaVersion::new(1));
     assert_eq!(
-        runtime.audio_port_index(MAIN_INPUT),
+        runtime.audio_port_index(&MAIN_INPUT),
         Some(AudioPortIndex::new(0))
     );
     assert_eq!(runtime.audio_ports(), DEFAULT_EFFECT_PORTS);

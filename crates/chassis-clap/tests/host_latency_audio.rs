@@ -44,11 +44,11 @@ impl Component for DelayedProbe {
             latency: LatencySamples::new(samples),
             main_input: config
                 .schema()
-                .audio_port_index(MAIN_INPUT)
+                .audio_port_index(&MAIN_INPUT)
                 .expect("default effect schema has main input"),
             main_output: config
                 .schema()
-                .audio_port_index(MAIN_OUTPUT)
+                .audio_port_index(&MAIN_OUTPUT)
                 .expect("default effect schema has main output"),
             delay: [vec![0.0; length], vec![0.0; length]],
             positions: [0, 0],

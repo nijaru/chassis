@@ -288,7 +288,7 @@ impl ComponentSchema {
 
     /// Resolve a stable audio-port key to its dense schema-local index.
     #[must_use]
-    pub fn audio_port_index(&self, key: PortKey) -> Option<AudioPortIndex> {
+    pub fn audio_port_index(&self, key: &PortKey) -> Option<AudioPortIndex> {
         audio_port_index(&self.audio_ports, key)
     }
 
@@ -363,7 +363,7 @@ mod tests {
         assert_eq!(identity.component().as_str(), "org.nijaru.schema-probe");
         assert_eq!(identity.schema(), StateSchemaVersion::new(1));
         assert_eq!(
-            schema.audio_port_index(MAIN_INPUT),
+            schema.audio_port_index(&MAIN_INPUT),
             Some(AudioPortIndex::new(0))
         );
         assert_eq!(

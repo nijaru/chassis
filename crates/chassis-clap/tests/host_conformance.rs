@@ -123,11 +123,11 @@ impl Component for ProbeComponent {
             latency: LatencySamples::new(latency),
             main_input: config
                 .schema()
-                .audio_port_index(MAIN_INPUT)
+                .audio_port_index(&MAIN_INPUT)
                 .expect("default effect schema has main input"),
             main_output: config
                 .schema()
-                .audio_port_index(MAIN_OUTPUT)
+                .audio_port_index(&MAIN_OUTPUT)
                 .expect("default effect schema has main output"),
         })
     }
