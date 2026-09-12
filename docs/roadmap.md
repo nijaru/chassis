@@ -4,7 +4,9 @@ This roadmap is ordered by framework completeness and architectural proof, not b
 
 ## Current position
 
-Chassis has a qualified format-independent runtime and native CLAP foundation. Core lifecycle/state/parameter ownership, generic process buffers, f32/f64 processing, sample-accurate automation, bounded telemetry, semantic event-port/note foundations, offline/render mode, activation-scoped latency, restart signaling, and CLAP projection are implemented and tested.
+Chassis has a qualified format-independent runtime and native CLAP foundation. The core ownership/schema migration is substantially complete: one coherent component schema owns audio/event/parameter metadata, whole-audio-I/O policy, and semantic state identity; active processing uses dense audio/event/parameter identities; audio/event metadata may be runtime-owned; complete runtime state has one schema-owned identity authority; and the same runtime model has been exercised by effects, event-only processors, instruments, multi-output components, layout/sidechain reactivation, dynamic hosted metadata, and CLAP deployment.
+
+Core lifecycle/state/parameter ownership, generic process buffers, f32/f64 processing, sample-accurate automation, bounded telemetry, semantic note foundations, offline/render mode, activation-scoped latency, restart signaling, and CLAP projection are implemented and tested.
 
 The project is still pre-alpha because the framework is not yet broadly usable for new audio software without bespoke infrastructure. The remaining work is organized around a complete Rust audio-software foundation rather than an old plugin migration or one product class.
 
@@ -38,13 +40,19 @@ AAX, ARA, immersive/object workflows, sandboxed hosting, network/distributed aud
 
 The following are substantially implemented and remain regression-protected:
 
-- format-independent `Component` / `InstanceRuntime<P>` / `Processor` ownership;
+- format-independent `Component` / `ComponentSchema` / `InstanceRuntime<P>` / `Processor` ownership;
+- one coherent schema authority for semantic state identity, audio ports, `AudioIoPolicy`, event ports, and parameters;
+- neutral component semantics with conventional effect helpers above core;
 - safe process-buffer relationships and generic buffer sources;
+- dense audio callback endpoints with activation-owned endpoint legality validation;
+- owned-capable audio/event metadata with dense process-time projection;
+- explicit whole-audio-I/O policy and reactivation across accepted layouts;
 - arbitrary mapped mono/stereo ports supported by current layout semantics;
+- multi-output routing independent of callback buffer order;
 - f32/f64 processor capability model;
 - typed parameter schema/store and dense realtime indices;
 - borrowed sample-accurate automation trajectories;
-- versioned transactional state with migration/resource-limit coverage;
+- versioned transactional complete semantic state with schema-owned identity, migration/resource-limit coverage, and proof-era runtime compatibility APIs removed;
 - activation failure recovery and panic containment at adapter boundaries;
 - post-activation allocation/deallocation checks;
 - activation-scoped processing latency and restart requests;
@@ -52,6 +60,8 @@ The following are substantially implemented and remain regression-protected:
 - bounded coherent `f32` DSP -> control telemetry with meter/runtime fixtures;
 - stable event-port schema/identity and bounded semantic note-event input in core;
 - runtime ownership/validation of event-port schemas and note-event port capabilities;
+- event-only and event-driven instrument runtime fixtures;
+- runtime-owned dynamic/hosted metadata fixture;
 - native CLAP adapter through pinned Clack;
 - three-platform headless validation, packaged CLAP conformance, bounded fuzz, and in-process host coverage;
 - representative adapter-overhead measurements;
@@ -59,25 +69,34 @@ The following are substantially implemented and remain regression-protected:
 
 Existing conformance components, the delayed probe, and Tonal EQ are retained where they provide useful regression evidence. They are not roadmap authorities.
 
-## Slice A — core semantic/API audit and refactor
+## Slice A — core semantic/API closure
 
-Before expanding higher layers, remove proof-era assumptions that would make the common component model plugin/effect-specific or harder to embed elsewhere.
+Status: **ownership/schema migration complete; remaining audio-semantic contracts are current work.**
 
-Audit and refactor:
+Completed architecture work:
 
 - neutral core defaults: a `Component` is not inherently a stereo effect or plugin;
-- conventional effect/instrument helpers belong above neutral semantics;
-- names such as temporary `*StereoEffect` adapter concepts that encode proof limits;
-- component/runtime construction and immutable schema ownership;
-- audio/event port identity and dense activation-local mapping;
-- semantic whole-I/O configuration for components with multiple legal layouts;
-- recurring bus/port access ergonomics without hiding buffer legality;
-- canonical product/export identity ownership independent of backend adapters;
-- parameter formatting/value mapping with tested round trips;
-- explicit modulation distinct from durable/base state;
-- common latency/tail/bypass behavior where environments can represent it faithfully.
+- conventional effect helpers above neutral semantics;
+- one immutable component-schema authority and coherent runtime construction;
+- stable audio/event identity with dense activation-local processing identity;
+- owned metadata for dynamic/hosted components;
+- semantic whole-I/O policy for multiple legal layouts;
+- canonical semantic state identity ownership independent of backend deployment IDs;
+- runtime removal of proof-order constructors and duplicate state-identity compatibility APIs;
+- heterogeneous proof clients spanning effect, event-only, instrument, multi-output, sidechain/layout switching, embedded/direct use, dynamic metadata, and CLAP deployment.
 
-The project is unpublished pre-alpha. Prefer a breaking simplification now over permanent compatibility shims around weak abstractions.
+Remaining Slice A work:
+
+- parameter formatting/value mapping with tested round trips;
+- explicit sample-accurate modulation distinct from durable/base state and ordinary automation;
+- common tail semantics;
+- bypass semantics where environments can represent them faithfully;
+- recurring bus/port access ergonomics only if real clients show enough repeated cost to justify an abstraction;
+- explicit capability queries only where deployment/application environments genuinely require them.
+
+Adapter concepts such as `ClapStereoEffect` should be generalized when implementing a real non-effect CLAP deployment, not renamed speculatively in isolation.
+
+The project is unpublished pre-alpha. Prefer a breaking simplification now over permanent compatibility shims around weak abstractions, but do not reopen candidate-stable core ownership merely for theoretical generality.
 
 ## Slice B — realtime communication and non-realtime work
 
@@ -93,19 +112,31 @@ Unused facilities must impose no process-time work. Do not add a hidden global e
 
 ## Slice C — events, instruments, MIDI, and modulation
 
-Finish the executable event model across core and deployment adapters:
+Finish the executable event model across core and deployment adapters.
+
+Implemented core proof:
 
 - semantic note on/off/choke/end and note addressing;
-- velocity, tuning, pressure/timbre/brightness/pan/volume expression where semantics are defined;
+- dense event-port identity and validation;
+- bounded semantic note input;
+- zero-audio event processor;
+- event-driven output-only instrument;
+- multi-output runtime component.
+
+Remaining:
+
+- velocity/tuning/pressure/timbre/brightness/pan/volume expression where semantics are defined;
 - raw MIDI 1 and SysEx;
 - non-destructive MIDI 2 / UMP path;
-- sample-accurate parameter modulation distinct from base automation/state;
+- deployment projection of sample-accurate parameter modulation;
 - bounded realtime output event sinks with explicit rejection behavior;
 - note-end/output events;
 - typed span/change-boundary processing without inventing cross-family total ordering;
-- high-event-count allocation/work bounds.
+- high-event-count allocation/work bounds;
+- CLAP note-port/input/output projection;
+- fuller synth and event passthrough/transform fixtures through deployment adapters.
 
-Prove with small fixtures: synth, event passthrough/transform, and multi-output instrument.
+A non-effect CLAP fixture should also drive generalization of the current effect-shaped CLAP facade.
 
 ## Slice D — common DSP foundation
 
@@ -255,10 +286,11 @@ Prefer focused conformance fixtures over product-migration gates:
 - `Delay` — latency/PDC/restart;
 - `Meter` — scalar telemetry;
 - `Analyzer` — larger bounded telemetry;
-- `Sidechain` — routing and auxiliary input;
+- `Sidechain` — routing and auxiliary input / layout policy;
 - `Synth` — notes/MIDI/expression;
 - `EventTransform` — bounded input/output events;
 - `MultiOut` — multiple output buses;
+- `DynamicMetadata` — runtime-owned hosted/embedded metadata;
 - `WorkerFx` — background work/cancellation/stale-result rejection;
 - `EditorDemo` — editor lifecycle/gestures/scaling;
 - `DeviceLoop` — device negotiation/xrun/recovery;
