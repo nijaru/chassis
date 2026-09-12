@@ -93,7 +93,12 @@ impl Component for LayoutEffect {
             .ports()
             .iter()
             .any(|port| port.key.as_str() == SIDECHAIN.as_str());
-        let factor = main_layout.channel_count() as f32 + f32::from(sidechain_active);
+        let layout_factor = match main_layout {
+            ChannelLayout::Mono => 1.0,
+            ChannelLayout::Stereo => 2.0,
+            _ => unreachable!("fixture policy accepts only mono/stereo main layouts"),
+        };
+        let factor = layout_factor + if sidechain_active { 1.0 } else { 0.0 };
 
         Ok(LayoutProcessor {
             main_input: config
