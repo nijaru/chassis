@@ -9,8 +9,9 @@ use std::vec::Vec;
 
 use crate::{
     audio::{
-        AudioEndpointError, AudioIoConfiguration, AudioIoConfigurationError, AudioPortDescriptor,
-        AudioPortIndex, ConfiguredAudioPort, PortDirection, PortKey, ResolvedAudioIoConfiguration,
+        AudioEndpointError, AudioIoConfiguration, AudioIoConfigurationError, AudioIoPolicyError,
+        AudioPortDescriptor, AudioPortIndex, ConfiguredAudioPort, PortDirection, PortKey,
+        ResolvedAudioIoConfiguration,
     },
     buffer::ChannelBuffer,
     events::{
@@ -186,6 +187,8 @@ pub trait Process<S>: Processor {
 pub enum InstanceRuntimeError {
     /// The component's immutable audio-port schema failed validation.
     InvalidAudioPorts(AudioIoConfigurationError),
+    /// The component's whole-component audio I/O policy failed validation.
+    InvalidAudioIoPolicy(AudioIoPolicyError),
     /// The component's immutable parameter schema failed validation.
     InvalidParameters(ParameterStoreError),
     /// The component's immutable event-port schema failed validation.
@@ -195,6 +198,9 @@ pub enum InstanceRuntimeError {
 fn runtime_schema_error(error: ComponentSchemaError) -> InstanceRuntimeError {
     match error {
         ComponentSchemaError::AudioPorts(error) => InstanceRuntimeError::InvalidAudioPorts(error),
+        ComponentSchemaError::AudioIoPolicy(error) => {
+            InstanceRuntimeError::InvalidAudioIoPolicy(error)
+        }
         ComponentSchemaError::EventPorts(error) => InstanceRuntimeError::InvalidEventPorts(error),
         ComponentSchemaError::Parameters(error) => InstanceRuntimeError::InvalidParameters(error),
     }
@@ -204,6 +210,9 @@ impl fmt::Display for InstanceRuntimeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidAudioPorts(error) => write!(formatter, "invalid audio ports: {error}"),
+            Self::InvalidAudioIoPolicy(error) => {
+                write!(formatter, "invalid audio I/O policy: {error}")
+            }
             Self::InvalidParameters(error) => write!(formatter, "invalid parameters: {error}"),
             Self::InvalidEventPorts(error) => write!(formatter, "invalid event ports: {error}"),
         }
@@ -214,6 +223,7 @@ impl std::error::Error for InstanceRuntimeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::InvalidAudioPorts(error) => Some(error),
+            Self::InvalidAudioIoPolicy(error) => Some(error),
             Self::InvalidParameters(error) => Some(error),
             Self::InvalidEventPorts(error) => Some(error),
         }
@@ -229,6 +239,8 @@ pub enum ActivateError<E> {
     InvalidComponentSchema(ComponentSchemaError),
     /// The component's audio-port schema no longer matches the instance schema.
     AudioPortSchemaMismatch,
+    /// The component whole-audio-I/O policy no longer matches the instance schema.
+    AudioIoPolicyMismatch,
     /// The component parameter schema no longer matches the instance schema.
     ParameterSchemaMismatch,
     /// The component event-port schema no longer matches the instance schema.
@@ -237,6 +249,8 @@ pub enum ActivateError<E> {
     StateIdentityMismatch,
     /// The proposed whole-component I/O configuration failed structural validation.
     InvalidAudioIo(AudioIoConfigurationError),
+    /// The structurally valid I/O configuration is not accepted by component policy.
+    UnsupportedAudioIo,
     /// Product activation failed after the framework configuration was validated.
     Product(E),
 }
@@ -253,6 +267,8 @@ where
             }
             Self::AudioPortSchemaMismatch => formatter
                 .write_str("component audio-port schema does not match its instance runtime"),
+            Self::AudioIoPolicyMismatch => formatter
+                .write_str("component audio I/O policy does not match its instance runtime"),
             Self::ParameterSchemaMismatch => formatter
                 .write_str("component parameter schema does not match its instance runtime"),
             Self::EventPortSchemaMismatch => formatter
@@ -261,6 +277,9 @@ where
                 formatter.write_str("component state identity does not match its instance runtime")
             }
             Self::InvalidAudioIo(error) => write!(formatter, "invalid audio I/O: {error}"),
+            Self::UnsupportedAudioIo => {
+                formatter.write_str("audio I/O configuration is unsupported by component policy")
+            }
             Self::Product(error) => write!(formatter, "product activation failed: {error}"),
         }
     }
@@ -274,9 +293,11 @@ where
         match self {
             Self::AlreadyActive
             | Self::AudioPortSchemaMismatch
+            | Self::AudioIoPolicyMismatch
             | Self::ParameterSchemaMismatch
             | Self::EventPortSchemaMismatch
-            | Self::StateIdentityMismatch => None,
+            | Self::StateIdentityMismatch
+            | Self::UnsupportedAudioIo => None,
             Self::InvalidComponentSchema(error) => Some(error),
             Self::InvalidAudioIo(error) => Some(error),
             Self::Product(error) => Some(error),
@@ -728,6 +749,9 @@ where
         if self.schema.audio_ports() != component_schema.audio_ports() {
             return Err(ActivateError::AudioPortSchemaMismatch);
         }
+        if self.schema.audio_io_policy() != component_schema.audio_io_policy() {
+            return Err(ActivateError::AudioIoPolicyMismatch);
+        }
         if self.schema.parameters() != component_schema.parameters() {
             return Err(ActivateError::ParameterSchemaMismatch);
         }
@@ -738,6 +762,9 @@ where
         let resolved_audio = audio_io
             .resolve(self.schema.audio_ports())
             .map_err(ActivateError::InvalidAudioIo)?;
+        if !self.schema.audio_io_policy().accepts(audio_io) {
+            return Err(ActivateError::UnsupportedAudioIo);
+        }
         let audio_ports = audio_io.ports().to_vec();
         let config = ActivationConfig::new(
             process,

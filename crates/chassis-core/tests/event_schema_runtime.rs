@@ -52,7 +52,12 @@ impl Component for EventComponent {
         &self,
     ) -> Result<chassis_core::schema::ComponentSchema, chassis_core::schema::ComponentSchemaError>
     {
-        chassis_core::schema::ComponentSchema::unidentified(vec![], self.ports.to_vec(), vec![])
+        chassis_core::schema::ComponentSchema::unidentified(
+            vec![],
+            chassis_core::audio::AudioIoPolicy::any_structurally_valid(),
+            self.ports.to_vec(),
+            vec![],
+        )
     }
 
     fn activate(

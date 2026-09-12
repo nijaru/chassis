@@ -251,6 +251,185 @@ impl ConfiguredAudioPort {
     }
 }
 
+/// One owned allowed whole-component audio configuration.
+///
+/// Policy specifications live entirely in setup/control-domain metadata. Stable
+/// keys are resolved to dense indices only after one proposed configuration is
+/// accepted for activation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AudioIoConfigurationSpec {
+    ports: Vec<ConfiguredAudioPort>,
+}
+
+impl AudioIoConfigurationSpec {
+    /// Construct one allowed whole-component configuration.
+    #[must_use]
+    pub fn new(ports: Vec<ConfiguredAudioPort>) -> Self {
+        Self { ports }
+    }
+
+    /// Return the active ports required by this configuration.
+    #[must_use]
+    pub fn ports(&self) -> &[ConfiguredAudioPort] {
+        &self.ports
+    }
+
+    fn matches(&self, configuration: AudioIoConfiguration<'_>) -> bool {
+        same_audio_configuration(&self.ports, configuration.ports())
+    }
+}
+
+/// Whole-component policy for accepted audio I/O configurations.
+///
+/// Structural port validity and product configuration policy are distinct:
+/// descriptors say which ports exist, while this policy says which complete
+/// active-port/layout combinations are semantically supported.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AudioIoPolicy {
+    /// Accept every structurally valid configuration described by the port schema.
+    ///
+    /// This must be chosen explicitly for dynamic/embedded components whose
+    /// product semantics genuinely impose no stronger cross-port constraints.
+    AnyStructurallyValid,
+    /// Accept exactly one of the listed whole-component configurations.
+    Enumerated(Vec<AudioIoConfigurationSpec>),
+}
+
+impl AudioIoPolicy {
+    /// Explicitly accept any structurally valid configuration.
+    #[must_use]
+    pub const fn any_structurally_valid() -> Self {
+        Self::AnyStructurallyValid
+    }
+
+    /// Accept exactly one of the supplied whole-component configurations.
+    #[must_use]
+    pub fn enumerated(configurations: Vec<AudioIoConfigurationSpec>) -> Self {
+        Self::Enumerated(configurations)
+    }
+
+    /// Conventional effect policy: stereo main input/output, with the stereo
+    /// sidechain either inactive or active.
+    #[must_use]
+    pub fn stereo_effect() -> Self {
+        let main = DEFAULT_EFFECT_CONFIGURATION_PORTS.to_vec();
+        let mut with_sidechain = main.clone();
+        with_sidechain.push(ConfiguredAudioPort::new(
+            SIDECHAIN_INPUT,
+            ChannelLayout::Stereo,
+        ));
+        Self::Enumerated(vec![
+            AudioIoConfigurationSpec::new(main),
+            AudioIoConfigurationSpec::new(with_sidechain),
+        ])
+    }
+
+    /// Return enumerated accepted configurations when this is a finite policy.
+    #[must_use]
+    pub fn configurations(&self) -> Option<&[AudioIoConfigurationSpec]> {
+        match self {
+            Self::AnyStructurallyValid => None,
+            Self::Enumerated(configurations) => Some(configurations),
+        }
+    }
+
+    /// Return whether one already structurally valid proposal is accepted.
+    #[must_use]
+    pub fn accepts(&self, configuration: AudioIoConfiguration<'_>) -> bool {
+        match self {
+            Self::AnyStructurallyValid => true,
+            Self::Enumerated(configurations) => configurations
+                .iter()
+                .any(|candidate| candidate.matches(configuration)),
+        }
+    }
+
+    pub(crate) fn validate_for_ports(
+        &self,
+        descriptors: &[AudioPortDescriptor],
+    ) -> Result<(), AudioIoPolicyError> {
+        let Self::Enumerated(configurations) = self else {
+            return Ok(());
+        };
+        if configurations.is_empty() {
+            return Err(AudioIoPolicyError::NoAllowedConfigurations);
+        }
+        for (index, configuration) in configurations.iter().enumerate() {
+            AudioIoConfiguration::new(configuration.ports())
+                .validate(descriptors)
+                .map_err(|error| AudioIoPolicyError::InvalidAllowedConfiguration {
+                    index,
+                    error,
+                })?;
+            for (previous, other) in configurations[..index].iter().enumerate() {
+                if same_audio_configuration(configuration.ports(), other.ports()) {
+                    return Err(AudioIoPolicyError::DuplicateAllowedConfiguration {
+                        first: previous,
+                        second: index,
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn same_audio_configuration(left: &[ConfiguredAudioPort], right: &[ConfiguredAudioPort]) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .all(|expected| right.iter().any(|actual| actual == expected))
+}
+
+/// Invalid whole-component audio configuration policy definition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AudioIoPolicyError {
+    /// An enumerated policy contained no accepted configurations.
+    NoAllowedConfigurations,
+    /// One allowed configuration is structurally invalid for the port schema.
+    InvalidAllowedConfiguration {
+        /// Zero-based configuration index in the policy.
+        index: usize,
+        /// Structural validation failure.
+        error: AudioIoConfigurationError,
+    },
+    /// Two enumerated configurations are semantically identical.
+    DuplicateAllowedConfiguration {
+        /// Earlier duplicate index.
+        first: usize,
+        /// Later duplicate index.
+        second: usize,
+    },
+}
+
+impl fmt::Display for AudioIoPolicyError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NoAllowedConfigurations => {
+                formatter.write_str("enumerated audio I/O policy has no allowed configurations")
+            }
+            Self::InvalidAllowedConfiguration { index, error } => write!(
+                formatter,
+                "audio I/O policy configuration {index} is invalid: {error}"
+            ),
+            Self::DuplicateAllowedConfiguration { first, second } => write!(
+                formatter,
+                "audio I/O policy configurations {first} and {second} are duplicates"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for AudioIoPolicyError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InvalidAllowedConfiguration { error, .. } => Some(error),
+            Self::NoAllowedConfigurations | Self::DuplicateAllowedConfiguration { .. } => None,
+        }
+    }
+}
+
 /// Coherent requested audio I/O configuration for a component activation.
 ///
 /// Optional ports that are inactive are omitted. Configuration policy beyond
@@ -647,6 +826,69 @@ mod tests {
         assert_eq!(
             DEFAULT_EFFECT_CONFIGURATION.validate(&DEFAULT_EFFECT_PORTS),
             Ok(())
+        );
+    }
+
+    #[test]
+    fn default_effect_policy_accepts_only_supported_whole_layouts() {
+        let policy = AudioIoPolicy::stereo_effect();
+        assert!(policy.accepts(DEFAULT_EFFECT_CONFIGURATION));
+
+        let with_sidechain = [
+            ConfiguredAudioPort::new(MAIN_INPUT, ChannelLayout::Stereo),
+            ConfiguredAudioPort::new(MAIN_OUTPUT, ChannelLayout::Stereo),
+            ConfiguredAudioPort::new(SIDECHAIN_INPUT, ChannelLayout::Stereo),
+        ];
+        assert!(policy.accepts(AudioIoConfiguration::new(&with_sidechain)));
+
+        let mono_main = [
+            ConfiguredAudioPort::new(MAIN_INPUT, ChannelLayout::Mono),
+            ConfiguredAudioPort::new(MAIN_OUTPUT, ChannelLayout::Mono),
+        ];
+        assert!(!policy.accepts(AudioIoConfiguration::new(&mono_main)));
+
+        let mono_sidechain = [
+            ConfiguredAudioPort::new(MAIN_INPUT, ChannelLayout::Stereo),
+            ConfiguredAudioPort::new(MAIN_OUTPUT, ChannelLayout::Stereo),
+            ConfiguredAudioPort::new(SIDECHAIN_INPUT, ChannelLayout::Mono),
+        ];
+        assert!(!policy.accepts(AudioIoConfiguration::new(&mono_sidechain)));
+    }
+
+    #[test]
+    fn enumerated_policy_matching_is_order_independent() {
+        let policy = AudioIoPolicy::enumerated(vec![AudioIoConfigurationSpec::new(vec![
+            ConfiguredAudioPort::new(MAIN_INPUT, ChannelLayout::Stereo),
+            ConfiguredAudioPort::new(MAIN_OUTPUT, ChannelLayout::Stereo),
+        ])]);
+        let reversed = [
+            ConfiguredAudioPort::new(MAIN_OUTPUT, ChannelLayout::Stereo),
+            ConfiguredAudioPort::new(MAIN_INPUT, ChannelLayout::Stereo),
+        ];
+        assert!(policy.accepts(AudioIoConfiguration::new(&reversed)));
+        assert_eq!(policy.validate_for_ports(&DEFAULT_EFFECT_PORTS), Ok(()));
+    }
+
+    #[test]
+    fn policy_definition_rejects_invalid_and_duplicate_configurations() {
+        let unknown = AudioIoPolicy::enumerated(vec![AudioIoConfigurationSpec::new(vec![
+            ConfiguredAudioPort::new(PortKey::new("audio.unknown"), ChannelLayout::Stereo),
+        ])]);
+        assert!(matches!(
+            unknown.validate_for_ports(&DEFAULT_EFFECT_PORTS),
+            Err(AudioIoPolicyError::InvalidAllowedConfiguration { .. })
+        ));
+
+        let duplicate = AudioIoPolicy::enumerated(vec![
+            AudioIoConfigurationSpec::new(DEFAULT_EFFECT_CONFIGURATION_PORTS.to_vec()),
+            AudioIoConfigurationSpec::new(DEFAULT_EFFECT_CONFIGURATION_PORTS.to_vec()),
+        ]);
+        assert_eq!(
+            duplicate.validate_for_ports(&DEFAULT_EFFECT_PORTS),
+            Err(AudioIoPolicyError::DuplicateAllowedConfiguration {
+                first: 0,
+                second: 1,
+            })
         );
     }
 

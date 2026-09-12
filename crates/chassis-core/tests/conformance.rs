@@ -423,6 +423,28 @@ fn exact_in_place_buffers_do_not_require_a_second_alias() {
 }
 
 #[test]
+fn activation_rejects_structurally_valid_but_unsupported_audio_configuration() {
+    let metrics = Arc::new(Metrics::default());
+    let component = ConformanceEffect::new(Arc::clone(&metrics), 1.0);
+    let mut runtime = runtime(&component);
+    let mono = [
+        ConfiguredAudioPort::new(MAIN_INPUT, ChannelLayout::Mono),
+        ConfiguredAudioPort::new(MAIN_OUTPUT, ChannelLayout::Mono),
+    ];
+
+    assert_eq!(
+        runtime.activate(
+            &component,
+            process_config(Some(1), 8),
+            AudioIoConfiguration::new(&mono),
+        ),
+        Err(ActivateError::UnsupportedAudioIo)
+    );
+    assert!(!runtime.is_active());
+    assert_eq!(metric(&metrics.activations), 0);
+}
+
+#[test]
 fn malformed_audio_configuration_never_reaches_product_activation() {
     let metrics = Arc::new(Metrics::default());
     let component = ConformanceEffect::new(Arc::clone(&metrics), 1.0);

@@ -318,6 +318,11 @@ where
     }
     let mut audio = ClapAudioConfiguration::new(shared.schema.audio_ports(), C::CLAP_AUDIO_PORTS)
         .map_err(|error| audio_mapping_error(&error))?;
+    if !shared.schema.audio_io_policy().accepts(audio.audio_io()) {
+        return Err(PluginError::Message(
+            "CLAP audio mapping is unsupported by the component audio I/O policy",
+        ));
+    }
     if supports_f64 {
         audio = audio.with_f64_support();
     }

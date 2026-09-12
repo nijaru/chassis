@@ -42,6 +42,7 @@ impl Probe {
             ComponentId::new(self.identity).expect("test identity is valid"),
             StateSchemaVersion::new(1),
             self.audio_ports.to_vec(),
+            chassis_core::audio::AudioIoPolicy::any_structurally_valid(),
             vec![],
             vec![],
         )

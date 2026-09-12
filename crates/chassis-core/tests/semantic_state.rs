@@ -52,6 +52,7 @@ impl Component for StateAwareEffect {
             ComponentId::new("com.example.semantic").expect("component identity is valid"),
             StateSchemaVersion::new(2),
             DEFAULT_EFFECT_PORTS.to_vec(),
+            chassis_core::audio::AudioIoPolicy::stereo_effect(),
             vec![],
             self.parameters.clone(),
         )

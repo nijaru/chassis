@@ -45,7 +45,12 @@ impl Component for NoteProbe {
         &self,
     ) -> Result<chassis_core::schema::ComponentSchema, chassis_core::schema::ComponentSchemaError>
     {
-        chassis_core::schema::ComponentSchema::unidentified(vec![], NOTE_PORTS.to_vec(), vec![])
+        chassis_core::schema::ComponentSchema::unidentified(
+            vec![],
+            chassis_core::audio::AudioIoPolicy::any_structurally_valid(),
+            NOTE_PORTS.to_vec(),
+            vec![],
+        )
     }
 
     fn activate(

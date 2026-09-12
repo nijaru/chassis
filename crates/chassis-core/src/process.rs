@@ -804,7 +804,7 @@ impl std::error::Error for ProcessBlockError {
 mod tests {
     use super::*;
     use crate::{
-        audio::{AudioPortIndex, DEFAULT_EFFECT_CONFIGURATION, DEFAULT_EFFECT_PORTS},
+        audio::{AudioPortIndex, DEFAULT_EFFECT_CONFIGURATION},
         automation::{ParameterEvent, ParameterEventValue},
         buffer::{ChannelBuffer, InputEndpoint, OutputEndpoint},
         events::{
@@ -822,8 +822,7 @@ mod tests {
     }
 
     fn default_effect_schema() -> ComponentSchema {
-        ComponentSchema::unidentified(DEFAULT_EFFECT_PORTS.to_vec(), vec![], vec![])
-            .expect("default effect schema is valid")
+        ComponentSchema::stereo_effect(vec![]).expect("default effect schema is valid")
     }
 
     fn note_address() -> NoteAddress {

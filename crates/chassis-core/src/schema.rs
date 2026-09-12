@@ -10,8 +10,9 @@ use std::vec::Vec;
 
 use crate::{
     audio::{
-        AudioIoConfigurationError, AudioPortDescriptor, AudioPortIndex, DEFAULT_EFFECT_PORTS,
-        PortKey, audio_port_index, validate_audio_port_schema,
+        AudioIoConfigurationError, AudioIoPolicy, AudioIoPolicyError, AudioPortDescriptor,
+        AudioPortIndex, DEFAULT_EFFECT_PORTS, PortKey, audio_port_index,
+        validate_audio_port_schema,
     },
     events::{
         EventPortDescriptor, EventPortIndex, EventPortKey, EventPortSchemaError, event_port_index,
@@ -167,6 +168,7 @@ impl StateIdentity {
 pub struct ComponentSchema {
     state_identity: Option<StateIdentity>,
     audio_ports: Vec<AudioPortDescriptor>,
+    audio_io_policy: AudioIoPolicy,
     event_ports: Vec<EventPortDescriptor>,
     parameters: Vec<ParameterDescriptor>,
 }
@@ -182,12 +184,14 @@ impl ComponentSchema {
         id: ComponentId,
         state_schema: StateSchemaVersion,
         audio_ports: Vec<AudioPortDescriptor>,
+        audio_io_policy: AudioIoPolicy,
         event_ports: Vec<EventPortDescriptor>,
         parameters: Vec<ParameterDescriptor>,
     ) -> Result<Self, ComponentSchemaError> {
         Self::build(
             Some(StateIdentity::new(id, state_schema)),
             audio_ports,
+            audio_io_policy,
             event_ports,
             parameters,
         )
@@ -205,10 +209,11 @@ impl ComponentSchema {
     /// schema is invalid.
     pub fn unidentified(
         audio_ports: Vec<AudioPortDescriptor>,
+        audio_io_policy: AudioIoPolicy,
         event_ports: Vec<EventPortDescriptor>,
         parameters: Vec<ParameterDescriptor>,
     ) -> Result<Self, ComponentSchemaError> {
-        Self::build(None, audio_ports, event_ports, parameters)
+        Self::build(None, audio_ports, audio_io_policy, event_ports, parameters)
     }
 
     /// Construct the conventional stereo-effect schema with optional sidechain.
@@ -222,7 +227,12 @@ impl ComponentSchema {
     pub fn stereo_effect(
         parameters: Vec<ParameterDescriptor>,
     ) -> Result<Self, ComponentSchemaError> {
-        Self::unidentified(DEFAULT_EFFECT_PORTS.to_vec(), Vec::new(), parameters)
+        Self::unidentified(
+            DEFAULT_EFFECT_PORTS.to_vec(),
+            AudioIoPolicy::stereo_effect(),
+            Vec::new(),
+            parameters,
+        )
     }
 
     /// Construct a conventional stereo-effect schema with semantic state identity.
@@ -239,6 +249,7 @@ impl ComponentSchema {
             id,
             state_schema,
             DEFAULT_EFFECT_PORTS.to_vec(),
+            AudioIoPolicy::stereo_effect(),
             Vec::new(),
             parameters,
         )
@@ -247,16 +258,21 @@ impl ComponentSchema {
     fn build(
         state_identity: Option<StateIdentity>,
         audio_ports: Vec<AudioPortDescriptor>,
+        audio_io_policy: AudioIoPolicy,
         event_ports: Vec<EventPortDescriptor>,
         parameters: Vec<ParameterDescriptor>,
     ) -> Result<Self, ComponentSchemaError> {
         validate_audio_port_schema(&audio_ports).map_err(ComponentSchemaError::AudioPorts)?;
+        audio_io_policy
+            .validate_for_ports(&audio_ports)
+            .map_err(ComponentSchemaError::AudioIoPolicy)?;
         validate_event_port_schema(&event_ports).map_err(ComponentSchemaError::EventPorts)?;
         ParameterStore::new(&parameters).map_err(ComponentSchemaError::Parameters)?;
 
         Ok(Self {
             state_identity,
             audio_ports,
+            audio_io_policy,
             event_ports,
             parameters,
         })
@@ -272,6 +288,12 @@ impl ComponentSchema {
     #[must_use]
     pub fn audio_ports(&self) -> &[AudioPortDescriptor] {
         &self.audio_ports
+    }
+
+    /// Return the immutable whole-component audio I/O policy.
+    #[must_use]
+    pub const fn audio_io_policy(&self) -> &AudioIoPolicy {
+        &self.audio_io_policy
     }
 
     /// Return the immutable event-port schema.
@@ -304,6 +326,8 @@ impl ComponentSchema {
 pub enum ComponentSchemaError {
     /// Audio-port schema is invalid.
     AudioPorts(AudioIoConfigurationError),
+    /// Whole-component audio I/O policy is invalid for the declared ports.
+    AudioIoPolicy(AudioIoPolicyError),
     /// Event-port schema is invalid.
     EventPorts(EventPortSchemaError),
     /// Parameter schema is invalid.
@@ -314,6 +338,7 @@ impl fmt::Display for ComponentSchemaError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::AudioPorts(error) => write!(formatter, "invalid audio ports: {error}"),
+            Self::AudioIoPolicy(error) => write!(formatter, "invalid audio I/O policy: {error}"),
             Self::EventPorts(error) => write!(formatter, "invalid event ports: {error}"),
             Self::Parameters(error) => write!(formatter, "invalid parameters: {error}"),
         }
@@ -324,6 +349,7 @@ impl std::error::Error for ComponentSchemaError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::AudioPorts(error) => Some(error),
+            Self::AudioIoPolicy(error) => Some(error),
             Self::EventPorts(error) => Some(error),
             Self::Parameters(error) => Some(error),
         }
@@ -346,6 +372,7 @@ mod tests {
             ComponentId::new("org.nijaru.schema-probe").expect("component id is valid"),
             StateSchemaVersion::new(1),
             DEFAULT_EFFECT_PORTS.to_vec(),
+            AudioIoPolicy::stereo_effect(),
             vec![EventPortDescriptor::new(
                 note_key.clone(),
                 "Notes",
@@ -375,8 +402,13 @@ mod tests {
 
     #[test]
     fn unidentified_schema_is_explicitly_identity_free() {
-        let schema = ComponentSchema::unidentified(DEFAULT_EFFECT_PORTS.to_vec(), vec![], vec![])
-            .expect("migration schema is valid");
+        let schema = ComponentSchema::unidentified(
+            DEFAULT_EFFECT_PORTS.to_vec(),
+            AudioIoPolicy::stereo_effect(),
+            vec![],
+            vec![],
+        )
+        .expect("migration schema is valid");
         assert_eq!(schema.state_identity(), None);
     }
 
