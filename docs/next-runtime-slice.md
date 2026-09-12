@@ -6,6 +6,13 @@ This file tracks the next implementation order on `main`. It is not an API compa
 
 The format-independent runtime and native CLAP adapter are implemented and qualified enough to stop using an existing product migration as the primary roadmap driver. Existing Tonal EQ, delayed-probe, and conformance coverage remain useful regressions, but Chassis itself is now the priority.
 
+The first framework-completion work is now executable:
+
+- `chassis-core::telemetry::F32Telemetry` provides fixed-width coherent DSP -> non-realtime `f32` snapshots with construction-time allocation, nonblocking publication, bounded reads, and no unsafe code;
+- concurrency tests reject mixed generations and an allocation-instrumented test proves repeated publication does not allocate or deallocate on the measured realtime thread;
+- a public-API meter fixture proves publication through `Component -> InstanceRuntime -> Process` without moving display state into the processor;
+- `chassis-core::events` now defines stable event-port identity/schema, dense activation-local event-port indices, typed note identity/addressing, normalized note velocity, semantic note on/off/choke/end operations, and bounded borrowed note-event validation preserving equal-offset source order.
+
 The [validation guide](design/validation.md) owns executed checks, dated REAPER results, and representative adapter benchmarks. The high-level completion bar lives in [roadmap.md](../docs/roadmap.md).
 
 ## Execution principle
@@ -16,27 +23,36 @@ At the same time, do not turn “finish Chassis” into speculative framework bu
 
 ## Slice 1 — realtime communication primitives
 
-This is the immediate implementation target.
+Status: **in progress; first DSP -> control primitive and meter fixture implemented.**
 
-Add the smallest reusable primitives needed for professional processor/editor interaction:
+Implemented:
 
-1. bounded DSP -> non-realtime telemetry suitable for meters and analyzer/control evidence;
-2. explicit publication/coalescing semantics with no audio-thread allocation, blocking, or reclamation surprises;
-3. immutable control -> DSP snapshot publication for product control state that does not fit ordinary scalar parameters;
-4. tests for concurrent publication/read, stale/coalesced observations, bounded retry/work, and destruction ownership.
+1. fixed-width coherent `f32` telemetry snapshots;
+2. single-attempt nonblocking publication with explicit `Busy`/generation-exhaustion behavior;
+3. bounded coherent readers that return contention rather than wait indefinitely;
+4. concurrent-generation tests;
+5. measured-thread allocation/deallocation test for repeated publication;
+6. meter fixture through the public runtime.
 
-Start with a safe scalar/fixed-size telemetry primitive that can be proven without introducing generic unsafe lock-free containers. Expand only when analyzer or other fixture requirements demonstrate the need.
+Remaining:
 
-Validation fixture: a meter component that publishes block-level values and can be observed without mutating DSP ownership.
+- decide whether compact telemetry needs additional scalar/fixed-shape ergonomics after real editor/analyzer use;
+- add immutable control -> DSP snapshot publication for non-parameter product state only when its ownership/reclamation semantics are concrete;
+- add a distinct bounded transport for larger/high-rate analyzer payloads if a real analyzer fixture demonstrates that the fixed snapshot is the wrong shape;
+- prove deferred destruction/reclamation when larger immutable objects are introduced.
+
+Do not generalize this into a lock-free container library. Telemetry is observational and may coalesce/drop observations under publisher contention without changing DSP semantics.
 
 ## Slice 2 — core authoring/API closure
+
+Status: **next major core-API pass.**
 
 Resolve the remaining general pre-v1 authoring gaps:
 
 - ergonomic `Component` -> `InstanceRuntime` construction while preserving explicit validation;
 - semantic whole-I/O configuration for products with multiple legal layouts;
 - recurring bus/port access ergonomics only where the core buffer legality remains visible;
-- canonical product/export identity owner;
+- canonical product/export identity ownership through the manifest/tooling design rather than duplicated adapter constants;
 - parameter formatting/value mapping with tested round trips;
 - modulation as process-time control distinct from durable/base state;
 - common tail/bypass semantics where adapters can map them faithfully.
@@ -47,15 +63,29 @@ Validation fixtures: gain, delay, sidechain, and layout-switching processors.
 
 ## Slice 3 — event/note/MIDI execution
 
-Promote `docs/design/events-transport.md` from design direction into executable APIs and adapters:
+Status: **started; schema/semantic note foundation implemented, process/adapters not yet wired.**
 
-- stable event-port identities;
-- note on/off/choke/end and typed note addresses;
-- note velocity/tuning/expression;
+Implemented in `chassis-core::events`:
+
+- stable event-port keys and activation-local dense indices;
+- input/output port direction and semantic dialect declaration;
+- allocation-free event-port schema validation;
+- typed note IDs, channels, keys, and wildcard/optional addressing without backend sentinel leakage;
+- normalized velocity values;
+- semantic note on/off/choke/end events;
+- bounded borrowed note-event validation with block-relative offsets and preserved equal-offset source order.
+
+Remaining:
+
+- connect event-port schema to `Component`/runtime authority;
+- expose note-event input through process context/block with activation-owned bounds;
+- translate CLAP note events without losing source ordering;
+- add note tuning/expression;
 - raw MIDI/SysEx;
-- sample-accurate modulation;
+- MIDI 2 / UMP path without destructive down-conversion;
+- sample-accurate parameter modulation;
 - bounded event output with explicit rejection;
-- typed borrowed cursors/span processing that preserve source ordering semantics without inventing a global order.
+- typed span processing across relevant change boundaries without inventing a global cross-family order.
 
 Validation fixtures: basic synth, event passthrough/transform, and multi-output instrument.
 
