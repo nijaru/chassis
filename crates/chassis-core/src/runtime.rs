@@ -13,7 +13,7 @@ use crate::{
     },
     buffer::ChannelBuffer,
     events::{
-        EventPortDescriptor, EventPortIndex, EventPortKey, EventPortSchemaError,
+        EventPortDescriptor, EventPortIndex, EventPortKey, EventPortSchemaError, NoteEventPortError,
         validate_event_port_schema,
     },
     parameters::{
@@ -300,6 +300,8 @@ pub enum InstanceProcessError {
     NotActive,
     /// The process block violated the active configuration or parameter schema.
     InvalidBlock(ProcessBlockError),
+    /// Semantic note events targeted invalid event-port capabilities.
+    InvalidNoteEvents(NoteEventPortError),
 }
 
 impl fmt::Display for InstanceProcessError {
@@ -307,6 +309,7 @@ impl fmt::Display for InstanceProcessError {
         match self {
             Self::NotActive => formatter.write_str("component instance is not active"),
             Self::InvalidBlock(error) => write!(formatter, "invalid process block: {error}"),
+            Self::InvalidNoteEvents(error) => write!(formatter, "invalid note events: {error}"),
         }
     }
 }
@@ -316,6 +319,7 @@ impl std::error::Error for InstanceProcessError {
         match self {
             Self::NotActive => None,
             Self::InvalidBlock(error) => Some(error),
+            Self::InvalidNoteEvents(error) => Some(error),
         }
     }
 }
@@ -731,14 +735,15 @@ where
     /// Process one allocation-free safe buffer source through the active processor.
     ///
     /// Source-specific stable endpoint mapping belongs to setup/adapter state;
-    /// this boundary validates callback dimensions and parameter events before
-    /// product DSP can traverse the source.
+    /// this boundary validates callback dimensions, parameter events, and note
+    /// event-port capabilities before product DSP can traverse the source.
     ///
     /// # Errors
     ///
-    /// Returns [`InstanceProcessError::NotActive`] when inactive or
-    /// [`InstanceProcessError::InvalidBlock`] before product DSP runs when the
-    /// callback violates the active process/parameter contract.
+    /// Returns [`InstanceProcessError::NotActive`] when inactive,
+    /// [`InstanceProcessError::InvalidBlock`] for callback shape/parameter
+    /// failures, or [`InstanceProcessError::InvalidNoteEvents`] when semantic
+    /// note events target incompatible event-port capabilities.
     pub fn process_source<S, B>(
         &mut self,
         frame_count: u32,
@@ -751,7 +756,7 @@ where
     {
         let Self {
             parameters,
-            event_ports: _,
+            event_ports,
             custom_state: _,
             active,
         } = self;
@@ -769,6 +774,10 @@ where
             .validate_events(context.parameter_events())
             .map_err(ProcessBlockError::InvalidParameterEvents)
             .map_err(InstanceProcessError::InvalidBlock)?;
+        context
+            .note_events()
+            .validate_ports(event_ports)
+            .map_err(InstanceProcessError::InvalidNoteEvents)?;
         processor.process(&mut block);
         Ok(())
     }
