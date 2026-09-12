@@ -6,26 +6,55 @@
 
 use core::fmt;
 
-use crate::audio::PortKey;
+use crate::audio::{AudioPortIndex, PortKey};
 
 /// Semantic address of one input channel within an active audio port.
+///
+/// Stable keys remain temporarily available while existing processors migrate,
+/// but deployment/runtime paths should populate the schema-local dense index.
+/// Once all realtime consumers use `port_index`, the key field and legacy
+/// constructor can be removed from this process-time type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct InputEndpoint {
     port: PortKey,
+    port_index: Option<AudioPortIndex>,
     channel: u32,
 }
 
 impl InputEndpoint {
-    /// Construct an input endpoint from a stable port key and zero-based channel index.
+    /// Construct a legacy endpoint without a resolved dense audio-port index.
+    ///
+    /// New runtime/adapter code should use [`Self::resolved`]. This constructor
+    /// exists only during the pre-alpha dense-audio-endpoint migration.
     #[must_use]
     pub const fn new(port: PortKey, channel: u32) -> Self {
-        Self { port, channel }
+        Self {
+            port,
+            port_index: None,
+            channel,
+        }
     }
 
-    /// Return the stable port key.
+    /// Construct an endpoint after setup resolved stable identity to a dense index.
+    #[must_use]
+    pub const fn resolved(port: PortKey, port_index: AudioPortIndex, channel: u32) -> Self {
+        Self {
+            port,
+            port_index: Some(port_index),
+            channel,
+        }
+    }
+
+    /// Return the stable port key during the endpoint migration.
     #[must_use]
     pub const fn port(self) -> PortKey {
         self.port
+    }
+
+    /// Return the setup-resolved dense port index when available.
+    #[must_use]
+    pub const fn port_index(self) -> Option<AudioPortIndex> {
+        self.port_index
     }
 
     /// Return the zero-based channel index.
@@ -36,23 +65,49 @@ impl InputEndpoint {
 }
 
 /// Semantic address of one output channel within an active audio port.
+///
+/// Stable keys remain temporarily available while existing processors migrate,
+/// but deployment/runtime paths should populate the schema-local dense index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct OutputEndpoint {
     port: PortKey,
+    port_index: Option<AudioPortIndex>,
     channel: u32,
 }
 
 impl OutputEndpoint {
-    /// Construct an output endpoint from a stable port key and zero-based channel index.
+    /// Construct a legacy endpoint without a resolved dense audio-port index.
+    ///
+    /// New runtime/adapter code should use [`Self::resolved`].
     #[must_use]
     pub const fn new(port: PortKey, channel: u32) -> Self {
-        Self { port, channel }
+        Self {
+            port,
+            port_index: None,
+            channel,
+        }
     }
 
-    /// Return the stable port key.
+    /// Construct an endpoint after setup resolved stable identity to a dense index.
+    #[must_use]
+    pub const fn resolved(port: PortKey, port_index: AudioPortIndex, channel: u32) -> Self {
+        Self {
+            port,
+            port_index: Some(port_index),
+            channel,
+        }
+    }
+
+    /// Return the stable port key during the endpoint migration.
     #[must_use]
     pub const fn port(self) -> PortKey {
         self.port
+    }
+
+    /// Return the setup-resolved dense port index when available.
+    #[must_use]
+    pub const fn port_index(self) -> Option<AudioPortIndex> {
+        self.port_index
     }
 
     /// Return the zero-based channel index.
@@ -512,5 +567,15 @@ mod tests {
             ),
             Err(ChannelBufferError::OutputBufferTooShort { .. })
         ));
+    }
+
+    #[test]
+    fn resolved_endpoints_retain_dense_schema_indices() {
+        let input = InputEndpoint::resolved(MAIN_INPUT, AudioPortIndex::new(0), 1);
+        let output = OutputEndpoint::resolved(MAIN_OUTPUT, AudioPortIndex::new(1), 1);
+        assert_eq!(input.port_index(), Some(AudioPortIndex::new(0)));
+        assert_eq!(output.port_index(), Some(AudioPortIndex::new(1)));
+        assert_eq!(input.channel(), 1);
+        assert_eq!(output.channel(), 1);
     }
 }
