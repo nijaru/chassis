@@ -1,18 +1,19 @@
 # Runtime Ownership Model
 
-Status: `InstanceRuntime<P>` is the durable format-independent authority for one component instance. It now owns one validated `ComponentSchema`, canonical mutable semantic state derived from that schema, and the active processor lifecycle. Public API spelling remains pre-alpha while proof-era constructors and endpoint identities are removed.
+Status: `InstanceRuntime<P>` is the durable format-independent authority for one component instance. It owns one validated `ComponentSchema`, canonical mutable semantic state derived from that schema, and the active processor lifecycle. The proof-era constructor, endpoint-identity, audio-policy, metadata-ownership, and duplicate state-identity migrations are complete; exact public API spelling remains pre-alpha while the remaining cross-cutting audio contracts are finished.
 
 ## Runtime roles
 
 ```text
 Component
   immutable component definition / processor factory
-  current migration hook constructs ComponentSchema
+  constructs one coherent ComponentSchema
 
 ComponentSchema
   semantic state identity/version when identified
-  audio-port schema
-  event-port schema
+  owned-capable audio-port schema
+  whole-component AudioIoPolicy
+  owned-capable event-port schema
   parameter schema
   stable -> dense setup identity resolution
 
@@ -41,7 +42,7 @@ Each mutable semantic guarantee has one authority. Host/shared/editor representa
 
 ## Schema ownership
 
-`ComponentSchema` is the target immutable authority for one component generation. It validates and owns the audio/event/parameter schemas together rather than allowing three independently evolving metadata families.
+`ComponentSchema` is the immutable authority for one component generation. It validates and owns the audio/event/parameter schemas and whole-audio-I/O policy together rather than allowing independently evolving metadata families.
 
 Persistent/setup identity and process-time identity are separate:
 
@@ -51,15 +52,15 @@ EventPortKey  -> EventPortIndex
 ParameterKey  -> ParameterIndex
 ```
 
-Stable keys belong to schema, persistence, host mapping, tooling, and author-facing lookup. Dense indices are schema-local process/setup projections and are never persistence identity.
+Stable keys belong to schema, persistence, host mapping, tooling, and author-facing lookup. Audio/event keys and display metadata can be borrowed static data or runtime-owned metadata. Dense indices are schema-local process/setup projections and are never persistence identity.
 
-The current audio and event stable key types still use static strings; migrating them to owned validated identities is a remaining pre-v1 step so dynamically loaded/constructed components can be represented naturally. Dense process-time identities prevent that ownership change from putting strings or allocations in the callback.
+`ComponentSchema::unidentified()` is an intentional identity-free form for transient/embedded components that do not persist semantic state. Deployments that save state may require an identified schema at their boundary.
 
-`ComponentSchema::unidentified()` and the legacy runtime constructors exist only as migration bridges while current proof components/adapters are moved to schema-owned state identity. They are not stable design targets.
+The schema/runtime model is now exercised directly by conventional effects, zero-audio event processors, instruments, multiple output buses, multiple legal layouts with sidechain, runtime-owned hosted metadata, and CLAP deployment. Those proofs did not require parallel component lifecycles or a more general I/O-policy language.
 
 ## Construction and activation
 
-The preferred construction path is:
+The preferred format-independent path is:
 
 ```rust,ignore
 let mut runtime = InstanceRuntime::for_component(&component)?;
@@ -70,15 +71,16 @@ runtime.activate(&component, process_config, requested_audio_io)?;
 
 Activation then:
 
-1. reconstructs/obtains the component generation's schema;
+1. obtains the component generation's schema;
 2. rejects semantic state identity/version drift;
-3. rejects audio/event/parameter schema drift;
+3. rejects audio/event/parameter schema or audio-I/O-policy drift;
 4. validates the proposed structural audio configuration against the runtime-owned audio schema;
-5. owns the accepted configured ports while non-realtime;
-6. constructs `ActivationConfig` from runtime-owned data;
-7. calls `Component::activate_with_state()` with the current complete semantic state;
-8. reads `Processor::latency()` from the successfully constructed processor;
-9. publishes the processor, accepted configuration, and latency snapshot together as the active child.
+5. rejects structurally valid configurations not accepted by the schema-owned `AudioIoPolicy`;
+6. resolves accepted stable audio keys to activation-owned dense metadata and owns the configured ports while non-realtime;
+7. constructs `ActivationConfig` from runtime-owned data;
+8. calls `Component::activate_with_state()` with the current complete semantic state;
+9. reads `Processor::latency()` from the successfully constructed processor;
+10. publishes the processor, accepted configuration, resolved endpoint metadata, and latency snapshot together as the active child.
 
 A failed activation never publishes a partial active child. Executable negative-space coverage verifies failure leaves the runtime inactive, preserves durable state, and permits later successful activation.
 
@@ -86,7 +88,7 @@ The component definition is intentionally not stored inside `InstanceRuntime`. A
 
 ## Semantic state identity
 
-Complete runtime state now derives semantic identity and schema version from the owned `ComponentSchema`:
+Complete runtime state derives semantic identity and schema version from the owned `ComponentSchema`:
 
 ```text
 ComponentSchema
@@ -98,14 +100,14 @@ ComponentSchema
 InstanceRuntime state save/load/migration
 ```
 
-Normal complete-state operations no longer accept duplicate identity/version arguments:
+Runtime-level complete-state operations have one identity authority and do not accept duplicate product identity/version arguments:
 
 - `state_document()`;
 - `encode_state(...)`;
 - `apply_state(...)`;
 - `apply_state_bytes(...)`.
 
-Explicit `*_for_product` methods remain temporary migration paths for deployment adapters that still own proof-era state identity. They should disappear once adapter state uses the component schema directly.
+The old runtime `*_for_product`, parameter-only state export/load, and duplicate load-error surfaces are removed. `ParameterStore` may still accept explicit identity internally as a serialization primitive; it is not a competing component identity authority.
 
 State identity is semantic persistence identity. CLAP IDs, VST3 class IDs, Audio Unit identifiers, executable/bundle IDs, display names, and vendor strings are deployment metadata and must map explicitly rather than being silently reused as semantic state identity.
 
@@ -136,11 +138,9 @@ A processor whose lookahead, convolution, oversampling path, or other activation
 
 ## Audio configuration and process endpoints
 
-Stable audio configuration is selected while inactive from `PortKey` + layout metadata. Dense `AudioPortIndex` is now available as the process-time identity.
+Stable audio configuration is selected while inactive from `PortKey` + layout metadata and accepted by the schema-owned `AudioIoPolicy`. Dense `AudioPortIndex` is the process-time identity.
 
-The CLAP setup path resolves stable port keys to dense Chassis indices once. Real CLAP callbacks now carry those resolved indices into Chassis endpoint values. Existing synthetic/core fixtures are being migrated in the same direction.
-
-The temporary endpoint representation still carries both stable key and optional dense index while old fixtures migrate. The target is dense-only callback endpoints:
+The runtime resolves stable keys to dense indices once and owns a `ResolvedAudioIoConfiguration` for the active lifetime. `InputEndpoint` / `OutputEndpoint` carry only `AudioPortIndex` + channel:
 
 ```text
 InputEndpoint
@@ -152,17 +152,15 @@ OutputEndpoint
   channel
 ```
 
-Stable keys should not travel through every realtime sample/block simply because they were convenient in the first proof implementation.
+Before product DSP runs, `InstanceRuntime` rejects callback endpoints that:
 
-A remaining correctness gap is full endpoint legality validation for generic embedded `ProcessBufferSource` implementations. Before the process API freezes, the active runtime must reject endpoints that:
-
-- target an unknown/inactive audio port;
+- target an unknown or inactive audio port;
 - use the wrong input/output direction;
-- name a channel outside the active layout;
-- disagree with the setup-resolved schema index;
-- violate a declared relationship/layout invariant.
+- name a channel outside the active layout.
 
-This validation should use activation-owned resolved metadata, not repeated string lookup or allocation in the callback. The likely representation is a dense activation-time audio configuration indexed by `AudioPortIndex`; finalize it before adding graph/device layers that would otherwise duplicate the same mapping problem.
+Adapters creating safe process views remain responsible for their own raw pointer, aliasing, null-buffer, and format-specific proofs before core receives the views. The semantic endpoint legality contract itself is format-independent and activation-owned.
+
+The current runtime may traverse a buffer source once for endpoint legality and again for block dimensions/processing. Keep that simple bounded behavior until representative measurement justifies a combined execution plan or stronger source-qualification API.
 
 ## Processing
 
@@ -176,7 +174,7 @@ This validation should use activation-owned resolved metadata, not repeated stri
 - transport/process context;
 - a safe `ProcessBufferSource<S>`.
 
-Adapters/embeddings prove raw pointer/alias facts before safe channel views enter core. Setup owns stable-to-dense endpoint translation. Callback code consumes pre-resolved dense identities without callback-owned channel vectors or stable-string lookup.
+Adapters/embeddings prove raw pointer/alias facts before safe channel views enter core. Setup owns stable-to-dense endpoint translation and whole-I/O policy acceptance. Callback code consumes pre-resolved dense identities without callback-owned channel vectors or stable-string lookup.
 
 `crates/chassis-core/tests/realtime_alloc.rs` mechanically checks post-activation allocation/deallocation on the callback test thread. Full adapter-path allocation/work and performance evidence remains separate.
 
@@ -184,13 +182,13 @@ Adapters/embeddings prove raw pointer/alias facts before safe channel views ente
 
 Persistent/authoring identity is `ParameterKey`; realtime identity is schema-local `ParameterIndex`.
 
-The CLAP host lifetime currently splits durable shared/main-thread scalar state from the active audio processor. The adapter therefore owns an adapter-local scalar publication bridge and synchronizes it into a fresh `InstanceRuntime` on activation. This remains deployment plumbing, not a second core state authority.
+The CLAP host lifetime currently splits durable shared/main-thread scalar state from the active audio processor. The adapter therefore owns an adapter-local scalar publication bridge and synchronizes it into a fresh `InstanceRuntime` on activation. This is deployment plumbing, not a second core state authority.
 
 The bridge uses even completed generations and odd in-progress writer tokens. Realtime publication is one-shot/nonblocking; realtime snapshots have a fixed retry bound; non-realtime control/state snapshots may wait for an in-progress writer.
 
 A realtime automation endpoint is published only from the generation observed before processing. If a newer control edit or state load has advanced the generation, stale realtime publication is rejected.
 
-The long-term adapter refactor should project schema-owned complete state rather than continuing to duplicate semantic state identity in CLAP constants.
+Schema-owned semantic state identity is already used by CLAP save/load. Future adapter work should continue reducing duplicated projection mechanics without moving mutable semantic authority out of `InstanceRuntime`.
 
 ## Deactivation and teardown
 
@@ -201,20 +199,23 @@ Future background tasks, callbacks, editors, deferred reclamation, devices, grap
 ## Failure rules
 
 - invalid complete component schema fails at runtime construction;
-- component/runtime schema or state-identity drift fails before product activation;
-- malformed structural I/O fails before product activation;
+- component/runtime schema, audio policy, or state-identity drift fails before product activation;
+- malformed structural I/O or an unsupported whole-I/O configuration fails before product activation;
 - product activation error remains distinct from framework validation error;
 - failed activation publishes neither processor nor latency;
-- callback dimensions/events are validated before product DSP;
-- audio endpoint legality must become a runtime guarantee before the process API freezes;
+- callback dimensions, parameter/note events, and dense audio endpoint legality are validated before product DSP;
 - complete state replacement is failure-atomic;
 - no panic may unwind through a format FFI boundary.
 
-## Remaining freeze gates
+## Remaining runtime/core freeze gates
 
-1. Finish dense-only audio endpoints and activation-owned endpoint legality validation.
-2. Make direct coherent `ComponentSchema` authority the normal `Component` API and remove the default-stereo-effect core assumption/legacy runtime constructors.
-3. Migrate stable audio/event keys and display metadata to owned validated forms suitable for dynamic/hosted components.
-4. Move deployment adapters to schema-owned semantic state identity and remove explicit-ID compatibility paths.
-5. Finish semantic whole-I/O policy for components with multiple legal layouts.
-6. Preserve/extend allocation, concurrency, cross-platform, adapter, and real-host evidence as these boundaries change.
+The ownership/schema/identity migration is no longer the blocker. Remaining core work should be driven by concrete audio semantics:
+
+1. finish parameter formatting/value mapping and explicit sample-accurate modulation without conflating it with durable/base state;
+2. define common tail and bypass semantics only where deployments can map them faithfully;
+3. finish the event/output/expression/MIDI contracts needed by real instruments and event processors;
+4. add bounded control -> DSP non-parameter publication and background-work/reclamation lifecycle;
+5. add bus/port convenience or a richer `AudioIoPolicy` only if materially different clients show the current explicit model is insufficient;
+6. continue cross-platform, allocation, concurrency, adapter, and real-host qualification as these contracts change.
+
+The current `ComponentSchema` / `InstanceRuntime` ownership shape is a candidate-stable architecture. Do not reopen it merely to add speculative generality; change it when a concrete client exposes a semantic or ergonomic deficiency.
