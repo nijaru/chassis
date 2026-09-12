@@ -2,7 +2,9 @@
 
 ## Purpose
 
-Chassis is a convention-first Rust framework for professional realtime audio components. Effects are the first production clients. Instruments, standalone deployment, and optional host/device/graph layers remain compatible future directions without making plugin-host or application semantics part of core.
+Chassis is a convention-first Rust framework for professional realtime audio components. Effects are the first qualified deployment surface, but the framework is intended to support effects, instruments, event processors, standalone deployment, embedded use, and optional host/device/graph layers without making plugin-host or application semantics part of core.
+
+The project priority is now **Chassis itself**. Existing product ports and examples are validation clients, not roadmap authorities. Do not preserve an old product architecture, DSP implementation, or migration sequence merely to keep parity when it does not improve Chassis as a reusable framework.
 
 Read `docs/architecture.md`, `docs/roadmap.md`, `docs/next-runtime-slice.md`, `docs/licensing.md`, and `docs/dependencies.md` before architectural/dependency changes. Design contracts live under `docs/design/`; current source/tests outrank stale prose, and the owning document must be updated when a decision changes.
 
@@ -26,6 +28,7 @@ Read `docs/architecture.md`, `docs/roadmap.md`, `docs/next-runtime-slice.md`, `d
 - Keep CLAP/VST3/AU/Clack/clap-wrapper/toolkit/platform types out of product-facing core APIs.
 - Keep stable product/parameter/port identities independent from Rust names, labels, declaration order, runtime dense indices, and backend IDs.
 - Map adapter semantics faithfully or reject unsupported input; never silently change meaning to satisfy a host.
+- Effects, instruments, event processors, standalone and embedded deployments should share the same component/runtime model rather than growing parallel frameworks.
 
 ## Realtime path
 
@@ -40,7 +43,7 @@ For deterministic callbacks:
 - preserve sample offsets/order for timed events;
 - controlled copies are acceptable when they simplify ownership and measurement does not justify more complexity.
 
-Do not add lock-free structures, cache padding, custom allocators, `no_std`, SIMD, zero-copy machinery, or unsafe code without a concrete requirement and evidence.
+Do not add lock-free structures, cache padding, custom allocators, `no_std`, SIMD, zero-copy machinery, or unsafe code without a concrete framework requirement and evidence. Chassis completion is not permission for speculative infrastructure.
 
 ## Parameters, automation, and state
 
@@ -62,7 +65,7 @@ Current automated headless evidence is split into:
 - **CLAP Conformance**: packaged Linux/macOS/Windows artifacts, pinned `clap-validator` 0.4.1, and bounded fuzz;
 - **in-process Clack host tests**: actual Chassis CLAP entry for adapter allocation/work bounds, f32/f64, lifecycle, active state save, latency metadata/DSP consistency, main-thread re-entrancy, and panic containment.
 
-The current validator suite is 35 passed / 0 failed / 9 intentional skips. Do not equate the synthetic host or validator with production DAW qualification. The recorded baseline carries REAPER 7.79/macOS-arm64 evidence (2026-09-06) for scan/instantiate, sample-exact automation render, state round-trip, active-save, and PDC alignment with the exported delayed probe. Native f64 wire dispatch is not a gap — f64 semantics are qualified headlessly; wire-precision preference moves to first-client pressure.
+The current validator suite is 35 passed / 0 failed / 9 intentional skips. Do not equate the synthetic host or validator with production DAW qualification. The recorded baseline carries REAPER 7.79/macOS-arm64 evidence (2026-09-06) for scan/instantiate, sample-exact automation render, state round-trip, active-save, and PDC alignment with the exported delayed probe. Native f64 wire dispatch is not a gap — f64 semantics are qualified headlessly; wire-precision preference is a product/deployment policy.
 
 `cargo-deny` and `cargo-machete` are automated policy gates. Record exact evidence; never report an unrun gate as passing.
 
@@ -82,12 +85,19 @@ CI actions should be exact-version/commit pinned when practical. `actions/checko
 
 ## Current priority
 
-1. Keep repository authority docs synchronized with executable evidence.
-2. Refresh the recorded adapter benchmark on stable representative hardware when changes require a performance comparison; do not use shared CI timing as production performance evidence.
-3. When a production DAW is available, refresh current-head scan/instantiate/save-reopen, automated `trim` render, active-save-during-automation, PDC alignment, and native precision behavior.
-4. Let the first product that explicitly opts into Chassis drive the next framework surface. The Tonal EQ port opted in 2026-09-06 (`audio-plugins` commit `92c2b52`): DSP parity against the frozen JUCE oracle first, five-slot product changes after parity. A mastering-limiter class of client (Invisibull) follows at its own opt-in and is the intended pressure case for lookahead resources, offline parity, smoothing, telemetry, and deterministic rendering.
-5. Do not duplicate or silently migrate the existing Truce `audio-plugins` implementation to Chassis.
-6. Add product-originated gesture/edit and meter/telemetry infrastructure when a real Chassis client needs them; defer note/MIDI until an instrument/event client exists.
-7. Then qualify VST3/AU projection and editor lifecycle through the same product semantics and differential tests.
+Finish Chassis into a broadly usable professional audio framework. Work in the ordered completion slices in `docs/next-runtime-slice.md`; the high-level completion bar lives in `docs/roadmap.md`.
 
-Do not create speculative framework abstractions merely to fill the roadmap.
+Immediate priorities are:
+
+1. close the remaining core authoring/API gaps that affect multiple classes of audio component;
+2. add reusable bounded realtime communication primitives for control snapshots and DSP -> UI telemetry;
+3. implement the already-designed event/note/MIDI/modulation surface and prove it with small conformance fixtures;
+4. establish a production editor contract with gestures, observation, telemetry, attach/detach/recreation, sizing/scaling, and clear toolkit boundaries;
+5. qualify VST3 and Audio Unit against the same semantic contract as native CLAP;
+6. add standalone/device deployment using the same component/runtime implementation;
+7. add graph/scheduling infrastructure only at the application layer, without moving application semantics into core;
+8. finish packaging, signing, notarization, validation, examples, and release-oriented tooling so new audio projects can use Chassis without bespoke infrastructure.
+
+Tonal EQ, the delayed probe, conformance plugins, and future limiter/restoration/instrument clients are evidence sources. They do not get to block framework work solely for parity with an old implementation. Preserve useful differential tests where they prove Chassis semantics; discard migration constraints that do not.
+
+Do not duplicate or silently migrate Truce `audio-plugins` products into Chassis. Product work remains explicit and separate.
