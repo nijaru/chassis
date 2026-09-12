@@ -198,12 +198,11 @@ fn unknown_dense_port_is_rejected_before_product_dsp() {
     let (process_calls, mut runtime) = active_runtime();
     let samples = [1.0_f32];
     let unknown = AudioPortIndex::new(99);
-    let mut buffers = [ChannelBuffer::input_only(
-        InputEndpoint::resolved(MAIN_INPUT, unknown, 0),
-        &samples,
-        1,
-    )
-    .expect("buffer is structurally valid")];
+    let mut buffers =
+        [
+            ChannelBuffer::input_only(InputEndpoint::resolved(MAIN_INPUT, unknown, 0), &samples, 1)
+                .expect("buffer is structurally valid"),
+        ];
 
     assert!(matches!(
         runtime.process(1, process_context(1), &mut buffers),

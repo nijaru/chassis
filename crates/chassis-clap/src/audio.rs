@@ -629,9 +629,15 @@ mod tests {
                 .expect("reordered mapping is valid");
         let main = configuration.process_slots()[0];
         assert_eq!(main.input.expect("main input exists").key, MAIN_INPUT);
-        assert_eq!(main.input.expect("main input exists").index, AudioPortIndex::new(0));
+        assert_eq!(
+            main.input.expect("main input exists").index,
+            AudioPortIndex::new(0)
+        );
         assert_eq!(main.output.expect("main output exists").key, MAIN_OUTPUT);
-        assert_eq!(main.output.expect("main output exists").index, AudioPortIndex::new(1));
+        assert_eq!(
+            main.output.expect("main output exists").index,
+            AudioPortIndex::new(1)
+        );
         assert!(main.paired);
         assert_eq!(
             configuration.process_slots()[1]

@@ -357,7 +357,9 @@ impl fmt::Display for InstanceProcessError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NotActive => formatter.write_str("component instance is not active"),
-            Self::InvalidAudioEndpoint(error) => write!(formatter, "invalid audio endpoint: {error}"),
+            Self::InvalidAudioEndpoint(error) => {
+                write!(formatter, "invalid audio endpoint: {error}")
+            }
             Self::InvalidBlock(error) => write!(formatter, "invalid process block: {error}"),
             Self::InvalidNoteEvents(error) => write!(formatter, "invalid note events: {error}"),
         }

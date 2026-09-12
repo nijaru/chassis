@@ -451,10 +451,18 @@ impl fmt::Display for AudioEndpointError {
                 port.get()
             ),
             Self::UnknownPort(port) => {
-                write!(formatter, "audio endpoint targets unknown port {}", port.get())
+                write!(
+                    formatter,
+                    "audio endpoint targets unknown port {}",
+                    port.get()
+                )
             }
             Self::InactivePort(port) => {
-                write!(formatter, "audio endpoint targets inactive port {}", port.get())
+                write!(
+                    formatter,
+                    "audio endpoint targets inactive port {}",
+                    port.get()
+                )
             }
             Self::WrongDirection {
                 port,

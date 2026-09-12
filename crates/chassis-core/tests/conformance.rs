@@ -241,14 +241,11 @@ fn runtime_owns_validated_parameter_base_state() {
 
     let input = [1.0_f32];
     let mut output = [0.0_f32];
-    let mut buffers = [ChannelBuffer::separate(
-        main_input(0),
-        &input,
-        main_output(0),
-        &mut output,
-        1,
-    )
-    .expect("base-value test buffer is valid")];
+    let mut buffers =
+        [
+            ChannelBuffer::separate(main_input(0), &input, main_output(0), &mut output, 1)
+                .expect("base-value test buffer is valid"),
+        ];
     runtime
         .process(1, process_context(1, ProcessMode::Realtime), &mut buffers)
         .expect("base-value process block is valid");
@@ -281,14 +278,11 @@ fn parameter_automation_is_sample_accurate_through_runtime() {
 
     let input = [1.0_f32; 4];
     let mut output = [0.0_f32; 4];
-    let mut buffers = [ChannelBuffer::separate(
-        main_input(0),
-        &input,
-        main_output(0),
-        &mut output,
-        4,
-    )
-    .expect("test buffer is valid")];
+    let mut buffers =
+        [
+            ChannelBuffer::separate(main_input(0), &input, main_output(0), &mut output, 4)
+                .expect("test buffer is valid"),
+        ];
     runtime
         .process(4, context, &mut buffers)
         .expect("valid automation block processes");
@@ -315,14 +309,11 @@ fn invalid_parameter_events_never_reach_product_dsp() {
     let context = ProcessContext::new(ProcessMode::Realtime, TransportSnapshot::unknown(), events);
     let input = [1.0_f32; 2];
     let mut output = [0.0_f32; 2];
-    let mut buffers = [ChannelBuffer::separate(
-        main_input(0),
-        &input,
-        main_output(0),
-        &mut output,
-        2,
-    )
-    .expect("test buffer is valid")];
+    let mut buffers =
+        [
+            ChannelBuffer::separate(main_input(0), &input, main_output(0), &mut output, 2)
+                .expect("test buffer is valid"),
+        ];
 
     assert!(matches!(
         runtime.process(2, context, &mut buffers),

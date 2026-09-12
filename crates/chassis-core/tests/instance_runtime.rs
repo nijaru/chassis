@@ -388,13 +388,10 @@ fn process_uses_durable_base_state() {
         .expect("activation succeeds");
 
     let mut left = [1.0_f32, 0.5];
-    let mut buffers = [ChannelBuffer::in_place(
-        main_input(0),
-        main_output(0),
-        &mut left,
-        2,
-    )
-    .expect("buffer is valid")];
+    let mut buffers = [
+        ChannelBuffer::in_place(main_input(0), main_output(0), &mut left, 2)
+            .expect("buffer is valid"),
+    ];
     let context = ProcessContext::new(
         ProcessMode::Realtime,
         TransportSnapshot::unknown(),
