@@ -154,13 +154,14 @@ new_apply_bytes = '''    /// Decode, migrate, validate, and publish complete sem
 '''
 text = text[:start] + new_apply_bytes + text[end:]
 
-# Runtime-level compatibility names must be gone.
+# Runtime-level compatibility methods/calls must be gone. The one remaining
+# `.apply_state_for_product(...)` call is intentionally on the temporary
+# ParameterStore candidate; ParameterStore does not own component identity.
 for stale in [
     'state_document_for_product',
     'encode_state_for_product',
     'apply_parameter_state_for_product',
     'apply_parameter_state_bytes',
-    'apply_state_for_product',
     'apply_state_bytes_for_product',
     'InstanceStateLoadError',
     'parameter_state_document(',
@@ -168,6 +169,8 @@ for stale in [
 ]:
     if stale in text:
         raise SystemExit(f'stale runtime state compatibility API remains: {stale}')
+if 'pub fn apply_state_for_product' in text or 'self.apply_state_for_product(' in text:
+    raise SystemExit('runtime-level apply_state_for_product compatibility API remains')
 
 runtime_path.write_text(text)
 
@@ -277,16 +280,16 @@ adversarial_path.write_text(text)
 
 # Fail closed across Rust callers: runtime explicit-ID compatibility APIs should
 # no longer be referenced outside the lower ParameterStore implementation.
+parameters_path = root / 'crates/chassis-core/src/parameters.rs'
 for path in root.rglob('*.rs'):
     source = path.read_text()
-    if path == root / 'crates/chassis-core/src/parameters.rs':
+    if path == parameters_path:
         continue
     for stale in [
         'state_document_for_product(',
         'encode_state_for_product(',
         'apply_parameter_state_for_product(',
         'apply_parameter_state_bytes(',
-        'apply_state_for_product(',
         'apply_state_bytes_for_product(',
         'parameter_state_document(',
         'encode_parameter_state(',
@@ -294,3 +297,8 @@ for path in root.rglob('*.rs'):
     ]:
         if stale in source:
             raise SystemExit(f'{stale} remains in {path}')
+    if path == runtime_path:
+        if 'pub fn apply_state_for_product' in source or 'self.apply_state_for_product(' in source:
+            raise SystemExit('runtime-level apply_state_for_product remains')
+    elif 'apply_state_for_product(' in source:
+        raise SystemExit(f'apply_state_for_product remains outside ParameterStore in {path}')
