@@ -4,28 +4,35 @@ This roadmap is ordered by framework completeness and architectural proof, not b
 
 ## Current position
 
-Chassis has a qualified format-independent runtime and native CLAP foundation. Core lifecycle/state/parameter ownership, generic process buffers, f32/f64 processing, sample-accurate automation, offline/render mode, activation-scoped latency, restart signaling, and CLAP projection are implemented and tested. REAPER/macOS host evidence exists for automation, state round-trip, active-save, and PDC through the delayed probe.
+Chassis has a qualified format-independent runtime and native CLAP foundation. Core lifecycle/state/parameter ownership, generic process buffers, f32/f64 processing, sample-accurate automation, bounded telemetry, semantic event-port/note foundations, offline/render mode, activation-scoped latency, restart signaling, and CLAP projection are implemented and tested.
 
-The project is still pre-alpha because the framework is not yet broadly usable for new professional audio projects without bespoke infrastructure. The remaining work is now organized around that completion bar rather than Tonal EQ or limiter migration parity.
+The project is still pre-alpha because the framework is not yet broadly usable for new audio software without bespoke infrastructure. The remaining work is organized around a complete Rust audio-software foundation rather than an old plugin migration or one product class.
+
+Plugins remain the first and likely most common deployment path, but they are not the architectural boundary. A stable Chassis should also serve instruments, standalone processors, plugin hosts, audio engines/DAWs, offline tools, analyzers, and embedded Rust audio applications through the same core semantics.
 
 ## Completion bar
 
-Chassis is meaningfully complete for general audio work when a new project can use one coherent component/runtime model for:
+Chassis is meaningfully complete when a new project can use coherent, documented, tested framework layers for:
 
-- effects, instruments, event processors, embedded processing, and standalone deployment;
+- neutral effects/instruments/event-processors/embedded/offline component semantics;
 - mono/stereo/multi-bus/sidechain/multi-output audio I/O;
 - typed parameters, automation, modulation, gestures, formatting/mapping, and versioned state;
 - sample-accurate note/MIDI/expression input and bounded output events;
-- realtime and offline processing, latency, tail, bypass, lookahead/oversampling-friendly activation resources, and deterministic rendering;
-- bounded control -> DSP snapshots and DSP -> control/editor telemetry;
-- explicit background-task lifecycle when non-realtime analysis or preparation is required;
-- production editor lifecycle and bindings without putting a GUI toolkit in core;
+- realtime, buffered-realtime, and offline processing with latency, tail, bypass, and deterministic behavior;
+- bounded control -> DSP publication and DSP -> control/editor telemetry;
+- explicit background-task lifecycle and safe result/reclamation publication;
+- common reusable DSP utilities/integrations without forcing products to assemble avoidable plumbing;
+- production editor lifecycle and toolkit adapters without making a GUI toolkit part of core;
 - CLAP, VST3, and Audio Unit with differential semantic qualification;
 - standalone audio/MIDI device deployment using the same component implementation;
-- application-level graph/scheduling infrastructure without moving DAW/application semantics into core;
-- reproducible packaging, signing/notarization, validation, examples, and release tooling.
+- processing graph/routing/scheduling with latency propagation/compensation;
+- third-party plugin hosting integrated with the same graph/runtime model;
+- audio-file/media and offline-render integration suitable for general audio applications;
+- reproducible packaging, identity, validation, compatibility, examples, documentation, and release tooling.
 
-AAX, ARA, immersive/object workflows, plugin hosting, sandboxing, and specialized ML/DSP infrastructure remain later or demand-driven unless they become necessary to satisfy the general completion bar above.
+A DAW/application document model is explicitly outside this completion bar: tracks, clips, arrangements, project workflows, editor commands, mixer UX, and content/media-library policy remain application concerns.
+
+AAX, ARA, immersive/object workflows, sandboxed hosting, network/distributed audio, and specialized ML infrastructure remain later or demand-driven unless they become necessary for a general framework invariant.
 
 ## Foundation — implemented
 
@@ -41,7 +48,10 @@ The following are substantially implemented and remain regression-protected:
 - activation failure recovery and panic containment at adapter boundaries;
 - post-activation allocation/deallocation checks;
 - activation-scoped processing latency and restart requests;
-- realtime/offline process mode projection;
+- realtime/buffered/offline process mode semantics;
+- bounded coherent `f32` DSP -> control telemetry with meter/runtime fixtures;
+- stable event-port schema/identity and bounded semantic note-event input in core;
+- runtime ownership/validation of event-port schemas and note-event port capabilities;
 - native CLAP adapter through pinned Clack;
 - three-platform headless validation, packaged CLAP conformance, bounded fuzz, and in-process host coverage;
 - representative adapter-overhead measurements;
@@ -49,52 +59,75 @@ The following are substantially implemented and remain regression-protected:
 
 Existing conformance components, the delayed probe, and Tonal EQ are retained where they provide useful regression evidence. They are not roadmap authorities.
 
-## Slice A — core authoring/API closure
+## Slice A — core semantic/API audit and refactor
 
-Before stabilizing the pre-v1 authoring surface:
+Before expanding higher layers, remove proof-era assumptions that would make the common component model plugin/effect-specific or harder to embed elsewhere.
 
-- make `Component` -> runtime construction ergonomic without hiding validation/ownership;
-- define semantic whole-I/O configuration for components with multiple legal layouts;
-- add higher-level bus/port access only where it removes repeated product boilerplate without obscuring buffer legality;
-- finish canonical product/export identity ownership and backend projection;
-- complete parameter value mapping/formatting helpers with round-trip tests;
-- finish explicit parameter modulation semantics without corrupting durable/base state;
-- define common tail and bypass semantics where formats can represent them faithfully;
-- retain activation-time resource ownership for lookahead, oversampling, convolution, model state, and similar delayed DSP;
-- keep product-specific DSP and visual semantics outside core.
+Audit and refactor:
 
-Do not freeze convenience macros or derives until the underlying authoring surface is coherent.
+- neutral core defaults: a `Component` is not inherently a stereo effect or plugin;
+- conventional effect/instrument helpers belong above neutral semantics;
+- names such as temporary `*StereoEffect` adapter concepts that encode proof limits;
+- component/runtime construction and immutable schema ownership;
+- audio/event port identity and dense activation-local mapping;
+- semantic whole-I/O configuration for components with multiple legal layouts;
+- recurring bus/port access ergonomics without hiding buffer legality;
+- canonical product/export identity ownership independent of backend adapters;
+- parameter formatting/value mapping with tested round trips;
+- explicit modulation distinct from durable/base state;
+- common latency/tail/bypass behavior where environments can represent it faithfully.
+
+The project is unpublished pre-alpha. Prefer a breaking simplification now over permanent compatibility shims around weak abstractions.
 
 ## Slice B — realtime communication and non-realtime work
 
-Add a small set of reusable primitives that professional processors repeatedly need:
+Complete the small reusable concurrency/lifecycle toolbox repeatedly needed by audio processors:
 
-- bounded DSP -> UI/control telemetry with explicit publication, overflow/coalescing, and reclamation behavior;
-- immutable control -> DSP snapshots where scalar parameters are not enough;
-- deferred destruction of replaced large state away from the audio callback;
-- explicit background-task lifecycle for analysis/preparation: ownership, cancellation, generation/stale-result rejection, unload/shutdown, and offline determinism.
+- bounded DSP -> UI/control telemetry with explicit coalescing/overflow behavior;
+- immutable control -> DSP snapshots for non-parameter state;
+- safe deferred destruction/reclamation of replaced large objects;
+- explicit background-task lifecycle: ownership, cancellation, generation/stale-result rejection, unload/shutdown, and offline determinism;
+- larger/high-rate analyzer transport only if a fixed snapshot is measurably the wrong representation.
 
-Unused facilities must impose no process-time work. Do not add a hidden global executor or generic lock-free container library.
+Unused facilities must impose no process-time work. Do not add a hidden global executor or generalized lock-free container library.
 
-Prove these with purpose-built fixtures such as a meter/analyzer and worker-backed processor rather than an old product migration.
+## Slice C — events, instruments, MIDI, and modulation
 
-## Slice C — events, instruments, and modulation
+Finish the executable event model across core and deployment adapters:
 
-Promote the existing event design into executable core/adapters:
-
-- stable event-port identities;
 - semantic note on/off/choke/end and note addressing;
-- velocity, tuning, and per-note expression;
-- raw MIDI/SysEx and a path for MIDI 2 / UMP without destructive down-conversion;
+- velocity, tuning, pressure/timbre/brightness/pan/volume expression where semantics are defined;
+- raw MIDI 1 and SysEx;
+- non-destructive MIDI 2 / UMP path;
 - sample-accurate parameter modulation distinct from base automation/state;
 - bounded realtime output event sinks with explicit rejection behavior;
-- typed borrowed cursors/span processing without forcing one fabricated cross-family total order.
+- note-end/output events;
+- typed span/change-boundary processing without inventing cross-family total ordering;
+- high-event-count allocation/work bounds.
 
-Prove with small fixtures: a basic synth, an event passthrough/transform, and a multi-output instrument.
+Prove with small fixtures: synth, event passthrough/transform, and multi-output instrument.
 
-## Slice D — production editor contract
+## Slice D — common DSP foundation
 
-Chassis owns editor lifecycle/integration, not product visual design.
+Build a coherent set of broadly reusable DSP utilities and dependency integrations needed across audio software.
+
+Candidate families, added from concrete requirements and tests rather than checklist completion:
+
+- gain/dB/unit helpers;
+- ramps/smoothing/interpolation;
+- delay/ring/scratch buffers;
+- metering and simple analysis;
+- filters/crossovers and oscillator/envelope primitives where a common API is justified;
+- FFT/STFT/window integration;
+- oversampling/resampling integration;
+- convolution/common channel-buffer operations;
+- deterministic utility behavior shared between realtime and offline paths.
+
+Use strong existing Rust libraries when appropriate. Do not reimplement mature FFT, resampling, codec, or device facilities merely to make them Chassis-owned. Package splits follow dependency/optionality boundaries, not this conceptual list.
+
+## Slice E — editor/UI integration
+
+Chassis owns editor lifecycle/integration, not visual design.
 
 Complete:
 
@@ -104,13 +137,13 @@ Complete:
 - parent-window attach/detach;
 - editor recreation/teardown;
 - resize, scale, and high-DPI behavior;
-- focus/input semantics required by supported formats;
+- focus/input semantics required by supported environments;
 - accessibility path where practical;
-- enough rendering/control flexibility for commercial product UIs.
+- optional GUI toolkit adapters with no headless dependency leak.
 
-Select GUI adapters based on evidence. Toolkit types stay out of product-facing core contracts.
+Validation fixture: `EditorDemo`, deliberately simple visually but exhaustive in lifecycle/interaction behavior.
 
-## Slice E — desktop format parity
+## Slice F — plugin deployment parity
 
 Bring VST3 and Audio Unit to the same semantic standard as CLAP, initially through a pinned/reviewed wrapper if it is faithful enough.
 
@@ -127,57 +160,92 @@ For each format prove:
 
 Own native adapters only when wrapper limitations are concrete and material.
 
-## Slice F — standalone and device runtime
+## Slice G — standalone and device runtime
 
-Add a first-class standalone deployment using the same component/runtime implementation:
+Add first-class application/device infrastructure using the same component/runtime model:
 
-- audio device enumeration/open/close/change handling;
+- audio device enumeration/open/close/reconfiguration;
 - sample-rate/block-size negotiation;
-- MIDI device input/output;
-- xrun/error reporting and recovery policy;
-- component/editor/state reuse rather than a parallel standalone DSP path.
+- audio input/output and duplex operation;
+- MIDI device input/output and timestamp integration where available;
+- xruns, device loss, errors, and recovery policy;
+- standalone application bootstrap;
+- reuse of the same processor/editor/state implementation used by plugins and embedded applications.
 
-This is the threshold at which Chassis becomes useful beyond plugin-only projects.
+Use reviewed platform/device dependencies behind Chassis-owned semantic boundaries rather than building OS audio backends unnecessarily.
 
-## Slice G — graph/scheduling layer
+## Slice H — graph, routing, and scheduling
 
-Add `chassis-graph` only above the component core:
+Add `chassis-graph` above the component core:
 
-- nodes backed by ordinary Chassis components/processors;
-- fan-in/fan-out and bus/event routing;
-- graph validation and immutable/transactional topology publication;
+- ordinary Chassis processors as nodes;
+- audio/event fan-in/fan-out;
+- routing and bus connectivity;
+- graph validation and immutable/transactional execution-plan publication;
 - latency propagation and compensation;
-- realtime-safe execution planning;
+- realtime-safe bounded execution;
 - topology/resource mutation off the callback;
-- parallel scheduling only if measurement and workloads justify it.
+- deterministic offline graph execution;
+- parallel scheduling only when measurements justify it.
 
-The graph does not own timelines, arrangements, mixer UX, mastering workflows, media libraries, or product-specific semantics.
+The graph does not own tracks, clips, timelines, arrangements, mixer UX, mastering workflows, media libraries, or product-specific semantics.
 
-## Slice H — release/tooling completion
+## Slice I — plugin hosting
 
-Make new projects cheap to create and ship:
+Add reusable hosting infrastructure for DAWs, hosts, test tools, and audio applications:
 
-- canonical product/export manifest and generated backend metadata;
-- packaging layouts for supported plugin formats and standalone apps;
+- discovery/scanning and format capability metadata;
+- loading/instantiation/lifecycle;
+- audio/event processing integration with `chassis-graph`;
+- parameters/automation/state access;
+- editor hosting;
+- failure/crash policy at the supported isolation level;
+- CLAP first where useful, then other supported formats without forcing one plugin ABI into core.
+
+Sandboxed/out-of-process hosting is a later capability unless required by a concrete host application.
+
+## Slice J — media, transport, and offline application infrastructure
+
+Provide reusable infrastructure needed by general audio applications without becoming a DAW document model:
+
+- audio source/sink metadata and stream/read/write/seek semantics;
+- codec integration through reviewed libraries;
+- sample-rate/channel adaptation through reviewed DSP dependencies;
+- deterministic offline rendering of components/graphs;
+- application transport/time primitives needed to drive processors and graphs;
+- file/asset processing integration;
+- a separate random-access/multi-pass processing abstraction if sequential block processing proves insufficient.
+
+Project media libraries, clip/region editing, arrangements, project formats, and workflow semantics remain outside Chassis.
+
+## Slice K — tooling, documentation, and stability
+
+Make new projects cheap to create, validate, and ship:
+
+- curated public facade that hides internal crate topology for common users;
+- canonical identity/export manifest and generated backend metadata;
+- plugin/standalone packaging;
 - macOS signing/notarization and Windows signing hooks where release targets require them;
 - reproducible release builds and versioning;
-- validator/host smoke-test commands;
+- validator/host/device smoke-test commands;
 - state/identity compatibility fixtures;
 - performance/regression harnesses;
-- concise examples/templates for effect, sidechain, meter/analyzer, instrument, multi-output, worker-backed processor, and standalone deployment.
+- concise examples/templates for effect, sidechain, meter/analyzer, instrument, event processor, multi-output, worker-backed processor, standalone, graph, and host use;
+- API/reference documentation with explicit realtime and ownership contracts.
 
-The goal is not a large CLI for its own sake; it is removing repeated release and integration boilerplate.
+Only after supported surfaces are exercised across these layers should Chassis freeze compatibility-sensitive public APIs and state formats.
 
 ## Later / conditional
 
-- `chassis-host` for third-party plugin discovery/loading/editor hosting when a real application needs it;
 - AAX when Avid/PACE access, licensing, and demand justify it;
-- ARA/random-access host integration when a product needs region/asset semantics beyond sequential offline processing;
-- LV2 if Linux demand warrants it;
-- sandboxed/out-of-process hosting when crash isolation is a product requirement;
+- ARA/random-access host integration when region/asset semantics require host-level integration beyond generic offline processing;
+- LV2 if useful for supported Linux workflows;
+- sandboxed/out-of-process hosting when crash isolation becomes a supported requirement;
 - surround/ambisonics/immersive channel semantics with explicit ordering/normalization fixtures;
 - Dolby Atmos object/metadata/renderer workflows as a separate capability;
-- additional GUI adapters where supported products need them.
+- network/distributed audio infrastructure;
+- additional GUI adapters;
+- specialized ML/model-runtime infrastructure only if repeated audio clients demonstrate a common lifecycle/API.
 
 ## Validation strategy
 
@@ -189,22 +257,28 @@ Prefer focused conformance fixtures over product-migration gates:
 - `Analyzer` — larger bounded telemetry;
 - `Sidechain` — routing and auxiliary input;
 - `Synth` — notes/MIDI/expression;
+- `EventTransform` — bounded input/output events;
 - `MultiOut` — multiple output buses;
 - `WorkerFx` — background work/cancellation/stale-result rejection;
-- `EditorDemo` — editor lifecycle/gestures/scaling.
+- `EditorDemo` — editor lifecycle/gestures/scaling;
+- `DeviceLoop` — device negotiation/xrun/recovery;
+- `GraphProbe` — routing/topology/PDC;
+- `HostProbe` — plugin loading/state/editor/processing;
+- `OfflineRender` — deterministic graph/component rendering.
 
-Real products remain valuable integration tests, but no old product architecture is preserved merely to make Chassis look compatible with it.
+Real products and applications remain valuable integration tests, but no old product architecture is preserved merely to make Chassis look compatible with it.
 
 ## Promotion rule
 
 A facility belongs in the common framework when:
 
-1. it is broadly required to satisfy the completion bar or repeated across materially different component classes;
+1. it is broadly useful across audio software or required to satisfy the completion bar;
 2. owner/lifecycle and failure semantics are explicit;
 3. realtime work/resources are bounded where applicable;
 4. negative-space behavior is tested;
-5. adapters can project the semantics faithfully or reject unsupported use;
+5. deployment/application layers can project the semantics faithfully or reject unsupported use;
 6. performance claims have representative measurements;
-7. dependencies remain compatible with realtime/safety/licensing policy.
+7. dependencies remain compatible with safety/licensing/maintenance policy;
+8. the abstraction is more durable than simply exposing a dependency's accidental API.
 
-Framework completion should be deliberate, but not speculative: implement known cross-cutting audio-runtime requirements now; leave domain-specific algorithms and application semantics to clients.
+Framework completion should be deliberate, but not timid: implement known cross-cutting audio infrastructure, refactor weak pre-alpha abstractions aggressively, and leave application/product semantics to clients.
