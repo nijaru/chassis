@@ -10,10 +10,12 @@ use std::vec::Vec;
 use crate::{
     audio::{
         AudioIoConfiguration, AudioIoConfigurationError, AudioPortDescriptor, AudioPortIndex,
-        ConfiguredAudioPort, PortKey, DEFAULT_EFFECT_PORTS,
+        ConfiguredAudioPort, DEFAULT_EFFECT_PORTS, PortKey,
     },
     buffer::ChannelBuffer,
-    events::{EventPortDescriptor, EventPortIndex, EventPortKey, EventPortSchemaError, NoteEventPortError},
+    events::{
+        EventPortDescriptor, EventPortIndex, EventPortKey, EventPortSchemaError, NoteEventPortError,
+    },
     parameters::{
         ParameterDescriptor, ParameterStateError, ParameterStore, ParameterStoreError,
         ParameterValuesMut,
@@ -293,8 +295,9 @@ where
                 .write_str("component parameter schema does not match its instance runtime"),
             Self::EventPortSchemaMismatch => formatter
                 .write_str("component event-port schema does not match its instance runtime"),
-            Self::StateIdentityMismatch => formatter
-                .write_str("component state identity does not match its instance runtime"),
+            Self::StateIdentityMismatch => {
+                formatter.write_str("component state identity does not match its instance runtime")
+            }
             Self::InvalidAudioIo(error) => write!(formatter, "invalid audio I/O: {error}"),
             Self::Product(error) => write!(formatter, "product activation failed: {error}"),
         }
@@ -367,9 +370,40 @@ impl std::error::Error for InstanceProcessError {
     }
 }
 
+/// Failure while exporting complete semantic state through schema-owned identity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InstanceStateExportError {
+    /// This transitional component schema does not yet own semantic state identity.
+    MissingStateIdentity,
+    /// Parameter/state document construction or encoding failed.
+    State(ParameterStateError),
+}
+
+impl fmt::Display for InstanceStateExportError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingStateIdentity => {
+                formatter.write_str("component schema has no semantic state identity")
+            }
+            Self::State(error) => write!(formatter, "state export failed: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for InstanceStateExportError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::MissingStateIdentity => None,
+            Self::State(error) => Some(error),
+        }
+    }
+}
+
 /// Failure while replacing the durable instance's framework-managed parameter state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InstanceStateError {
+    /// The component schema has not yet been migrated to semantic state identity.
+    MissingStateIdentity,
     /// Rebuilding the already-validated parameter schema unexpectedly failed.
     InvalidParameters(ParameterStoreError),
     /// The semantic parameter state was invalid for this product/schema.
@@ -386,6 +420,9 @@ pub enum InstanceStateError {
 impl fmt::Display for InstanceStateError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::MissingStateIdentity => {
+                formatter.write_str("component schema has no semantic state identity")
+            }
             Self::InvalidParameters(error) => write!(formatter, "invalid parameters: {error}"),
             Self::ParameterState(error) => write!(formatter, "invalid parameter state: {error}"),
             Self::IncompleteParameterState { expected, actual } => write!(
@@ -399,9 +436,9 @@ impl fmt::Display for InstanceStateError {
 impl std::error::Error for InstanceStateError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::MissingStateIdentity | Self::IncompleteParameterState { .. } => None,
             Self::InvalidParameters(error) => Some(error),
             Self::ParameterState(error) => Some(error),
-            Self::IncompleteParameterState { .. } => None,
         }
     }
 }
@@ -555,8 +592,8 @@ where
     /// Returns [`InstanceRuntimeError`] only if rebuilding the parameter base
     /// store from an already validated schema unexpectedly fails.
     pub fn from_schema(schema: ComponentSchema) -> Result<Self, InstanceRuntimeError> {
-        let parameters =
-            ParameterStore::new(schema.parameters()).map_err(InstanceRuntimeError::InvalidParameters)?;
+        let parameters = ParameterStore::new(schema.parameters())
+            .map_err(InstanceRuntimeError::InvalidParameters)?;
         Ok(Self {
             schema,
             parameters,
@@ -661,10 +698,17 @@ where
     /// The returned view cannot replace the immutable schema:
     ///
     /// ```compile_fail
-    /// use chassis_core::{parameters::ParameterStore, runtime::{InstanceRuntime, Processor}};
+    /// use chassis_core::{parameters::ParameterStore, runtime::{Component, InstanceRuntime, Processor}};
     /// struct Dsp;
     /// impl Processor for Dsp {}
-    /// let mut runtime = InstanceRuntime::<Dsp>::new(&[]).unwrap();
+    /// struct Definition;
+    /// impl Component for Definition {
+    ///     type Processor = Dsp;
+    ///     type ActivationError = core::convert::Infallible;
+    ///     fn activate(&self, _: &chassis_core::process::ActivationConfig<'_>) -> Result<Dsp, Self::ActivationError> { Ok(Dsp) }
+    /// }
+    /// let definition = Definition;
+    /// let mut runtime = InstanceRuntime::<Dsp>::for_component(&definition).unwrap();
     /// *runtime.parameters_mut() = ParameterStore::new(&[]).unwrap();
     /// ```
     pub fn parameters_mut(&mut self) -> ParameterValuesMut<'_> {
@@ -875,10 +919,19 @@ where
         Ok(())
     }
 
+    fn semantic_state_identity(&self) -> Option<(String, u32)> {
+        self.schema.state_identity().map(|identity| {
+            (
+                identity.component().as_str().to_owned(),
+                identity.schema().get(),
+            )
+        })
+    }
+
     /// Build a semantic document containing all durable parameter base values.
     ///
-    /// This compatibility helper excludes custom product state. Prefer
-    /// [`Self::state_document`] for complete instance persistence.
+    /// This compatibility helper excludes custom product state and still accepts
+    /// explicit identity. Complete instance state should use [`Self::state_document`].
     ///
     /// # Errors
     ///
@@ -893,8 +946,8 @@ where
 
     /// Encode all durable parameter base values under explicit state bounds.
     ///
-    /// This compatibility helper excludes custom product state. Prefer
-    /// [`Self::encode_state`] for complete instance persistence.
+    /// This compatibility helper excludes custom product state and still accepts
+    /// explicit identity. Complete instance state should use [`Self::encode_state`].
     ///
     /// # Errors
     ///
@@ -910,7 +963,7 @@ where
             .encode_state(product_id, product_schema, limits)
     }
 
-    /// Build the complete durable semantic state document.
+    /// Build the complete durable semantic state using schema-owned identity.
     ///
     /// Framework-managed parameters are emitted from the canonical parameter
     /// store and validated custom entries are appended. Encoding remains
@@ -918,8 +971,26 @@ where
     ///
     /// # Errors
     ///
+    /// Returns [`InstanceStateExportError::MissingStateIdentity`] while a
+    /// transitional component still uses an unidentified schema, or wraps a
+    /// parameter/state document error.
+    pub fn state_document(&self) -> Result<StateDocument, InstanceStateExportError> {
+        let (product_id, product_schema) = self
+            .semantic_state_identity()
+            .ok_or(InstanceStateExportError::MissingStateIdentity)?;
+        self.state_document_for_product(product_id, product_schema)
+            .map_err(InstanceStateExportError::State)
+    }
+
+    /// Historical explicit-identity complete-state export.
+    ///
+    /// This remains only while deployment adapters migrate to schema-owned
+    /// semantic state identity.
+    ///
+    /// # Errors
+    ///
     /// Returns [`ParameterStateError`] if document construction fails.
-    pub fn state_document(
+    pub fn state_document_for_product(
         &self,
         product_id: impl Into<String>,
         product_schema: u32,
@@ -933,19 +1004,35 @@ where
         Ok(document)
     }
 
-    /// Encode the complete durable semantic state under explicit bounds.
+    /// Encode complete durable semantic state under schema-owned identity.
     ///
     /// # Errors
     ///
-    /// Returns [`ParameterStateError`] if document construction or bounded
-    /// encoding fails.
+    /// Returns [`InstanceStateExportError`] if identity, document construction,
+    /// or bounded encoding fails.
     pub fn encode_state(
+        &self,
+        limits: StateLimits,
+    ) -> Result<Vec<u8>, InstanceStateExportError> {
+        let document = self.state_document()?;
+        document
+            .encode_with_limits(limits)
+            .map_err(ParameterStateError::Encode)
+            .map_err(InstanceStateExportError::State)
+    }
+
+    /// Historical explicit-identity complete-state encoding.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParameterStateError`] if document construction or encoding fails.
+    pub fn encode_state_for_product(
         &self,
         product_id: impl Into<String>,
         product_schema: u32,
         limits: StateLimits,
     ) -> Result<Vec<u8>, ParameterStateError> {
-        self.state_document(product_id, product_schema)?
+        self.state_document_for_product(product_id, product_schema)?
             .encode_with_limits(limits)
             .map_err(ParameterStateError::Encode)
     }
@@ -978,8 +1065,8 @@ where
     /// Replace durable parameter state transactionally from a complete document.
     ///
     /// This compatibility path publishes framework-managed parameters only and
-    /// leaves the current custom product state unchanged. Prefer
-    /// [`Self::apply_state_for_product`] when loading a complete instance state.
+    /// leaves the current custom product state unchanged. Complete semantic state
+    /// should use [`Self::apply_state`].
     ///
     /// # Errors
     ///
@@ -996,7 +1083,33 @@ where
         Ok(())
     }
 
-    /// Replace the complete semantic instance state transactionally.
+    /// Replace complete semantic instance state using schema-owned identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InstanceSemanticStateError`] for missing identity, framework
+    /// state validation failures, or product validation failure. Publication is
+    /// atomic across parameter and custom state.
+    pub fn apply_state<E, F>(
+        &mut self,
+        document: &StateDocument,
+        validate_product_state: F,
+    ) -> Result<(), InstanceSemanticStateError<E>>
+    where
+        F: FnOnce(&ParameterStore, &[StateEntry]) -> Result<(), E>,
+    {
+        let (product_id, product_schema) = self.semantic_state_identity().ok_or(
+            InstanceSemanticStateError::Parameters(InstanceStateError::MissingStateIdentity),
+        )?;
+        self.apply_state_for_product(
+            document,
+            &product_id,
+            product_schema,
+            validate_product_state,
+        )
+    }
+
+    /// Historical explicit-identity complete semantic-state replacement.
     ///
     /// Framework parameters are validated into a temporary store. All
     /// non-`parameter/` entries are copied into a canonical temporary custom
@@ -1004,15 +1117,9 @@ where
     /// so products can validate cross-field invariants. Neither candidate is
     /// published until every framework and product check succeeds.
     ///
-    /// The callback runs only on control/non-realtime paths and must not retain
-    /// references to the temporary candidates.
-    ///
     /// # Errors
     ///
-    /// Returns [`InstanceSemanticStateError::Parameters`] for framework-managed
-    /// state failures or [`InstanceSemanticStateError::Product`] when the
-    /// product rejects the complete candidate state. The runtime is unchanged on
-    /// every failure.
+    /// Returns [`InstanceSemanticStateError`] on framework or product rejection.
     pub fn apply_state_for_product<E, F>(
         &mut self,
         document: &StateDocument,
@@ -1046,7 +1153,6 @@ where
     ///
     /// This compatibility path publishes framework-managed parameters only.
     /// Custom entries remain unchanged even though migration preserves them.
-    /// Decoding and migration are control/non-realtime operations.
     ///
     /// # Errors
     ///
@@ -1073,19 +1179,50 @@ where
             .map_err(InstanceStateLoadError::Apply)
     }
 
-    /// Decode, migrate, validate, and publish a complete semantic state.
+    /// Decode, migrate, validate, and publish complete semantic state using
+    /// schema-owned identity and schema version.
     ///
-    /// The byte document and each migration result remain temporary. The final
-    /// migrated parameter/custom candidates are validated together and become
-    /// live only after all checks succeed. Decoding, migration, and product
-    /// validation are control/non-realtime operations.
+    /// # Errors
+    ///
+    /// Returns [`InstanceSemanticStateLoadError`] for missing state identity,
+    /// bounded decode failures, migration failures, framework validation, or
+    /// product validation. The runtime is unchanged on failure.
+    pub fn apply_state_bytes<M, E, F>(
+        &mut self,
+        bytes: &[u8],
+        limits: StateLimits,
+        migrations: &[&M],
+        validate_product_state: F,
+    ) -> Result<(), InstanceSemanticStateLoadError<M::Error, E>>
+    where
+        M: StateMigration + ?Sized,
+        M::Error: std::error::Error + 'static,
+        E: std::error::Error + 'static,
+        F: FnOnce(&ParameterStore, &[StateEntry]) -> Result<(), E>,
+    {
+        let (product_id, product_schema) = self.semantic_state_identity().ok_or(
+            InstanceSemanticStateLoadError::Apply(InstanceSemanticStateError::Parameters(
+                InstanceStateError::MissingStateIdentity,
+            )),
+        )?;
+        self.apply_state_bytes_for_product(
+            bytes,
+            &product_id,
+            product_schema,
+            limits,
+            migrations,
+            validate_product_state,
+        )
+    }
+
+    /// Historical explicit-identity decoded semantic-state replacement.
     ///
     /// # Errors
     ///
     /// Returns [`InstanceSemanticStateLoadError`] for bounded decode failures,
     /// migration failures, framework parameter failures, or product-defined
-    /// semantic validation failures. The runtime is unchanged on every failure.
-    pub fn apply_state_bytes<M, E, F>(
+    /// semantic validation failures.
+    pub fn apply_state_bytes_for_product<M, E, F>(
         &mut self,
         bytes: &[u8],
         product_id: &str,
