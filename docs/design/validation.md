@@ -51,7 +51,6 @@ These gates do not establish production DAW behavior or representative performan
 
 Hosted workflows and local results are separate evidence. Before publication, hosted jobs were rejected and local checks supplied the interim record. Consult the actual workflow run for the revision under review before claiming Linux/macOS/Windows coverage. The dated validator, host, and benchmark results below are baselines, not automatic qualification of later commits.
 
-
 ### Local validation — 2026-09-07
 
 At code revision `bd0a153` on macOS arm64 with Rust 1.98.1:
@@ -84,14 +83,38 @@ The full adapter allocation test covers 1,000 f32 and 1,000 f64 callbacks with s
 
 ## Core conformance
 
-The format-independent proof remains split by concern while exercising the same public runtime model:
+The format-independent proof is split by concern while exercising the same public runtime model:
 
-- `crates/chassis-core/tests/conformance.rs`: schema rejection, lifecycle, buffer relationships, process bounds/context, base parameters, sample-accurate automation, invalid events, generic non-flat buffer-source traversal;
+- `crates/chassis-core/tests/conformance.rs`: schema rejection, lifecycle, buffer relationships, process bounds/context, base parameters, sample-accurate automation, invalid events, generic non-flat buffer-source traversal, and rejection of structurally valid but unsupported audio configurations;
+- `crates/chassis-core/tests/component_schema_runtime.rs`: one coherent schema snapshot, dense lookup, and schema-drift rejection;
+- `crates/chassis-core/tests/audio_endpoint_runtime.rs`: active/inactive port, direction, channel-range, and dense endpoint legality before product DSP;
+- `crates/chassis-core/tests/event_schema_runtime.rs` and `note_runtime.rs`: event-schema authority, dense note-port addressing, wildcard handling, and zero-audio note processing;
+- `crates/chassis-core/tests/instrument_runtime.rs`: event-driven instrument with no audio input, output-only stereo process buffers, and sample-positioned note on/off behavior;
+- `crates/chassis-core/tests/multi_output_runtime.rs`: multiple semantically distinct output buses routed by dense `AudioPortIndex` even when callback buffers arrive in a different order;
+- `crates/chassis-core/tests/layout_sidechain_runtime.rs`: one immutable schema reactivated across accepted mono and stereo+sidechain configurations, activation-derived resources, and policy rejection of a structurally valid unsupported combination;
+- `crates/chassis-core/tests/dynamic_metadata_runtime.rs`: audio/event keys, names, and capabilities created from runtime-owned metadata, then resolved to dense callback identities without strings in the process path;
+- `crates/chassis-core/tests/semantic_state.rs`: schema-owned complete semantic state, custom-state validation, transactional publication, and migration;
+- `crates/chassis-core/tests/state_adversarial.rs`: bounded hostile/truncated input, resource limits, failure atomicity, and current schema-owned complete-state loading;
 - `crates/chassis-core/tests/lifecycle_negative.rs`: product activation failure, state preservation, inactive post-failure state, successful reuse;
 - `crates/chassis-core/tests/realtime_alloc.rs`: repeated post-activation process calls with callback-thread allocation/deallocation counting;
 - `crates/chassis-core/tests/latency.rs`: activation-scoped latency snapshot/stability/removal/recomputation.
 
+Together these fixtures now exercise conventional effects, event-only processors, instruments, multi-output processors, multiple legal layouts/sidechains, dynamic/hosted schema metadata, direct non-plugin runtime use, and CLAP deployment through the same component/runtime ownership model. None required a second lifecycle, richer I/O-policy language, or mandatory helper family.
+
 Grow these public-contract tests as semantics are added; do not create a second conceptual runtime for adapters.
+
+## Component-schema / runtime migration checkpoint — 2026-09-12
+
+The following pre-alpha architecture changes were gated with workspace formatting, full tests, and strict all-target/all-feature Clippy before their semantic commits landed:
+
+- audio stable keys/names migrated to borrowed-or-owned setup metadata while callback endpoints remained dense-only;
+- event stable keys/names/dialect lists migrated to borrowed-or-owned setup metadata while note/event callback addressing remained dense-only;
+- schema-owned `AudioIoPolicy` added with policy-definition validation, policy drift checks, runtime activation enforcement, and CLAP setup enforcement;
+- conventional effect policy restricted to stereo main I/O with optional stereo sidechain rather than silently accepting arbitrary layouts;
+- runtime complete-state APIs consolidated on schema-owned identity, deleting runtime explicit-product-ID and parameter-only compatibility surfaces;
+- heterogeneous instrument, multi-output, layout/sidechain, and dynamic-metadata fixtures added.
+
+The resulting `ComponentSchema` / `InstanceRuntime` ownership shape is considered a candidate-stable architecture, not a published compatibility promise. Later graph/device/host/deployment clients may still reveal concrete semantic gaps.
 
 ## Active state-save contract
 
@@ -147,9 +170,11 @@ Executable current coverage includes:
 - activate/start/process/stop/deactivate;
 - process panic mapping to host processing failure followed by clean stop/deactivation;
 - repeated activation with changed sample rate/block bounds;
+- reactivation with a different policy-accepted audio layout;
+- rejection of structurally valid but policy-unsupported audio I/O before product activation;
 - processor transfer between host audio threads without simultaneous mutation;
 - repeated instance creation/destruction;
-- callback dimension/event rejection before product DSP;
+- callback dimension/event/endpoint rejection before product DSP;
 - main-thread synchronous host re-entry during state-rescan and latency-change calls.
 
 Pinned validator/fuzz additionally exercises lifecycle sequencing.
@@ -172,7 +197,7 @@ If Chassis later owns unsafe adapter code, isolate it, document discharged invar
 
 ## Re-entrancy evidence
 
-The exact Clack pin is required because published 0.1.1 predates the main-thread re-entrancy safety fix. Chassis now exercises the relevant behavior directly:
+The exact Clack pin is required because published 0.1.1 predates the main-thread re-entrancy safety fix. Chassis exercises the relevant behavior directly:
 
 - state load calls the host parameter-rescan extension;
 - the host immediately re-enters plugin extension discovery;
@@ -202,6 +227,8 @@ Still required for production PDC claims:
 ## State/adversarial tests
 
 Treat host state as untrusted bytes. Keep coverage for malformed/truncated/oversized input, invalid types/numerics, wrong product/schema, unknown parameters, migration chains, resource exhaustion, and failed loads leaving live state unchanged.
+
+`InstanceRuntime` complete-state export/load now derives identity/version from its `ComponentSchema`; runtime explicit-product-ID and parameter-only compatibility APIs are removed. Lower parameter-store serialization helpers do not constitute a second component identity authority.
 
 Retain golden fixtures for every released schema. The current CHSS envelope remains pre-v1 until production-host and cross-format state gates are complete.
 
