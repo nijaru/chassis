@@ -29,6 +29,11 @@ InstanceRuntime
   |- active processor + latency/configuration
   `- schema drift rejection before activation
 
+ActivationConfig
+  |- process resource bounds
+  |- accepted audio configuration
+  `- exact runtime-frozen ComponentSchema generation
+
 Processor / ProcessBlock
   |- AudioPortIndex + channel endpoints
   |- EventPortIndex note/event addressing
@@ -42,6 +47,7 @@ Implemented details include:
 - one immutable schema snapshot owned by `InstanceRuntime`;
 - activation rejection for audio/event/parameter/state-identity drift;
 - runtime-owned semantic state identity/version for complete save/load/migration APIs;
+- the exact runtime-frozen schema exposed through `ActivationConfig::schema()` so processor setup never needs to regenerate component metadata;
 - stable audio keys resolved to `AudioPortIndex` before processing;
 - `ResolvedAudioIoConfiguration` for activation-local port/layout/direction legality;
 - `InputEndpoint` / `OutputEndpoint` containing only dense `AudioPortIndex` plus channel;
@@ -129,12 +135,12 @@ pub trait Component {
     type Processor: Processor;
     type ActivationError;
 
-    fn schema(&self) -> &ComponentSchema;
+    fn schema(&self) -> Result<ComponentSchema, ComponentSchemaError>;
     fn activate_with_state(...) -> Result<Self::Processor, Self::ActivationError>;
 }
 ```
 
-The exact borrowing/ownership spelling is still open. The invariant is not: there should be one semantic authority.
+Returning a validated schema by value is acceptable because schema construction is a setup/control-domain operation. `InstanceRuntime` snapshots that result immutably, and `ActivationConfig::schema()` gives activation code the exact frozen generation rather than asking product code to reconstruct it again.
 
 A dynamic component assembled at runtime must be representable. Core schema identity therefore must not require every name/key to be an `&'static str` merely because plugin definitions are commonly static.
 
