@@ -13,9 +13,7 @@ use chassis_core::{
     audio::{AudioIoConfiguration, AudioPortDescriptor},
     automation::ParameterEvents,
     buffer::ChannelBuffer,
-    events::{
-        EventPortIndex, NormalizedValue, NoteAddress, NoteEvent, NoteEventKind, NoteEvents,
-    },
+    events::{EventPortIndex, NormalizedValue, NoteAddress, NoteEvent, NoteEventKind, NoteEvents},
     process::{
         ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessConfig, ProcessContext,
         ProcessMode, TransportSnapshot,
@@ -61,8 +59,10 @@ impl Process<f32> for NoteProbeProcessor {
             .iter()
             .filter(|event| matches!(event.kind(), NoteEventKind::On { .. }))
             .count();
-        self.observed_note_ons
-            .store(u32::try_from(note_ons).expect("event bound fits u32"), Ordering::Release);
+        self.observed_note_ons.store(
+            u32::try_from(note_ons).expect("event bound fits u32"),
+            Ordering::Release,
+        );
     }
 }
 
