@@ -32,7 +32,12 @@ impl Component for DelayedProbeEffect {
         &self,
     ) -> Result<chassis_core::schema::ComponentSchema, chassis_core::schema::ComponentSchemaError>
     {
-        chassis_core::schema::ComponentSchema::stereo_effect(vec![])
+        chassis_core::schema::ComponentSchema::stereo_effect_with_state(
+            chassis_core::schema::ComponentId::new("org.nijaru.chassis.semantic.examples.clap-delayed-probe.src.lib.delayedprobeeffect")
+                .expect("semantic component identity is valid"),
+            chassis_core::schema::StateSchemaVersion::new(1),
+            vec![],
+        )
     }
 
     fn activate(

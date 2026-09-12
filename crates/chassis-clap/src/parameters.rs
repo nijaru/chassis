@@ -6,6 +6,7 @@ use chassis_core::{
         ChoiceId, ChoiceOption, ParameterDescriptor, ParameterIndex, ParameterKind, ParameterValue,
         ParameterValuesMut,
     },
+    schema::StateIdentity,
     state::{
         StateDocument, StateDocumentError, StateEncodeError, StateEntry, StateLimits, StateValue,
     },
@@ -395,14 +396,6 @@ impl ClapParameterState {
         &self.bindings
     }
 
-    pub(crate) fn matches_descriptors(&self, descriptors: &[ParameterDescriptor]) -> bool {
-        descriptors.len() == self.bindings.len()
-            && descriptors
-                .iter()
-                .zip(&self.bindings)
-                .all(|(descriptor, binding)| descriptor == binding.descriptor())
-    }
-
     fn index_for_id(&self, id: ClapId) -> Option<usize> {
         self.id_lookup
             .binary_search_by_key(&id, |index| self.bindings[*index].id)
@@ -548,16 +541,16 @@ impl ClapParameterState {
 
     pub(crate) fn encode_state(
         &self,
-        product_id: &str,
-        product_schema: u32,
+        identity: &StateIdentity,
         limits: StateLimits,
     ) -> Result<Vec<u8>, ParameterStateError> {
         let mut values = vec![0.0; self.publication.len()];
         self.publication
             .snapshot_control_into(&mut values)
             .map_err(publication_state_error)?;
-        let mut document = StateDocument::new(product_id, product_schema)
-            .map_err(ParameterStateError::Document)?;
+        let mut document =
+            StateDocument::new(identity.component().as_str(), identity.schema().get())
+                .map_err(ParameterStateError::Document)?;
         for (binding, value) in self.bindings.iter().zip(values) {
             let state_value = binding
                 .state_value(value)
@@ -577,13 +570,12 @@ impl ClapParameterState {
     pub(crate) fn apply_state(
         &self,
         document: &StateDocument,
-        product_id: &str,
-        product_schema: u32,
+        identity: &StateIdentity,
     ) -> Result<(), ParameterStateError> {
-        if document.product_id() != product_id {
+        if document.product_id() != identity.component().as_str() {
             return Err(ParameterStateError::ProductIdentityMismatch);
         }
-        if document.product_schema() != product_schema {
+        if document.product_schema() != identity.schema().get() {
             return Err(ParameterStateError::ProductSchemaMismatch);
         }
         let mut candidate: Vec<_> = self
@@ -749,9 +741,17 @@ mod tests {
     use chassis_core::{
         automation::{ParameterEventChange, ParameterEvents},
         parameters::{ChoiceId, ChoiceOption, ParameterDescriptor, ParameterStore},
+        schema::{ComponentId, StateSchemaVersion},
         state::StateEntry,
     };
     use clack_plugin::events::Pckn;
+
+    fn state_identity() -> StateIdentity {
+        StateIdentity::new(
+            ComponentId::new("com.example.test").expect("semantic identity is valid"),
+            StateSchemaVersion::new(1),
+        )
+    }
 
     fn descriptors() -> Vec<ParameterDescriptor> {
         vec![
@@ -1001,7 +1001,7 @@ mod tests {
             .expect("entry is structurally valid");
 
         assert!(matches!(
-            state.apply_state(&document, "com.example.test", 1),
+            state.apply_state(&document, &state_identity()),
             Err(ParameterStateError::InvalidValue)
         ));
         assert!((state.value(0) - 0.75).abs() <= f64::EPSILON);
@@ -1019,7 +1019,7 @@ mod tests {
             .expect("entry is structurally valid");
 
         assert!(matches!(
-            state.apply_state(&document, "com.example.test", 1),
+            state.apply_state(&document, &state_identity()),
             Err(ParameterStateError::IncompleteParameterState {
                 expected: 3,
                 actual: 1
@@ -1037,7 +1037,7 @@ mod tests {
         assert!(state.apply_plain_value(ClapId::new(1), 0.75));
         assert!(state.apply_plain_value(ClapId::new(3), 1.0));
         let encoded = state
-            .encode_state("com.example.test", 1, StateLimits::default())
+            .encode_state(&state_identity(), StateLimits::default())
             .expect("state encodes");
         let document = StateDocument::decode(&encoded).expect("state decodes");
 
@@ -1046,7 +1046,7 @@ mod tests {
             ClapParameterState::new(&descriptors, &[("gain", 1), ("steps", 2), ("bypass", 3)])
                 .expect("parameter mapping is valid");
         restored
-            .apply_state(&document, "com.example.test", 1)
+            .apply_state(&document, &state_identity())
             .expect("state applies");
         assert!((restored.value(0) - 0.75).abs() <= f64::EPSILON);
         assert!((restored.value(2) - 1.0).abs() <= f64::EPSILON);
@@ -1158,7 +1158,7 @@ mod tests {
             .expect("parameter mapping is valid");
         assert!(state.apply_plain_value(ClapId::new(2), 2.0));
         let encoded = state
-            .encode_state("com.example.test", 1, StateLimits::default())
+            .encode_state(&state_identity(), StateLimits::default())
             .expect("state encodes");
         let document = StateDocument::decode(&encoded).expect("state decodes");
 
@@ -1174,7 +1174,7 @@ mod tests {
         let restored = ClapParameterState::new(&descriptors, &[("gain", 1), ("mode", 2)])
             .expect("parameter mapping is valid");
         restored
-            .apply_state(&document, "com.example.test", 1)
+            .apply_state(&document, &state_identity())
             .expect("state applies");
         assert!((restored.value(1) - 2.0).abs() <= f64::EPSILON);
 
@@ -1190,7 +1190,7 @@ mod tests {
             ))
             .expect("entry is structurally valid");
         assert!(matches!(
-            restored.apply_state(&corrupt, "com.example.test", 1),
+            restored.apply_state(&corrupt, &state_identity()),
             Err(ParameterStateError::InvalidValue)
         ));
         assert!((restored.value(1) - 2.0).abs() <= f64::EPSILON);

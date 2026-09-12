@@ -225,6 +225,25 @@ impl ComponentSchema {
         Self::unidentified(DEFAULT_EFFECT_PORTS.to_vec(), Vec::new(), parameters)
     }
 
+    /// Construct a conventional stereo-effect schema with semantic state identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ComponentSchemaError`] when the supplied parameter schema is invalid.
+    pub fn stereo_effect_with_state(
+        id: ComponentId,
+        state_schema: StateSchemaVersion,
+        parameters: Vec<ParameterDescriptor>,
+    ) -> Result<Self, ComponentSchemaError> {
+        Self::new(
+            id,
+            state_schema,
+            DEFAULT_EFFECT_PORTS.to_vec(),
+            Vec::new(),
+            parameters,
+        )
+    }
+
     fn build(
         state_identity: Option<StateIdentity>,
         audio_ports: Vec<AudioPortDescriptor>,

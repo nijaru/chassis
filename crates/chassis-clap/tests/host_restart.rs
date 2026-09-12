@@ -38,7 +38,14 @@ impl Component for DelayedProbe {
         &self,
     ) -> Result<chassis_core::schema::ComponentSchema, chassis_core::schema::ComponentSchemaError>
     {
-        chassis_core::schema::ComponentSchema::stereo_effect(self.parameters.clone())
+        chassis_core::schema::ComponentSchema::stereo_effect_with_state(
+            chassis_core::schema::ComponentId::new(
+                "org.nijaru.chassis.semantic.crates.chassis-clap.tests.host-restart.delayedprobe",
+            )
+            .expect("semantic component identity is valid"),
+            chassis_core::schema::StateSchemaVersion::new(1),
+            self.parameters.clone(),
+        )
     }
 
     fn activate(
@@ -346,8 +353,10 @@ fn state_load_requests_restart_before_processing_and_reactivation_uses_loaded_st
     let state = handle.get_extension::<PluginState>().unwrap();
     assert!(state.load(&handle, &mut b"invalid".as_slice()).is_err());
     assert_eq!(requests.load(Ordering::Relaxed), 0);
+    let schema = DelayedProbe::default().schema().unwrap();
+    let identity = schema.state_identity().unwrap();
     let mut document =
-        StateDocument::new(DelayedProbe::CLAP_ID, DelayedProbe::CLAP_STATE_SCHEMA).unwrap();
+        StateDocument::new(identity.component().as_str(), identity.schema().get()).unwrap();
     document
         .insert(StateEntry::new("parameter/phase", StateValue::Float(1.0)))
         .unwrap();

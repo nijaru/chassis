@@ -27,6 +27,7 @@ use chassis_core::{
     parameters::{ChoiceOption, ParameterKind},
     process::{ProcessConfig, ProcessContext, ProcessMode, TransportSnapshot},
     runtime::{Component, InstanceRuntime, Process as ChassisProcess, Processor},
+    schema::ComponentSchema,
     state::{StateDocument, StateLimits},
 };
 use clack_extensions::{
@@ -89,8 +90,8 @@ pub trait ClapStereoEffect: Component + Default + 'static {
 
     /// Stable CLAP parameter IDs keyed by canonical Chassis parameter key.
     ///
-    /// The mapping must contain exactly one entry for every descriptor returned
-    /// by [`Component::parameter_descriptors`]. Float, integer, boolean, and
+    /// The mapping must contain exactly one entry for every parameter in the
+    /// component [`ComponentSchema`]. Float, integer, boolean, and
     /// choice descriptors are projected; choices use their stepped plain index
     /// for CLAP while Chassis retains stable semantic option identity in state.
     const CLAP_PARAMETER_IDS: &'static [(&'static str, u32)] = &[];
@@ -107,9 +108,6 @@ pub trait ClapStereoEffect: Component + Default + 'static {
     /// capacity. Process rejects oversized batches; flush ignores the complete
     /// batch because CLAP provides no failure return for that callback.
     const CLAP_MAX_INPUT_EVENTS: u32 = 1024;
-
-    /// Chassis parameter-state schema version projected through CLAP state.
-    const CLAP_STATE_SCHEMA: u32 = 1;
 }
 
 /// Precision capability marker for a CLAP export that accepts only f32 audio.
@@ -153,6 +151,7 @@ impl RenderState {
 /// independent adapter-local synchronization paths. The audio-domain
 /// [`InstanceRuntime`] remains the semantic runtime authority while active.
 pub struct ChassisShared {
+    schema: Arc<ComponentSchema>,
     parameters: Arc<ClapParameterState>,
     render: Arc<RenderState>,
 }
@@ -162,6 +161,7 @@ impl PluginShared<'_> for ChassisShared {}
 /// Main-thread owner of the format-independent Chassis component definition.
 pub struct ChassisMainThread<'host, C> {
     component: C,
+    schema: Arc<ComponentSchema>,
     audio: ClapAudioConfiguration,
     shared: Arc<ClapParameterState>,
     render: Arc<RenderState>,
@@ -274,6 +274,11 @@ where
     let schema = component
         .schema()
         .map_err(|_| PluginError::Message("Invalid Chassis component schema"))?;
+    if schema.state_identity().is_none() {
+        return Err(PluginError::Message(
+            "CLAP state projection requires semantic component state identity",
+        ));
+    }
     if !schema.parameters().is_empty() && C::CLAP_MAX_PARAMETER_EVENTS == 0 {
         return Err(PluginError::Message(
             "CLAP parameter projection requires a positive event bound",
@@ -288,6 +293,7 @@ where
         .map_err(|error| parameter_mapping_error(&error))?
         .with_input_event_bound(C::CLAP_MAX_INPUT_EVENTS);
     Ok(ChassisShared {
+        schema: Arc::new(schema),
         parameters: Arc::new(parameters),
         render: Arc::new(RenderState::default()),
     })
@@ -305,18 +311,19 @@ where
     let schema = component
         .schema()
         .map_err(|_| PluginError::Message("Invalid Chassis component schema"))?;
-    if !shared.parameters.matches_descriptors(schema.parameters()) {
+    if schema != *shared.schema {
         return Err(PluginError::Message(
             "CLAP component schema changed between shared and main-thread construction",
         ));
     }
-    let mut audio = ClapAudioConfiguration::new(schema.audio_ports(), C::CLAP_AUDIO_PORTS)
+    let mut audio = ClapAudioConfiguration::new(shared.schema.audio_ports(), C::CLAP_AUDIO_PORTS)
         .map_err(|error| audio_mapping_error(&error))?;
     if supports_f64 {
         audio = audio.with_f64_support();
     }
     Ok(ChassisMainThread {
         component,
+        schema: Arc::clone(&shared.schema),
         audio,
         shared: Arc::clone(&shared.parameters),
         render: Arc::clone(&shared.render),
@@ -340,17 +347,8 @@ where
     C: ClapStereoEffect<Processor = P>,
     P: Processor,
 {
-    let schema = main_thread
-        .component
-        .schema()
-        .map_err(|_| PluginError::Message("Invalid Chassis component schema"))?;
-    if !shared.parameters.matches_descriptors(schema.parameters()) {
-        return Err(PluginError::Message(
-            "CLAP component schema does not match its parameter projection",
-        ));
-    }
     let process = map_process_config(audio_config, C::CLAP_MAX_PARAMETER_EVENTS)?;
-    let runtime = InstanceRuntime::from_schema(schema)
+    let runtime = InstanceRuntime::from_schema((*main_thread.schema).clone())
         .map_err(|_| PluginError::Message("Invalid Chassis instance runtime"))?;
 
     let maximum_events = usize::try_from(C::CLAP_MAX_PARAMETER_EVENTS)
@@ -555,9 +553,13 @@ where
     C: ClapStereoEffect,
 {
     fn save(&self, output: &mut OutputStream) -> Result<(), PluginError> {
+        let identity = self
+            .schema
+            .state_identity()
+            .ok_or(PluginError::Message("CLAP state identity is unavailable"))?;
         let encoded = self
             .shared
-            .encode_state(C::CLAP_ID, C::CLAP_STATE_SCHEMA, StateLimits::default())
+            .encode_state(identity, StateLimits::default())
             .map_err(|error| state_error(&error))?;
         write_bounded_state(output, &encoded)
     }
@@ -567,8 +569,12 @@ where
         let encoded = read_bounded_state(input, limits.max_total_bytes)?;
         let document =
             StateDocument::decode_with_limits(&encoded, limits).map_err(PluginError::from)?;
+        let identity = self
+            .schema
+            .state_identity()
+            .ok_or(PluginError::Message("CLAP state identity is unavailable"))?;
         self.shared
-            .apply_state(&document, C::CLAP_ID, C::CLAP_STATE_SCHEMA)
+            .apply_state(&document, identity)
             .map_err(|error| state_error(&error))?;
         // A loaded state replaces host-visible plain values; CLAP requires the
         // plugin to request a value rescan rather than assuming hosts poll.

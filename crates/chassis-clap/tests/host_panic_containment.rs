@@ -56,7 +56,12 @@ impl Component for ActivationPanicProbe {
         &self,
     ) -> Result<chassis_core::schema::ComponentSchema, chassis_core::schema::ComponentSchemaError>
     {
-        chassis_core::schema::ComponentSchema::stereo_effect(vec![])
+        chassis_core::schema::ComponentSchema::stereo_effect_with_state(
+            chassis_core::schema::ComponentId::new("org.nijaru.chassis.semantic.crates.chassis-clap.tests.host-panic-containment.activationpanicprobe")
+                .expect("semantic component identity is valid"),
+            chassis_core::schema::StateSchemaVersion::new(1),
+            vec![],
+        )
     }
 
     fn activate(
@@ -135,7 +140,12 @@ impl Component for ProcessPanicProbe {
         &self,
     ) -> Result<chassis_core::schema::ComponentSchema, chassis_core::schema::ComponentSchemaError>
     {
-        chassis_core::schema::ComponentSchema::stereo_effect(vec![])
+        chassis_core::schema::ComponentSchema::stereo_effect_with_state(
+            chassis_core::schema::ComponentId::new("org.nijaru.chassis.semantic.crates.chassis-clap.tests.host-panic-containment.processpanicprobe")
+                .expect("semantic component identity is valid"),
+            chassis_core::schema::StateSchemaVersion::new(1),
+            vec![],
+        )
     }
 
     fn activate(

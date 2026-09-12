@@ -102,7 +102,12 @@ impl Component for ProbeComponent {
         &self,
     ) -> Result<chassis_core::schema::ComponentSchema, chassis_core::schema::ComponentSchemaError>
     {
-        chassis_core::schema::ComponentSchema::stereo_effect(self.parameters.clone())
+        chassis_core::schema::ComponentSchema::stereo_effect_with_state(
+            chassis_core::schema::ComponentId::new("org.nijaru.chassis.semantic.crates.chassis-clap.tests.host-conformance.probecomponent")
+                .expect("semantic component identity is valid"),
+            chassis_core::schema::StateSchemaVersion::new(1),
+            self.parameters.clone(),
+        )
     }
 
     fn activate(
