@@ -11,7 +11,7 @@ use core::convert::Infallible;
 
 use chassis_clap::{ClapStereoEffect, SingleComponentEntry, clack_export_entry};
 use chassis_core::{
-    audio::{MAIN_INPUT, MAIN_OUTPUT},
+    audio::{AudioPortIndex, MAIN_INPUT, MAIN_OUTPUT, audio_port_index},
     process::{ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessChannel},
     runtime::{Component, LatencySamples, Process, Processor},
 };
@@ -40,6 +40,10 @@ impl Component for DelayedProbeEffect {
         let length = usize::try_from(samples).expect("probe latency fits usize");
         Ok(DelayedProcessor {
             latency: LatencySamples::new(samples),
+            main_input: audio_port_index(self.audio_ports(), MAIN_INPUT)
+                .expect("default effect schema has main input"),
+            main_output: audio_port_index(self.audio_ports(), MAIN_OUTPUT)
+                .expect("default effect schema has main output"),
             delay: [vec![0.0; length], vec![0.0; length]],
             positions: [0, 0],
         })
@@ -48,6 +52,8 @@ impl Component for DelayedProbeEffect {
 
 struct DelayedProcessor {
     latency: LatencySamples,
+    main_input: AudioPortIndex,
+    main_output: AudioPortIndex,
     delay: [Vec<f32>; 2],
     positions: [usize; 2],
 }
@@ -66,10 +72,10 @@ impl Process<f32> for DelayedProcessor {
         for mut channel in block.channels() {
             let is_main = channel
                 .input_endpoint()
-                .is_some_and(|endpoint| endpoint.port() == MAIN_INPUT)
+                .is_some_and(|endpoint| endpoint.port_index() == Some(self.main_input))
                 && channel
                     .output_endpoint()
-                    .is_some_and(|endpoint| endpoint.port() == MAIN_OUTPUT);
+                    .is_some_and(|endpoint| endpoint.port_index() == Some(self.main_output));
             if !is_main {
                 continue;
             }
