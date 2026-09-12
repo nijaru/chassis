@@ -4,16 +4,20 @@ This file tracks the next implementation order on `main`. It is not an API compa
 
 ## Current checkpoint
 
-The format-independent runtime and native CLAP adapter are implemented and qualified enough that the next work should be driven by the complete audio-framework architecture, not by an existing product migration.
+The format-independent runtime and native CLAP foundation are implemented and qualified enough that the remaining work should be driven by the complete audio-framework architecture, not by an existing product migration.
 
 Current executable foundation includes:
 
-- `Component -> InstanceRuntime<P> -> Processor` lifecycle/state ownership;
-- generic safe audio buffer sources with arbitrary mapped audio ports in current mono/stereo layout semantics;
-- f32/f64 processing;
-- typed parameters, sample-accurate automation, transactional state, activation-scoped latency, restart signaling, and realtime/buffered/offline process modes;
+- one coherent `Component -> ComponentSchema -> InstanceRuntime<P> -> Processor` ownership model;
+- neutral core semantics with explicit conventional effect helpers;
+- owned-capable audio/event metadata with stable setup identity and dense callback identity;
+- activation-owned `AudioIoPolicy`, structural validation, dense endpoint resolution, and callback endpoint legality;
+- direct runtime proofs for conventional effects, zero-audio event processors, an event-driven instrument, multiple output buses, multiple legal layouts with sidechain, and runtime-owned dynamic/hosted metadata;
+- f32/f64 processing and generic safe audio buffer sources;
+- typed parameters, sample-accurate automation, transactional complete semantic state, activation-scoped latency, restart signaling, and realtime/buffered/offline process modes;
+- schema-owned semantic state identity with proof-era runtime explicit-ID/parameter-only compatibility paths removed;
 - `chassis-core::telemetry::F32Telemetry`, concurrency tests, measured callback allocation/deallocation coverage, and a public meter fixture;
-- stable event-port schema/identity, runtime-owned event-port validation, dense activation-local indices, wildcard-aware semantic note addressing, bounded note input in `ProcessContext`/`ProcessBlock`, and public runtime fixtures;
+- semantic note-port/note-input foundations with dense activation-local indices;
 - native CLAP deployment through pinned Clack with headless conformance and recorded REAPER evidence.
 
 Existing Tonal EQ, delayed-probe, and conformance coverage remain regressions/evidence. They are not architectural authorities.
@@ -22,46 +26,48 @@ The [validation guide](design/validation.md) owns executed evidence. The high-le
 
 ## Execution principle
 
-Chassis is unpublished pre-alpha. Refactor aggressively when existing implementation choices encode temporary proof limits, effect/plugin assumptions, duplicated authority, or weak ownership semantics.
+Chassis is unpublished pre-alpha. Refactor aggressively when implementation choices encode duplicated authority, weak ownership semantics, or concrete proof limits.
 
-Do not rewrite working code merely because it is old. Preserve implementations whose semantics already fit the target architecture and whose tests provide useful evidence.
+Do not rewrite working code merely because it is old. Preserve implementations whose semantics fit the target architecture and whose tests provide useful evidence.
 
 Use small purpose-built fixtures to prove framework behavior. Product-specific DSP, synth engines, restoration/ML algorithms, DAW document models, timelines, arrangements, mixer UX, and product workflows stay outside Chassis.
 
+The core schema/runtime ownership model is now candidate-stable. Do not reopen it to add speculative policy languages, constructor families, or metadata abstractions without a concrete client that cannot be expressed cleanly.
+
 ## Slice 0 — semantic audit and proof-era cleanup
 
-Status: **immediate.**
+Status: **complete for the core ownership/schema migration.**
 
-Audit the existing public surface against `docs/architecture.md` before adding more layers.
+Completed:
 
-Primary targets:
+- removed the implicit stereo-effect `Component` default;
+- established one coherent `Component::schema()` authority;
+- removed proof-order runtime constructors;
+- moved audio/event processing identity to dense indices;
+- made audio/event schema metadata runtime-ownable without callback strings;
+- added schema-owned whole-audio-I/O policy and activation enforcement;
+- separated semantic state identity from deployment identity;
+- removed runtime explicit-product-ID and parameter-only state compatibility APIs;
+- exercised event-only, instrument, multi-output, multi-layout/sidechain, direct embedded, dynamic-metadata, and CLAP clients through the same runtime model.
 
-1. remove the assumption that a core `Component` is inherently a conventional stereo effect;
-2. retain convenient conventional effect helpers/constants above neutral core semantics;
-3. identify/rename temporary adapter concepts such as `ClapStereoEffect` whose names or APIs encode the first proof target rather than actual format capability;
-4. ensure event/audio/parameter schemas have one durable authority and dense indices remain derived process-time identities;
-5. remove duplicated product/state identity authority from deployment adapters as the canonical identity/tooling path becomes executable;
-6. delete compatibility shims that exist only for unpublished intermediate APIs;
-7. update examples/tests to use the intended author-facing shape rather than relying on accidental defaults.
-
-Gate every refactor with workspace fmt/test/Clippy, realtime allocation evidence where relevant, CLAP conformance, and existing behavioral fixtures.
+Remaining adapter names or facades that encode the first CLAP proof target, such as `ClapStereoEffect`, should be generalized when a real non-effect CLAP deployment is implemented. Do not churn them in isolation before the replacement capability is executable.
 
 ## Slice 1 — core authoring/API closure
 
-After the semantic audit, close the remaining cross-cutting pre-v1 core gaps:
+Status: **current priority.**
 
-- ergonomic `Component` -> `InstanceRuntime` construction while preserving explicit validation;
-- semantic whole-I/O configuration for multiple legal layouts;
-- recurring bus/port access ergonomics without hiding buffer legality;
-- canonical product/state/export identity ownership independent of adapters;
-- parameter formatting/value mapping with explicit round-trip/domain tests;
-- sample-accurate modulation distinct from durable/base state;
-- common tail/bypass semantics where environments can map them faithfully;
-- explicit process/application capability queries only where semantics genuinely vary by environment.
+The remaining cross-cutting core contracts are:
 
-Do not add proc macros or derives until these contracts settle.
+1. parameter formatting/value mapping with explicit domain and round-trip tests;
+2. sample-accurate modulation as a process-time concept distinct from durable/base state and ordinary automation;
+3. common tail semantics;
+4. bypass semantics, including whether hard/soft/product bypass need distinct capabilities;
+5. bus/port convenience only where current instrument/multi-output/layout proofs show repeated mechanical cost without hiding legality;
+6. explicit capability queries only where an environment genuinely needs to distinguish semantics.
 
-Validation fixtures: gain, delay, sidechain, zero-audio event processor, and layout-switching processor.
+Do not add proc macros, derives, a richer I/O-policy language, or generalized component helper families unless these concrete contracts demonstrate the need.
+
+Validation fixtures for the schema/runtime shape are already present. New Slice 1 fixtures should target the new behavior itself: formatting/mapping round trips, automation + modulation interaction, tail reporting, and bypass behavior.
 
 ## Slice 2 — realtime communication and background lifecycle
 
@@ -85,20 +91,22 @@ Remaining:
 
 Do not generalize this into a lock-free container library or hidden global executor.
 
-## Slice 3 — events, MIDI, instruments, and modulation
+## Slice 3 — events, MIDI, instruments, and modulation projection
 
-Status: **core note-input foundation implemented; adapters/output/expression remain.**
+Status: **core note-input and instrument-shape foundations implemented; adapters/output/expression remain.**
 
 Implemented:
 
-- stable event-port keys/schema and runtime authority;
+- owned-capable event-port keys/schema and runtime authority;
 - input/output directions and semantic dialect declarations;
 - dense activation-local event-port lookup;
 - note IDs/channels/keys and wildcard-aware addressing;
 - semantic note on/off/choke/end events;
 - bounded borrowed note-event validation and process exposure;
 - validation against runtime event-port direction/dialect capabilities;
-- zero-audio/public runtime fixtures.
+- zero-audio event-processor fixture;
+- event-driven instrument with output-only stereo audio;
+- multi-output runtime fixture.
 
 Remaining:
 
@@ -106,10 +114,13 @@ Remaining:
 - note tuning and expression dimensions;
 - raw MIDI 1/SysEx;
 - MIDI 2/UMP representation without destructive down-conversion;
-- sample-accurate parameter modulation;
+- deployment projection of the Slice 1 modulation contract;
 - bounded output event sink and note-end output;
 - typed span/change-boundary processing without inventing one cross-family total order;
-- synth, event-transform, and multi-output fixtures.
+- high-event-count allocation/work evidence;
+- event-transform and fuller synth fixtures through actual deployment adapters.
+
+Implementing a non-effect CLAP fixture here is the right time to replace/generalize `ClapStereoEffect` and any remaining effect-shaped adapter facade.
 
 ## Slice 4 — common DSP foundation
 
@@ -226,9 +237,9 @@ Before a stable public release:
 - performance/regression harnesses;
 - examples/templates spanning plugins, instruments, standalone, graph, host, worker, and offline render;
 - complete API/reference documentation with realtime/lifecycle guarantees;
-- explicit stability policy and semver/MSRV policy.
+- explicit stability policy and semver/MSRV/state policy.
 
-Do not freeze public APIs or CHSS compatibility merely because implementation exists. Freeze after the supported surface has been exercised across materially different clients.
+Do not freeze the entire public API or CHSS compatibility merely because the schema/runtime ownership layer is now a candidate-stable architecture. Freeze each supported surface after the actual outer layers exercise it.
 
 ## Existing validation retained
 
@@ -242,7 +253,11 @@ Keep useful existing evidence:
 - Tonal EQ parameter-scale/automation/state/latency/differential tests where they prove framework behavior;
 - delayed probe for latency/PDC;
 - meter telemetry fixture;
-- semantic note/event runtime fixtures.
+- semantic note/event runtime fixtures;
+- instrument output-only fixture;
+- multi-output dense-routing fixture;
+- layout/sidechain reactivation + policy fixture;
+- runtime-owned dynamic metadata fixture.
 
 Tonal EQ product redesign or parity beyond framework evidence is not a Chassis milestone.
 
