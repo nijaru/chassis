@@ -11,13 +11,14 @@ use std::{
 };
 
 use chassis_core::{
-    audio::DEFAULT_EFFECT_CONFIGURATION,
+    audio::{DEFAULT_EFFECT_CONFIGURATION, DEFAULT_EFFECT_PORTS},
     parameters::{ParameterDescriptor, ParameterStore, ParameterValue},
     process::{ActivationConfig, ProcessConfig},
     runtime::{
         Component, InstanceRuntime, InstanceSemanticStateError, InstanceSemanticStateLoadError,
         Processor,
     },
+    schema::{ComponentId, ComponentSchema, StateSchemaVersion},
     state::{StateDocument, StateEntry, StateLimits, StateMigration, StateValue},
 };
 
@@ -48,6 +49,16 @@ impl Component for StateAwareEffect {
 
     fn parameter_descriptors(&self) -> &[ParameterDescriptor] {
         &self.parameters
+    }
+
+    fn schema(&self) -> Result<ComponentSchema, chassis_core::schema::ComponentSchemaError> {
+        ComponentSchema::new(
+            ComponentId::new("com.example.semantic").expect("component identity is valid"),
+            StateSchemaVersion::new(2),
+            DEFAULT_EFFECT_PORTS.to_vec(),
+            vec![],
+            self.parameters.clone(),
+        )
     }
 
     fn activate(
@@ -120,10 +131,8 @@ fn complete_state_is_committed_saved_and_visible_to_activation() {
     let document = complete_document(2, 0.25, true);
 
     runtime
-        .apply_state_for_product(
+        .apply_state(
             &document,
-            "com.example.semantic",
-            2,
             |parameters, custom_state| -> Result<(), Infallible> {
                 assert_eq!(parameters.get("gain"), Some(&ParameterValue::Float(0.25)));
                 assert_eq!(quality(custom_state), Some(true));
@@ -138,9 +147,9 @@ fn complete_state_is_committed_saved_and_visible_to_activation() {
     );
     assert_eq!(quality(runtime.custom_state()), Some(true));
 
-    let saved = runtime
-        .state_document("com.example.semantic", 2)
-        .expect("complete state exports");
+    let saved = runtime.state_document().expect("complete state exports");
+    assert_eq!(saved.product_id(), "com.example.semantic");
+    assert_eq!(saved.product_schema(), 2);
     assert_eq!(saved.entries().len(), 2);
     assert_eq!(
         saved
@@ -177,18 +186,14 @@ fn product_validation_failure_is_atomic_across_parameters_and_custom_state() {
         InstanceRuntime::for_component(&component).expect("runtime schema is valid");
 
     runtime
-        .apply_state_for_product(
+        .apply_state(
             &complete_document(2, 1.5, false),
-            "com.example.semantic",
-            2,
             |_parameters, _custom_state| Ok::<(), Infallible>(()),
         )
         .expect("initial complete state applies");
 
-    let result = runtime.apply_state_for_product(
+    let result = runtime.apply_state(
         &complete_document(2, 0.25, true),
-        "com.example.semantic",
-        2,
         |parameters, custom_state| {
             assert_eq!(parameters.get("gain"), Some(&ParameterValue::Float(0.25)));
             assert_eq!(quality(custom_state), Some(true));
@@ -260,8 +265,6 @@ fn migrated_byte_load_publishes_parameters_and_custom_state_together() {
     runtime
         .apply_state_bytes(
             &bytes,
-            "com.example.semantic",
-            2,
             StateLimits::default(),
             &[&migration],
             |_parameters, custom_state| {
@@ -282,8 +285,6 @@ fn migrated_byte_load_publishes_parameters_and_custom_state_together() {
 
     let invalid = runtime.apply_state_bytes(
         &bytes,
-        "com.example.semantic",
-        2,
         StateLimits::default(),
         &[&migration],
         |_parameters, _custom_state| Err(RejectState),
