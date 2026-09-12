@@ -14,8 +14,9 @@ use std::{
 
 use chassis_core::{
     audio::{
-        AudioIoConfiguration, AudioIoConfigurationError, ChannelLayout, ConfiguredAudioPort,
-        DEFAULT_EFFECT_CONFIGURATION, MAIN_INPUT, MAIN_OUTPUT,
+        AudioIoConfiguration, AudioIoConfigurationError, AudioPortIndex, ChannelLayout,
+        ConfiguredAudioPort, DEFAULT_EFFECT_CONFIGURATION, MAIN_INPUT, MAIN_OUTPUT,
+        audio_port_index,
     },
     automation::{ParameterEventValue, ParameterEvents},
     buffer::{ChannelBuffer, InputEndpoint, OutputEndpoint},
@@ -29,6 +30,17 @@ use chassis_core::{
         Process, Processor,
     },
 };
+
+const MAIN_INPUT_INDEX: AudioPortIndex = AudioPortIndex::new(0);
+const MAIN_OUTPUT_INDEX: AudioPortIndex = AudioPortIndex::new(1);
+
+fn main_input(channel: u32) -> InputEndpoint {
+    InputEndpoint::resolved(MAIN_INPUT, MAIN_INPUT_INDEX, channel)
+}
+
+fn main_output(channel: u32) -> OutputEndpoint {
+    OutputEndpoint::resolved(MAIN_OUTPUT, MAIN_OUTPUT_INDEX, channel)
+}
 
 #[derive(Default)]
 struct Metrics {
@@ -82,6 +94,10 @@ impl Component for ConformanceEffect {
         Ok(ConformanceProcessor {
             metrics: Arc::clone(&self.metrics),
             gain: self.gain,
+            main_input: audio_port_index(self.audio_ports(), MAIN_INPUT)
+                .expect("default effect schema has main input"),
+            main_output: audio_port_index(self.audio_ports(), MAIN_OUTPUT)
+                .expect("default effect schema has main output"),
         })
     }
 }
@@ -89,6 +105,8 @@ impl Component for ConformanceEffect {
 struct ConformanceProcessor {
     metrics: Arc<Metrics>,
     gain: f32,
+    main_input: AudioPortIndex,
+    main_output: AudioPortIndex,
 }
 
 impl Processor for ConformanceProcessor {
@@ -114,10 +132,10 @@ impl Process<f32> for ConformanceProcessor {
         for mut buffer in block.channels() {
             let is_main_pair = buffer
                 .input_endpoint()
-                .is_some_and(|endpoint| endpoint.port() == MAIN_INPUT)
+                .is_some_and(|endpoint| endpoint.port_index() == Some(self.main_input))
                 && buffer
                     .output_endpoint()
-                    .is_some_and(|endpoint| endpoint.port() == MAIN_OUTPUT);
+                    .is_some_and(|endpoint| endpoint.port_index() == Some(self.main_output));
             if !is_main_pair {
                 continue;
             }
@@ -157,7 +175,7 @@ fn process_config(minimum: Option<u32>, maximum: u32) -> ProcessConfig {
 }
 
 fn runtime(component: &ConformanceEffect) -> InstanceRuntime<ConformanceProcessor> {
-    InstanceRuntime::new(component.parameter_descriptors()).expect("component schema is valid")
+    InstanceRuntime::for_component(component).expect("component schema is valid")
 }
 
 fn activate_runtime(
@@ -224,9 +242,9 @@ fn runtime_owns_validated_parameter_base_state() {
     let input = [1.0_f32];
     let mut output = [0.0_f32];
     let mut buffers = [ChannelBuffer::separate(
-        InputEndpoint::new(MAIN_INPUT, 0),
+        main_input(0),
         &input,
-        OutputEndpoint::new(MAIN_OUTPUT, 0),
+        main_output(0),
         &mut output,
         1,
     )
@@ -264,9 +282,9 @@ fn parameter_automation_is_sample_accurate_through_runtime() {
     let input = [1.0_f32; 4];
     let mut output = [0.0_f32; 4];
     let mut buffers = [ChannelBuffer::separate(
-        InputEndpoint::new(MAIN_INPUT, 0),
+        main_input(0),
         &input,
-        OutputEndpoint::new(MAIN_OUTPUT, 0),
+        main_output(0),
         &mut output,
         4,
     )
@@ -298,9 +316,9 @@ fn invalid_parameter_events_never_reach_product_dsp() {
     let input = [1.0_f32; 2];
     let mut output = [0.0_f32; 2];
     let mut buffers = [ChannelBuffer::separate(
-        InputEndpoint::new(MAIN_INPUT, 0),
+        main_input(0),
         &input,
-        OutputEndpoint::new(MAIN_OUTPUT, 0),
+        main_output(0),
         &mut output,
         2,
     )
@@ -328,7 +346,7 @@ fn invalid_parameter_schema_never_reaches_product_activation() {
     );
 
     let result: Result<InstanceRuntime<ConformanceProcessor>, _> =
-        InstanceRuntime::new(component.parameter_descriptors());
+        InstanceRuntime::for_component(&component);
 
     assert!(matches!(
         result,
@@ -354,17 +372,17 @@ fn runtime_processes_separate_buffers_and_owns_lifecycle() {
     let mut right_output = [0.0_f32; 4];
     let mut buffers = [
         ChannelBuffer::separate(
-            InputEndpoint::new(MAIN_INPUT, 0),
+            main_input(0),
             &left_input,
-            OutputEndpoint::new(MAIN_OUTPUT, 0),
+            main_output(0),
             &mut left_output,
             4,
         )
         .expect("left test buffers are valid"),
         ChannelBuffer::separate(
-            InputEndpoint::new(MAIN_INPUT, 1),
+            main_input(1),
             &right_input,
-            OutputEndpoint::new(MAIN_OUTPUT, 1),
+            main_output(1),
             &mut right_output,
             4,
         )
@@ -390,20 +408,10 @@ fn exact_in_place_buffers_do_not_require_a_second_alias() {
     let mut left = [1.0_f32, 0.5, -1.0];
     let mut right = [0.25_f32, -0.5, 2.0];
     let mut buffers = [
-        ChannelBuffer::in_place(
-            InputEndpoint::new(MAIN_INPUT, 0),
-            OutputEndpoint::new(MAIN_OUTPUT, 0),
-            &mut left,
-            3,
-        )
-        .expect("left in-place buffer is valid"),
-        ChannelBuffer::in_place(
-            InputEndpoint::new(MAIN_INPUT, 1),
-            OutputEndpoint::new(MAIN_OUTPUT, 1),
-            &mut right,
-            3,
-        )
-        .expect("right in-place buffer is valid"),
+        ChannelBuffer::in_place(main_input(0), main_output(0), &mut left, 3)
+            .expect("left in-place buffer is valid"),
+        ChannelBuffer::in_place(main_input(1), main_output(1), &mut right, 3)
+            .expect("right in-place buffer is valid"),
     ];
     runtime
         .process(
@@ -450,20 +458,10 @@ fn callback_dimension_failures_are_contained_before_product_dsp() {
     let mut left = [0.0_f32; 9];
     let mut right = [0.0_f32; 9];
     let mut too_large = [
-        ChannelBuffer::in_place(
-            InputEndpoint::new(MAIN_INPUT, 0),
-            OutputEndpoint::new(MAIN_OUTPUT, 0),
-            &mut left,
-            9,
-        )
-        .expect("storage is intentionally large enough for malformed callback"),
-        ChannelBuffer::in_place(
-            InputEndpoint::new(MAIN_INPUT, 1),
-            OutputEndpoint::new(MAIN_OUTPUT, 1),
-            &mut right,
-            9,
-        )
-        .expect("storage is intentionally large enough for malformed callback"),
+        ChannelBuffer::in_place(main_input(0), main_output(0), &mut left, 9)
+            .expect("storage is intentionally large enough for malformed callback"),
+        ChannelBuffer::in_place(main_input(1), main_output(1), &mut right, 9)
+            .expect("storage is intentionally large enough for malformed callback"),
     ];
     assert!(matches!(
         runtime.process(9, process_context(9, ProcessMode::Realtime), &mut too_large),
@@ -476,20 +474,10 @@ fn callback_dimension_failures_are_contained_before_product_dsp() {
     let mut empty_left = [0.0_f32; 0];
     let mut empty_right = [0.0_f32; 0];
     let mut below_minimum = [
-        ChannelBuffer::in_place(
-            InputEndpoint::new(MAIN_INPUT, 0),
-            OutputEndpoint::new(MAIN_OUTPUT, 0),
-            &mut empty_left,
-            0,
-        )
-        .expect("zero-length storage is valid for a zero-frame view"),
-        ChannelBuffer::in_place(
-            InputEndpoint::new(MAIN_INPUT, 1),
-            OutputEndpoint::new(MAIN_OUTPUT, 1),
-            &mut empty_right,
-            0,
-        )
-        .expect("zero-length storage is valid for a zero-frame view"),
+        ChannelBuffer::in_place(main_input(0), main_output(0), &mut empty_left, 0)
+            .expect("zero-length storage is valid for a zero-frame view"),
+        ChannelBuffer::in_place(main_input(1), main_output(1), &mut empty_right, 0)
+            .expect("zero-length storage is valid for a zero-frame view"),
     ];
     assert!(matches!(
         runtime.process(
@@ -512,20 +500,10 @@ fn zero_frame_callback_is_supported_when_no_positive_minimum_is_promised() {
     let mut left = [0.0_f32; 0];
     let mut right = [0.0_f32; 0];
     let mut buffers = [
-        ChannelBuffer::in_place(
-            InputEndpoint::new(MAIN_INPUT, 0),
-            OutputEndpoint::new(MAIN_OUTPUT, 0),
-            &mut left,
-            0,
-        )
-        .expect("zero-length storage is valid"),
-        ChannelBuffer::in_place(
-            InputEndpoint::new(MAIN_INPUT, 1),
-            OutputEndpoint::new(MAIN_OUTPUT, 1),
-            &mut right,
-            0,
-        )
-        .expect("zero-length storage is valid"),
+        ChannelBuffer::in_place(main_input(0), main_output(0), &mut left, 0)
+            .expect("zero-length storage is valid"),
+        ChannelBuffer::in_place(main_input(1), main_output(1), &mut right, 0)
+            .expect("zero-length storage is valid"),
     ];
     runtime
         .process(0, process_context(0, ProcessMode::Offline), &mut buffers)
