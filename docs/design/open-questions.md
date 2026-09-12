@@ -1,257 +1,282 @@
 # Open Questions and API Freeze Gates
 
-This file records unresolved design decisions that still block API or production claims. Completed proof steps belong in `docs/design/validation.md`; execution order belongs in `docs/next-runtime-slice.md`; the broad completion bar belongs in `docs/roadmap.md`.
+This file records unresolved design decisions that still block API or stability claims. Completed proof steps belong in `docs/design/validation.md`; execution order belongs in `docs/next-runtime-slice.md`; the broad completion bar belongs in `docs/roadmap.md`.
 
-Existing product migrations are evidence sources, not API-freeze gates.
+Chassis is unpublished pre-alpha. Existing product migrations and current public APIs are evidence sources, not compatibility constraints.
 
-## Runtime/API freeze
+## Component schema and runtime authority
 
-`InstanceRuntime<P>` is the sole durable format-independent authority for one component instance. `Processor` owns active DSP history; `Process<S>` expresses sample-representation capability.
+The target direction is documented in `docs/design/component-schema.md`.
 
-Still unresolved before freezing the authoring surface:
+Implemented foundation:
 
-- final ergonomics for constructing `InstanceRuntime` from a `Component` without hiding schema validation or ownership;
-- semantic whole-I/O policy for products that negotiate multiple legal layouts;
-- recurring higher-level bus/port access patterns that preserve explicit buffer legality;
-- canonical product/export identity ownership independent of backend IDs;
-- common tail/bypass semantics where formats can map them faithfully;
-- parameter formatting/value-mapping helpers with explicit domain and round-trip tests;
-- explicit modulation semantics separate from durable/base parameter publication;
-- whether common activation/resource helpers for lookahead, oversampling, convolution, model state, etc. remove enough repeated boilerplate to justify framework API.
+- `Component` / `InstanceRuntime<P>` / `Processor` lifecycle ownership;
+- validated typed parameter schema/store;
+- stable event-port schema with runtime-owned dense indices;
+- `AudioPortIndex` plus standalone audio-schema validation/dense lookup;
+- initial owned `ComponentSchema` with semantic component/state identity, state-schema version, audio/event/parameter schemas, and dense port lookup.
 
-Keep `Processor` non-`Send` in core unless a deployment requires transfer; adapters add the bound at their boundary.
+Before freezing the core authoring surface:
 
-Do not add proc macros/derives until the underlying authoring contracts are coherent and repeated declarations are known.
+- migrate `Component` from separate incremental schema methods to one coherent schema authority;
+- make `InstanceRuntime` own/validate the complete immutable schema snapshot, including audio schema;
+- remove proof-era constructors such as `new_with_event_ports` once the complete schema constructor is established;
+- remove the core semantic default that makes every `Component` a conventional stereo effect; keep conventional effect helpers above neutral core semantics;
+- migrate audio process endpoints from stable string keys to dense schema-local `AudioPortIndex` values;
+- replace static-only audio/event stable identities where necessary so dynamically constructed/hosted components are representable without callback string work;
+- separate semantic state identity/version from deployment/export identities such as CLAP/VST3/AU IDs;
+- ensure schema drift is rejected before activation and dynamic configuration changes have explicit semantics.
+
+Do not freeze macros/derives until this model is exercised by effects, event-only processors, instruments, multi-output components, embedded/graph use, and plugin deployment.
 
 ## Process buffers and I/O
 
-The generic safe source shape is implemented and the CLAP adapter traverses setup-mapped channels without callback-owned channel collections.
+The generic safe buffer-source shape is implemented and the CLAP adapter traverses setup-mapped channels without callback-owned channel collections.
 
 Freeze gates:
 
-- semantic layout negotiation beyond structural port presence;
-- ergonomic bus/port views without manufacturing invalid aliases;
-- target-specific legality for inactive/null/zero-buffer cases as formats require;
-- benchmark controlled copy/conversion paths before adding ownership or unsafe complexity to remove them;
-- cross-format layout parity once VST3/AU projections exist.
+- complete dense audio-port migration;
+- semantic whole-I/O policy for components with multiple legal configurations;
+- ergonomic bus/port views that preserve explicit buffer legality;
+- target-specific legality for inactive/null/zero-buffer cases;
+- benchmark controlled copy/conversion paths before adding unsafe/ownership complexity merely to remove them;
+- cross-format layout parity once VST3/AU projections exist;
+- surround/ambisonics/immersive semantics only with explicit ordering/mapping fixtures.
 
-Native f64 processing is qualified headlessly. Whether a product advertises native 64-bit wire preference remains product/deployment policy.
+Native f64 processing is already qualified headlessly. Wire-precision preference remains deployment policy.
 
 ## Parameters, automation, modulation, and gestures
 
-Implemented: typed schema/store, dense realtime indices, borrowed sample-accurate automation, CLAP float/integer/boolean/choice projection, generation-checked scalar publication, state value rescan after load, and sample-accurate exported automation for f32/f64.
+Implemented:
+
+- typed parameter schema/store;
+- dense realtime parameter indices;
+- borrowed sample-accurate automation with set/linear trajectories;
+- CLAP float/integer/boolean/choice projection;
+- generation-checked scalar publication;
+- state value rescan after load;
+- sample-accurate exported automation for f32/f64.
 
 Freeze gates:
 
-- product-originated begin/change/end gesture semantics and echo suppression;
-- modulation must remain distinct from base-state publication and must not overwrite durable values;
-- mapping/formatting helpers require explicit round-trip/domain tests;
+- parameter formatting/value-mapping helpers with explicit round-trip/domain tests;
+- product/editor begin/change/end gesture semantics and echo suppression;
+- sample-accurate modulation distinct from durable/base state publication;
 - adapter-specific automation/modulation semantics must be preserved rather than normalized to a weaker invented model;
-- production-DAW automated-render evidence remains required despite executable core/export/in-process-host coverage.
+- production-host automated-render evidence for supported formats.
 
-## Active state save/load
+## State identity, save/load, and compatibility
 
-The CLAP consistency contract is implemented and executable:
+Implemented CLAP consistency behavior:
 
-- state save is a non-realtime operation and may wait for an in-progress scalar publisher;
-- it serializes one coherent completed publication generation;
-- a save racing a process block may observe the generation immediately before or after endpoint publication, never a mixed generation;
-- a newer control edit/state load wins over stale realtime publication by generation check;
-- state load remains transactional and requests host value rescan after successful publication.
+- active state save serializes one coherent completed scalar generation;
+- newer control/state generations win over stale realtime endpoint publication;
+- state load is transactional and requests host value rescan after accepted publication;
+- direct tests/Loom/in-process-host coverage exercise the current behavior.
 
-Direct tests, Loom, and an in-process CLAP host scenario cover this behavior while audio processing is active.
+Freeze gates:
 
-Remaining freeze gates:
-
-- production-host confirmation across supported release hosts;
-- cross-format state round trips once VST3/AU exist;
-- canonical product/export identity fixtures;
-- decide when the CHSS wire envelope is stable enough to become a compatibility promise.
+- make semantic component/state identity and schema version runtime-owned through `ComponentSchema` rather than caller-supplied on every operation;
+- derive/export deployment identities from explicit product/export metadata without conflating them with semantic state identity;
+- migrate runtime save/load APIs to the canonical identity owner;
+- cross-format state round trips;
+- decide when the CHSS wire envelope becomes a compatibility promise;
+- define compatibility/versioning policy before a stable release.
 
 ## Latency, tail, bypass, and delayed processing
 
 Implemented:
 
-- `LatencySamples` in core;
-- `Processor::latency()` with zero default;
-- activation-scoped latency snapshot in `InstanceRuntime`;
-- `Processor::restart_requested()` exposed through runtime and forwarded by CLAP after completed parameter publication;
-- state-load restart request behavior for activation-resource changes;
-- lifecycle tests proving latency cannot drift inside one activation;
-- CLAP latency projection and host notification;
-- delayed probe proving reported latency corresponds to delayed audio;
-- recorded REAPER PDC alignment evidence.
+- `LatencySamples`;
+- activation-scoped latency snapshot;
+- processor restart request semantics;
+- CLAP latency projection/notification;
+- delayed probe and recorded REAPER PDC evidence.
 
 Still open:
 
 - common tail semantics;
-- bypass semantics and whether hard/soft/product bypass need distinct capability surfaces;
-- authoring conveniences for activation-time lookahead/oversampling resources if repeated use proves them worthwhile;
-- cross-format latency/tail/bypass parity once VST3/AU exist.
+- bypass semantics and whether hard/soft/product bypass require distinct capabilities;
+- authoring/resource helpers for lookahead, oversampling, convolution, etc. only where repeated use proves value;
+- graph-level latency propagation/compensation;
+- cross-format parity.
 
-## Realtime guarantees and telemetry
+## Realtime communication and background work
 
-Core and full CLAP adapter callback allocation/deallocation evidence are executable. The adapter benchmark has representative Apple M3 Max results recorded in the validation guide.
+Implemented:
 
-`chassis-core::telemetry::F32Telemetry` is the first framework-owned DSP -> non-realtime observation primitive. It provides fixed-width coherent `f32` snapshots with construction-time allocation, nonblocking publication, bounded reads, and no unsafe code.
+- `F32Telemetry` fixed-width coherent DSP -> non-realtime snapshots;
+- nonblocking publication and bounded coherent reads;
+- concurrent generation tests;
+- measured callback allocation/deallocation coverage;
+- meter fixture through the public runtime.
 
-Remaining promotion work:
+Remaining:
 
-- CI/concurrency evidence for telemetry publication and coherent reads;
-- prove use through a meter fixture;
-- determine whether large/high-rate analyzer payloads need a different bounded transport rather than scaling the scalar snapshot indefinitely;
-- add immutable control -> DSP snapshots for non-parameter product state when a concrete representation can preserve realtime ownership and reclamation safely;
-- verify replaced-object reclamation cannot fall onto the callback when larger snapshot/task facilities appear.
+- immutable control -> DSP publication for non-parameter state;
+- deferred destruction/reclamation of replaced large objects;
+- larger/high-rate analyzer transport only if fixed snapshots are the wrong representation;
+- per-instance background-task ownership, cancellation, generation/stale-result rejection, shutdown/unload, result publication, and offline determinism.
 
-Do not introduce custom allocators, cache padding, generalized lock-free containers, SIMD, or unsafe zero-copy machinery merely to make the framework appear complete.
+No hidden global executor or generalized lock-free container library.
 
-## Events, notes, MIDI, and output events
+## Events, notes, MIDI, and output
 
-`docs/design/events-transport.md` contains the current semantic design. This is now active framework-completion work rather than something deferred indefinitely to a product migration.
+Implemented core foundation:
 
-Before stable instrument/event claims, implement and prove:
+- stable event-port schema/keys and dense indices;
+- runtime-owned event schema and schema-drift checks;
+- note IDs/channels/keys and wildcard-aware note addresses;
+- semantic note on/off/choke/end;
+- bounded borrowed note-event streams in process context/block;
+- validation against event-port direction/note capability;
+- zero-audio/event-schema runtime fixtures.
 
-- stable event-port identities;
-- semantic note on/off/choke/end and note addressing;
-- velocity, tuning, and per-note expression;
-- raw MIDI/SysEx and a non-destructive path toward MIDI 2 / UMP;
-- sample-accurate modulation;
-- bounded output event sinks with explicit rejection behavior;
-- multiple event/audio outputs;
-- source-order preservation without fabricating total order where a backend does not provide it;
-- high-event-count and realtime allocation/work bounds.
+Before stable instrument/event claims:
 
-Use focused synth/event/multi-output fixtures as evidence.
+- CLAP note-port projection/input translation preserving source order;
+- note tuning and per-note expression;
+- raw MIDI 1/SysEx;
+- non-destructive MIDI 2/UMP representation;
+- sample-accurate parameter modulation;
+- bounded output-event sinks and note-end output;
+- typed span/change-boundary processing without fabricated cross-family total order;
+- high-event-count allocation/work evidence;
+- synth/event-transform/multi-output fixtures.
 
-## Re-entrancy and panic boundary
+## DSP utility layer
 
-The pinned Clack revision includes the required main-thread re-entrancy fixes. Chassis has in-process plugin -> host -> plugin tests through parameter-rescan and latency-change callbacks. Bitwig remains useful production confirmation, not a semantic blocker.
+Common DSP infrastructure is now explicit Chassis scope, but the package/API boundary is not frozen.
 
-Pinned Clack catches plugin callback panics at its FFI wrapper. Executable behavior remains:
+Questions to resolve through concrete use:
 
-- product activation panic -> activation failure, plugin remains reusable;
-- product process panic -> host-visible processing failure followed by clean stop/deactivation.
+- which utilities are generic enough to belong in Chassis versus a product;
+- which mature dependencies should be exposed directly versus wrapped behind Chassis semantics;
+- whether large optional dependencies justify a separate DSP/integration crate;
+- consistent realtime/offline behavior for smoothing, metering, filters, FFT/STFT, oversampling, resampling, convolution, and buffer/channel helpers;
+- performance/property/reference tests for promoted primitives.
 
-Do not promise continued processing after arbitrary DSP panic.
+Do not create a DSP crate merely to mirror a domain taxonomy, and do not reimplement mature primitives without a concrete reason.
 
-## CLAP production qualification
+## Editor/UI integration
 
-The three-platform headless workflows cover:
+Chassis owns editor lifecycle/integration, not visual design.
 
-- Linux/macOS/Windows workspace portability tests/checks;
-- packaged `.clap` artifacts;
-- pinned `clap-validator` 0.4.1: 35 passed, 0 failed, 9 intentional skips at the recorded baseline;
-- bounded fuzz;
-- in-process host coverage for allocation/work bounds, lifecycle failures, panic containment, repeated instances, reactivation, thread transfer, re-entrancy, active state save, latency notification, and delayed audio;
-- dependency advisory/license/source/dead-dependency policy gates.
+Before a stable editor claim:
 
-Recorded REAPER 7.79/macOS-arm64 evidence covers scan/instantiate/state reopen, automated render, active save during automation, and PDC alignment.
-
-Additional release-host/architecture coverage should follow concrete support targets.
-
-## Export metadata/API
-
-Current CLAP export identity constants remain proof-oriented.
-
-Before shipping products:
-
-- define one canonical product/export identity manifest or owner;
-- derive backend IDs/metadata from that owner rather than duplicating constants across adapters;
-- support explicit legacy/import mappings where released compatibility requires them;
-- freeze byte-order/identity fixtures;
-- rename temporary adapter concepts whose names encode obsolete proof limits.
-
-## VST3/AU projection
-
-Treat wrapper output as a separate adapter qualification problem, not proof by construction.
-
-Before claiming VST3/AU support, run the same product semantics through:
-
-- native validators;
-- state/identity fixtures;
-- automation and modulation trajectory tests;
-- audio/event buffer/layout tests;
-- latency/PDC/tail/bypass parity;
-- editor lifetime/resize/scaling tests;
-- real-host save/reopen/automation scenarios, including Ableton where wrapper state restoration is host-sensitive;
-- differential comparison against native CLAP where semantics are equivalent.
-
-Own a native format adapter only when concrete wrapper limitations justify it.
-
-## GUI/editor
-
-Chassis owns editor lifecycle/integration but not visual design.
-
-Before a first-class production editor claim:
-
-- parent window attach/detach;
-- resize/scale/high-DPI behavior;
-- editor recreation/teardown;
-- parameter observations and gestures;
-- realtime telemetry ownership/subscription;
-- focus/input behavior required by supported formats;
+- parent/native-window attach/detach;
+- resize/scale/high-DPI;
+- recreation/teardown;
+- parameter observation and gestures;
+- telemetry observation;
+- focus/input semantics required by supported deployments;
 - accessibility path where practical;
-- enough rendering/control flexibility for commercial product UIs.
+- optional GUI toolkit adapters without dependency leakage into headless users.
 
-Select toolkit adapters from evidence and keep toolkit/platform types out of core.
+## Plugin deployment
 
-## Background work and larger snapshots
+CLAP is the first qualified plugin deployment. Existing headless and recorded REAPER evidence remains valuable.
 
-No hidden global executor.
+Before stable plugin-format claims:
 
-Before adding framework task services, specify:
+- generalize proof-era CLAP concepts such as `ClapStereoEffect` after the neutral component-schema migration;
+- derive audio/event/parameter projection from the complete component schema and explicit deployment metadata;
+- VST3/AU native validators;
+- identity/state/automation/modulation/audio/event/latency/editor differential fixtures;
+- real-host save/reopen/render scenarios;
+- native adapters only when concrete wrapper limitations justify them.
 
-- instance/module lifetime;
-- cancellation;
-- generation/stale-completion rejection;
-- unload/shutdown behavior;
-- result destruction ownership;
-- offline determinism;
-- whether work may continue while transport is stopped or the editor is closed.
+AAX/LV2 remain additional deployment targets rather than core semantic dependencies.
 
-`F32Telemetry` covers small observational snapshots only. Larger immutable state publication and worker-result publication remain separate design problems.
+## Devices and standalone
 
-## Standalone and devices
+Devices/standalone are planned framework scope.
 
-Before calling standalone deployment first-class, prove:
+Before stable claims, prove:
 
-- audio device enumeration/open/close/change behavior;
-- sample-rate/block-size negotiation;
-- MIDI device input/output;
-- xrun/error reporting and recovery policy;
-- reuse of the same component/runtime/editor/state implementation used by plugin deployments.
+- audio device enumeration/open/close/reconfiguration;
+- audio input/output/duplex and sample-rate/block-size negotiation;
+- MIDI device input/output and timestamps where available;
+- xrun/device-loss/error/recovery behavior;
+- reuse of the same component/runtime/editor/state implementation;
+- reviewed backend dependency boundaries.
 
-Do not grow a second standalone DSP architecture.
+## Graph/routing/scheduling
 
-## Graph/scheduling
-
-`chassis-graph` belongs above the component core.
+`chassis-graph` is planned framework infrastructure above the semantic core.
 
 Before a stable graph claim, prove:
 
 - ordinary Chassis processors as nodes;
 - audio/event fan-in/fan-out and routing;
-- graph validation and immutable/transactional execution-plan publication;
+- validated immutable/transactional execution plans;
 - latency propagation/compensation;
-- realtime-safe execution bounds;
-- topology/resource changes off the callback;
+- realtime-safe bounded execution;
+- topology/resource changes away from the callback;
+- deterministic offline execution;
 - parallel scheduling only where measurements justify it.
 
-Timelines, projects, media libraries, mixer UX, mastering workflows, and delivery remain application concerns.
+Tracks, clips, arrangements, project workflows, mixer UX, and DAW document semantics remain outside Chassis.
 
-## Surround / immersive
+## Plugin hosting
 
-Do not freeze a closed speaker enum. Add labeled surround/ambisonics/immersive semantics only with explicit ordering/normalization/mapping fixtures.
+Plugin hosting is planned framework scope for DAWs, hosts, test tools, and larger audio applications.
 
-Dolby Atmos object/metadata/renderer workflows remain separate from channel-bed layouts.
+Before stable hosting claims, define/prove:
+
+- discovery/scanning and capability metadata;
+- loading/instantiation/lifecycle;
+- graph/runtime processing integration;
+- parameter/state/automation access;
+- editor hosting;
+- failure/crash policy at the supported isolation level;
+- format adapters without leaking plugin ABI types into core.
+
+Sandboxing/out-of-process hosting remains later until required.
+
+## Media, transport, and offline application infrastructure
+
+General audio applications need reusable media/offline infrastructure, but Chassis does not own a DAW project model.
+
+Open work:
+
+- source/sink metadata and stream/read/write/seek abstractions;
+- codec integration through reviewed libraries;
+- resampling/channel adaptation integration;
+- deterministic component/graph offline rendering;
+- reusable application transport/time primitives that drive processors/graphs;
+- a random-access/multi-pass processing abstraction if sequential block processing cannot express real requirements cleanly.
+
+Project media libraries, clip editing, arrangements, undo/workflow semantics, and content management remain application responsibilities.
+
+## Validation breadth
+
+Maintain separate evidence for:
+
+- Rust/API correctness;
+- realtime allocation/work bounds;
+- concurrency/lifecycle correctness;
+- state/identity compatibility;
+- format conformance;
+- device/graph/host correctness as those layers appear;
+- deterministic offline behavior;
+- representative performance;
+- real-host/device support claims.
+
+Do not convert existing tests into compatibility anchors for an obsolete pre-alpha API. Migrate useful fixtures to the target architecture and delete obsolete compatibility-only coverage.
 
 ## Governance and release
 
-Before accepting substantive outside code or selling commercial licenses:
+Before accepting substantive outside code or offering a commercial license:
 
 - establish contributor/relicensing terms;
 - define commercial license terms;
 - verify notices/attribution generation;
-- re-check distributed dependency compatibility with AGPL and proprietary licensing.
+- re-check dependency compatibility with AGPL and proprietary licensing.
 
-Before calling Chassis generally production-usable, also establish repeatable packaging, signing/notarization hooks, release versioning, compatibility fixtures, validator/host smoke commands, and concise examples/templates for the supported component classes.
+Before a stable/public compatibility promise:
+
+- complete the supported framework layers in `docs/roadmap.md` to the declared release scope;
+- establish curated facade, packaging, validation, examples, and reference docs;
+- define semver/MSRV/state compatibility policies;
+- exercise the final core API across materially different clients instead of one plugin class.
