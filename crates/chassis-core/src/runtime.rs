@@ -1010,10 +1010,7 @@ where
     ///
     /// Returns [`InstanceStateExportError`] if identity, document construction,
     /// or bounded encoding fails.
-    pub fn encode_state(
-        &self,
-        limits: StateLimits,
-    ) -> Result<Vec<u8>, InstanceStateExportError> {
+    pub fn encode_state(&self, limits: StateLimits) -> Result<Vec<u8>, InstanceStateExportError> {
         let document = self.state_document()?;
         document
             .encode_with_limits(limits)
@@ -1098,9 +1095,11 @@ where
     where
         F: FnOnce(&ParameterStore, &[StateEntry]) -> Result<(), E>,
     {
-        let (product_id, product_schema) = self.semantic_state_identity().ok_or(
-            InstanceSemanticStateError::Parameters(InstanceStateError::MissingStateIdentity),
-        )?;
+        let (product_id, product_schema) =
+            self.semantic_state_identity()
+                .ok_or(InstanceSemanticStateError::Parameters(
+                    InstanceStateError::MissingStateIdentity,
+                ))?;
         self.apply_state_for_product(
             document,
             &product_id,
@@ -1200,11 +1199,13 @@ where
         E: std::error::Error + 'static,
         F: FnOnce(&ParameterStore, &[StateEntry]) -> Result<(), E>,
     {
-        let (product_id, product_schema) = self.semantic_state_identity().ok_or(
-            InstanceSemanticStateLoadError::Apply(InstanceSemanticStateError::Parameters(
-                InstanceStateError::MissingStateIdentity,
-            )),
-        )?;
+        let (product_id, product_schema) =
+            self.semantic_state_identity()
+                .ok_or(InstanceSemanticStateLoadError::Apply(
+                    InstanceSemanticStateError::Parameters(
+                        InstanceStateError::MissingStateIdentity,
+                    ),
+                ))?;
         self.apply_state_bytes_for_product(
             bytes,
             &product_id,
