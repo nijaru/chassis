@@ -1,6 +1,6 @@
 # Component Schema and Runtime Identity
 
-Status: active pre-alpha architecture. Direct component-schema authority, runtime ownership, frozen activation schema, dense audio endpoints, and schema-owned CLAP state identity are implemented. Remaining work centers on owned dynamic metadata and explicit whole-I/O policy.
+Status: active pre-alpha architecture. Direct component-schema authority, runtime ownership, frozen activation schema, dense process identities, owned audio/event metadata, schema-owned whole-audio-I/O policy, and schema-owned CLAP state identity are implemented. The next work is to exercise materially different component classes and close only the API gaps those proofs expose.
 
 ## Goal
 
@@ -14,17 +14,18 @@ The schema is control/setup-domain data. Realtime paths use validated dense indi
 Component
   `-> schema() -> ComponentSchema
         |- semantic component/state identity + state-schema version when present
-        |- audio-port schema
-        |- event-port schema
+        |- owned-capable audio-port schema
+        |- whole-component AudioIoPolicy
+        |- owned-capable event-port schema
         |- parameter schema
-        `- dense key lookup derived at validation/setup
+        `- stable-key -> dense-index lookup derived at validation/setup
 
 InstanceRuntime
   |- owned validated immutable ComponentSchema
   |- canonical parameter/custom state
   |- active resolved audio configuration
   |- active processor + latency/configuration
-  `- schema drift rejection before activation
+  `- schema + audio-policy drift rejection before activation
 
 ActivationConfig
   |- process resource bounds
@@ -40,6 +41,7 @@ Processor / ProcessBlock
 CLAP deployment
   |- one shared coherent ComponentSchema snapshot
   |- CLAP_ID remains deployment/export identity
+  |- setup audio mapping must satisfy ComponentSchema::audio_io_policy()
   `- state save/load uses ComponentSchema::state_identity()
 ```
 
@@ -53,14 +55,22 @@ Implemented details include:
 - `ComponentSchema`, `ComponentId`, `StateIdentity`, and `StateSchemaVersion`;
 - one immutable schema snapshot owned by `InstanceRuntime`;
 - `InstanceRuntime::from_schema` / `for_component` as the coherent construction paths; proof-order `new` / `new_with_event_ports` constructors are removed;
-- activation rejection for audio/event/parameter/state-identity drift;
+- activation rejection for audio/event/parameter/state-identity and audio-I/O-policy drift;
 - runtime-owned semantic state identity/version for complete save/load/migration APIs;
 - the exact runtime-frozen schema exposed through `ActivationConfig::schema()` so processor setup never regenerates component metadata;
+- audio and event stable keys/display metadata that may remain borrowed for static product declarations or own runtime-discovered metadata;
 - stable audio keys resolved to `AudioPortIndex` before processing;
+- stable event keys resolved to `EventPortIndex` before processing;
 - `ResolvedAudioIoConfiguration` for activation-local port/layout/direction legality;
 - `InputEndpoint` / `OutputEndpoint` containing only dense `AudioPortIndex` plus channel;
-- process-boundary rejection of inactive, unknown, wrong-direction, and out-of-range endpoints before DSP;
-- CLAP setup projecting audio and parameters from the same coherent `ComponentSchema`;
+- note/event process addressing containing dense `EventPortIndex`, not stable event strings;
+- process-boundary rejection of inactive, unknown, wrong-direction, and out-of-range audio endpoints before DSP;
+- `AudioIoPolicy` as immutable schema authority for valid whole-component configurations;
+- explicit `AnyStructurallyValid` policy for components that genuinely impose no stronger cross-port rule;
+- explicit enumerated configuration policy, including duplicate/invalid-policy rejection at schema construction;
+- the conventional effect policy accepting stereo main input/output with the stereo sidechain either inactive or active, rather than accepting arbitrary layouts merely because descriptors exist;
+- runtime policy enforcement before product activation and failure-atomic rejection of structurally valid but unsupported layouts;
+- CLAP setup projecting audio and parameters from the same coherent `ComponentSchema` and rejecting mappings outside its audio-I/O policy;
 - CLAP shared/main-thread state retaining and comparing the coherent schema snapshot;
 - CLAP state save/load consuming semantic `StateIdentity` from the component schema instead of `CLAP_ID` / a duplicate deployment schema version;
 - CLAP exports requiring semantic state identity while `CLAP_ID` remains descriptor/export identity only;
@@ -71,7 +81,7 @@ Implemented details include:
 Stable identities exist for persistence, authoring, inspection, and setup. Dense indices exist for active processing.
 
 ```text
-AudioPortKey  -> AudioPortIndex
+PortKey       -> AudioPortIndex
 EventPortKey  -> EventPortIndex
 ParameterKey  -> ParameterIndex
 ```
@@ -84,7 +94,8 @@ Rules:
 - backend IDs are adapter projections and never core identity;
 - process-time code does not perform string lookup;
 - changing a display label does not change identity;
-- dynamic/hosted components must eventually be able to own keys instead of requiring source-static literals.
+- static product declarations remain allocation-free at authoring time;
+- dynamically discovered/hosted audio and event metadata can own its strings/capability lists without introducing callback string work.
 
 ## Audio process endpoints
 
@@ -93,10 +104,15 @@ Audio endpoints are dense-only process values:
 ```text
 stable audio schema
        +
+AudioIoPolicy
+       +
 requested whole-I/O configuration
        |
        v
-validate + resolve while inactive
+structural validation + policy acceptance while inactive
+       |
+       v
+resolve stable keys to dense indices
        |
        v
 ResolvedAudioIoConfiguration
@@ -108,7 +124,7 @@ InputEndpoint / OutputEndpoint
 
 Stable keys remain on schema/configuration/setup APIs. They are not stored in callback endpoint values.
 
-`InstanceRuntime` validates each process endpoint against the activation-owned resolved configuration before product DSP runs. This gives plugin adapters, devices, graphs, embedded callers, and offline runtimes the same core legality contract rather than relying on one deployment adapter to be trusted implicitly.
+`InstanceRuntime` first validates structural configuration, then enforces the schema-owned whole-I/O policy, then resolves accepted ports to activation-owned dense metadata. It validates each process endpoint against that resolved configuration before product DSP runs. This gives plugin adapters, devices, graphs, embedded callers, and offline runtimes the same core legality contract rather than relying on one deployment adapter to be trusted implicitly.
 
 The current runtime may traverse a buffer source once for endpoint legality and again for block dimensions/processing. Keep that simple bounded behavior until representative measurement justifies a combined process plan or stronger source-qualification API.
 
@@ -128,15 +144,15 @@ pub trait Component {
 
 Returning a validated schema by value is acceptable because schema construction is a setup/control-domain operation. `InstanceRuntime` snapshots that result immutably, and `ActivationConfig::schema()` gives activation code the exact frozen generation rather than asking product code to reconstruct it again.
 
-Common effect authoring remains concise through `ComponentSchema::stereo_effect(...)` or `stereo_effect_with_state(...)`. Zero-audio/event processors and custom I/O components construct their actual schema explicitly rather than inheriting a hidden effect default.
+Common effect authoring remains concise through `ComponentSchema::stereo_effect(...)` or `stereo_effect_with_state(...)`. Zero-audio/event processors and custom I/O components construct their actual schema and choose their I/O policy explicitly rather than inheriting a hidden effect default.
 
 ## Owned schema metadata
 
-The remaining metadata limitation is that several stable audio/event identities and display fields are still source-static. That is acceptable for current plugin fixtures but not sufficient for dynamically discovered/hosted components.
+Audio/event schema metadata now supports both static and runtime-owned forms. `PortKey` / `EventPortKey` and their display metadata use borrowed-or-owned setup-domain storage; event dialect capability lists likewise may be borrowed static slices or owned vectors.
 
-Schema construction is non-realtime. Prefer owned validated identifiers/metadata where dynamic construction is useful. `Arc<str>` or another validated owned string representation is preferable to a hidden global interner merely to avoid small setup-domain allocations; dense indices already remove strings from processing.
+This preserves zero-allocation static product declarations while allowing dynamically discovered or hosted components to build ordinary `ComponentSchema` values from runtime metadata. Dense indices still remove stable strings from processing, so ownership generality does not change the callback contract.
 
-Do not change every metadata type merely for aesthetic consistency. Migrate the fields that materially block dynamic/hosted components, then let real host/graph/device clients determine whether further ownership abstraction is warranted.
+Do not add a global string interner merely for metadata identity. If future graph/device/hosting clients expose another concrete ownership requirement, solve that requirement explicitly rather than abstracting all metadata preemptively.
 
 ## State identity
 
@@ -149,7 +165,7 @@ Distinguish:
 
 A product manifest may connect the two, but a plugin ABI identifier must not become core state identity accidentally.
 
-Core complete-state APIs already use schema-owned identity. CLAP now does the same: shared state retains the validated schema snapshot, state save/load uses its `StateIdentity`, and `CLAP_ID` is used only for CLAP deployment identity. The duplicated `CLAP_STATE_SCHEMA` authority is removed.
+Core complete-state APIs already use schema-owned identity. CLAP does the same: shared state retains the validated schema snapshot, state save/load uses its `StateIdentity`, and `CLAP_ID` is used only for CLAP deployment identity. The duplicated `CLAP_STATE_SCHEMA` authority is removed.
 
 Do not make state identity mandatory for every core component merely because plugin deployment needs it. Identity-less schemas remain useful for transient or embedded components until a real persistence requirement proves otherwise; deployments that persist state may require identity at their own boundary.
 
@@ -157,16 +173,9 @@ Do not make state identity mandatory for every core component merely because plu
 
 Neutral core semantics do not imply verbose common cases.
 
-`ComponentSchema::stereo_effect(...)` and `stereo_effect_with_state(...)` are explicit convention helpers. Additional helpers should only be added for repeated real patterns such as:
+`ComponentSchema::stereo_effect(...)` and `stereo_effect_with_state(...)` are explicit convention helpers. They create an ordinary schema whose audio policy permits exactly stereo main input/output with an optional stereo sidechain.
 
-```text
-mono effect
-stereo effect + optional sidechain variants
-stereo instrument output
-zero-audio event processor
-```
-
-A helper creates an ordinary schema/configuration. It does not create a separate lifecycle model or processor trait.
+Additional helpers should only be added after repeated real patterns prove them useful, for example mono effects, stereo instruments, or common multi-output instruments. A helper must not introduce a separate lifecycle or processor trait.
 
 ## Runtime construction
 
@@ -178,45 +187,54 @@ Do not reintroduce constructor families whose differences only reflect the histo
 
 Once an instance is created, compatibility-sensitive schema is fixed for that instance generation.
 
-Activation with a component whose schema no longer matches fails before product resources become active.
+Activation with a component whose state identity, audio ports, audio-I/O policy, event ports, or parameters no longer match fails before product resources become active. Changing policy is a schema-generation change even if the port descriptors themselves remain identical.
 
-Explicit dynamic reconfiguration may later exist for capabilities designed to change, such as accepted audio layouts. Immutable identity/schema changes are not silently accepted as ordinary activation changes.
+Explicit dynamic reconfiguration may later exist for capabilities designed to change within one policy, such as selecting another allowed audio layout. Immutable schema/policy changes are not silently accepted as ordinary activation changes.
 
 ## I/O policy
 
-Structural port validation and dense endpoint legality are implemented, but port existence alone cannot express every legal whole-component configuration.
+Port descriptors answer **what ports exist**. `AudioIoPolicy` answers **which complete active-port/layout combinations are semantically supported**.
 
-The next semantic layer should be able to express policies such as:
+The initial executable policy forms are deliberately small:
 
 ```text
-mono in -> mono out
-or
-stereo in -> stereo out
-with optional stereo sidechain
+AnyStructurallyValid
+Enumerated([configuration...])
 ```
 
-Do not ask CLAP/VST3/AU/device/graph adapters to infer these combinations independently.
+Enumerated policies are validated when the schema is built. Runtime activation rejects a structurally valid proposal that is outside policy before product DSP construction, and adapters must use the same policy rather than infer their own cross-port rules.
 
-The policy remains setup/control-domain data and produces one accepted activation configuration/process plan.
+The default effect helper enumerates:
+
+```text
+stereo main in + stereo main out
+or
+stereo main in + stereo main out + stereo sidechain
+```
+
+Rule-family policies such as “main input/output must have the same supported layout” should be added only when a real component needs a non-finite or impractically large configuration family. Do not generalize the policy language ahead of those requirements.
 
 ## Realtime implications
 
 The architecture should continue to preserve:
 
 - all stable-key validation and key -> index resolution outside processing;
+- whole-I/O policy evaluation outside processing;
 - no callback string allocation or lookup;
 - no hidden global interner;
 - small value-type process endpoints;
 - no schema/configuration mutation racing an active processor;
 - bounded validation/work before product DSP;
-- format-specific setup mappings derived from the same semantic schema.
+- format-specific setup mappings derived from the same semantic schema and policy.
 
 ## Next migration order
 
-1. make stable audio/event metadata dynamically ownable where real hosted/dynamic clients require it;
-2. implement explicit whole-I/O configuration policy;
-3. exercise instruments, multi-output processors, and dynamic/hosted metadata through the same schema/runtime model;
-4. only then move outward into broader background lifecycle, UI, device, graph, and hosting layers.
+1. exercise an instrument with event input and audio output through the same schema/runtime path;
+2. exercise a multi-output component and a sidechain/multi-layout component;
+3. exercise runtime-owned dynamic metadata in a hosted/embedded-style fixture rather than only unit construction;
+4. use those materially different clients to decide whether rule-family I/O policies or additional convenience constructors are actually needed;
+5. close any remaining proof-era state/core API helpers exposed by those fixtures;
+6. only then move outward into broader background lifecycle, UI, device, graph, and hosting layers.
 
 Do not preserve source compatibility with unpublished proof APIs at the expense of the target model.
 
@@ -231,4 +249,4 @@ Do not freeze this surface until it has represented and been exercised by materi
 - multi-output component;
 - embedded/graph-node use without plugin deployment;
 - plugin adapter projection;
-- dynamic/hosted component metadata where applicable.
+- dynamic/hosted component metadata.
