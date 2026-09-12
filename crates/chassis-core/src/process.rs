@@ -1091,8 +1091,7 @@ mod tests {
                 velocity: velocity(0.5),
             },
         )];
-        let wrong_frames =
-            NoteEvents::new(&raw_notes, 1, 1).expect("note event shape is valid");
+        let wrong_frames = NoteEvents::new(&raw_notes, 1, 1).expect("note event shape is valid");
         let context = ProcessContext::with_note_events(
             ProcessMode::Realtime,
             TransportSnapshot::unknown(),
