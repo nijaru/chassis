@@ -6,6 +6,7 @@ use crate::{
     audio::AudioIoConfiguration,
     automation::ParameterEvents,
     buffer::{BufferAccessError, BufferRelationship, ChannelBuffer, InputEndpoint, OutputEndpoint},
+    events::NoteEvents,
     parameters::{ParameterAutomationError, ParameterStore},
 };
 
@@ -124,20 +125,42 @@ pub struct ProcessContext<'a> {
     mode: ProcessMode,
     transport: TransportSnapshot,
     parameter_events: ParameterEvents<'a>,
+    note_events: NoteEvents<'a>,
 }
 
 impl<'a> ProcessContext<'a> {
-    /// Construct process context from backend-normalized values.
+    /// Construct process context from backend-normalized values with no note events.
     #[must_use]
     pub const fn new(
         mode: ProcessMode,
         transport: TransportSnapshot,
         parameter_events: ParameterEvents<'a>,
     ) -> Self {
+        let frame_count = parameter_events.frame_count();
         Self {
             mode,
             transport,
             parameter_events,
+            note_events: NoteEvents::empty_for_block(frame_count),
+        }
+    }
+
+    /// Construct process context with validated semantic note events.
+    ///
+    /// Frame-count and activation-owned event-count consistency are checked when
+    /// the context is turned into a [`ProcessBlock`].
+    #[must_use]
+    pub const fn with_note_events(
+        mode: ProcessMode,
+        transport: TransportSnapshot,
+        parameter_events: ParameterEvents<'a>,
+        note_events: NoteEvents<'a>,
+    ) -> Self {
+        Self {
+            mode,
+            transport,
+            parameter_events,
+            note_events,
         }
     }
 
@@ -158,6 +181,12 @@ impl<'a> ProcessContext<'a> {
     pub const fn parameter_events(self) -> ParameterEvents<'a> {
         self.parameter_events
     }
+
+    /// Return the validated borrowed semantic note events.
+    #[must_use]
+    pub const fn note_events(self) -> NoteEvents<'a> {
+        self.note_events
+    }
 }
 
 /// Resource bounds/configuration supplied when a processor is activated.
@@ -170,6 +199,7 @@ pub struct ProcessConfig {
     guaranteed_min_frames: Option<NonZeroU32>,
     max_frames: NonZeroU32,
     max_parameter_events: u32,
+    max_note_events: u32,
 }
 
 impl ProcessConfig {
@@ -180,6 +210,8 @@ impl ProcessConfig {
     /// legally issue a zero-frame process call. `max_parameter_events` is the
     /// activation-owned bound for normalized parameter events in one callback;
     /// zero means that the component/adapter accepts no parameter events.
+    /// Semantic note-event capacity defaults to zero and can be enabled with
+    /// [`Self::with_max_note_events`].
     ///
     /// # Errors
     ///
@@ -205,7 +237,15 @@ impl ProcessConfig {
             guaranteed_min_frames,
             max_frames,
             max_parameter_events,
+            max_note_events: 0,
         })
+    }
+
+    /// Set the maximum semantic note events accepted per callback.
+    #[must_use]
+    pub const fn with_max_note_events(mut self, max_note_events: u32) -> Self {
+        self.max_note_events = max_note_events;
+        self
     }
 
     /// Return the activation sample rate in Hz.
@@ -233,6 +273,12 @@ impl ProcessConfig {
     #[must_use]
     pub const fn max_parameter_events(self) -> u32 {
         self.max_parameter_events
+    }
+
+    /// Return the maximum semantic note events accepted per callback.
+    #[must_use]
+    pub const fn max_note_events(self) -> u32 {
+        self.max_note_events
     }
 }
 
@@ -519,6 +565,20 @@ where
                 maximum: config.process().max_parameter_events(),
             });
         }
+        if context.note_events().frame_count() != frame_count {
+            return Err(ProcessBlockError::NoteEventFrameCountMismatch {
+                expected: frame_count,
+                actual: context.note_events().frame_count(),
+            });
+        }
+        let maximum_note_events = usize::try_from(config.process().max_note_events())
+            .map_err(|_| ProcessBlockError::NoteEventLimitNotRepresentable)?;
+        if context.note_events().len() > maximum_note_events {
+            return Err(ProcessBlockError::NoteEventCountTooLarge {
+                actual: context.note_events().len(),
+                maximum: config.process().max_note_events(),
+            });
+        }
         if let Some(minimum) = config.process().guaranteed_min_frames()
             && frame_count < minimum.get()
         {
@@ -578,6 +638,12 @@ where
         self.context.parameter_events()
     }
 
+    /// Return validated borrowed semantic note events.
+    #[must_use]
+    pub const fn note_events(&self) -> NoteEvents<'context> {
+        self.context.note_events()
+    }
+
     /// Return the current validated base/control parameter values.
     #[must_use]
     pub const fn parameters(&self) -> &'parameters ParameterStore {
@@ -635,6 +701,22 @@ pub enum ProcessBlockError {
         /// Activation-owned maximum.
         maximum: u32,
     },
+    /// Note events were validated for another block size.
+    NoteEventFrameCountMismatch {
+        /// Actual process block size.
+        expected: u32,
+        /// Block size used to validate the events.
+        actual: u32,
+    },
+    /// The activation note-event bound cannot be represented by platform `usize`.
+    NoteEventLimitNotRepresentable,
+    /// The callback supplied more note events than activation allows.
+    NoteEventCountTooLarge {
+        /// Actual event count.
+        actual: usize,
+        /// Activation-owned maximum.
+        maximum: u32,
+    },
 }
 
 impl fmt::Display for ProcessBlockError {
@@ -669,6 +751,17 @@ impl fmt::Display for ProcessBlockError {
                 formatter,
                 "process block has {actual} parameter events but activation allows {maximum}"
             ),
+            Self::NoteEventFrameCountMismatch { expected, actual } => write!(
+                formatter,
+                "note events were validated for {actual} frames but process block has {expected}"
+            ),
+            Self::NoteEventLimitNotRepresentable => {
+                formatter.write_str("note event limit is not representable on this platform")
+            }
+            Self::NoteEventCountTooLarge { actual, maximum } => write!(
+                formatter,
+                "process block has {actual} note events but activation allows {maximum}"
+            ),
         }
     }
 }
@@ -683,7 +776,10 @@ impl std::error::Error for ProcessBlockError {
             | Self::BufferFrameCountMismatch { .. }
             | Self::ParameterEventFrameCountMismatch { .. }
             | Self::ParameterEventLimitNotRepresentable
-            | Self::ParameterEventCountTooLarge { .. } => None,
+            | Self::ParameterEventCountTooLarge { .. }
+            | Self::NoteEventFrameCountMismatch { .. }
+            | Self::NoteEventLimitNotRepresentable
+            | Self::NoteEventCountTooLarge { .. } => None,
         }
     }
 }
@@ -695,6 +791,9 @@ mod tests {
         audio::{DEFAULT_EFFECT_CONFIGURATION, MAIN_INPUT, MAIN_OUTPUT},
         automation::{ParameterEvent, ParameterEventValue},
         buffer::{ChannelBuffer, InputEndpoint, OutputEndpoint},
+        events::{
+            EventPortIndex, NormalizedValue, NoteAddress, NoteEvent, NoteEventKind, NoteEvents,
+        },
         parameters::ParameterIndex,
     };
 
@@ -704,6 +803,14 @@ mod tests {
 
     fn empty_parameters() -> ParameterStore {
         ParameterStore::new(&[]).expect("empty parameter schema is valid")
+    }
+
+    fn note_address() -> NoteAddress {
+        NoteAddress::new(EventPortIndex::new(0), None, None, None)
+    }
+
+    fn velocity(value: f64) -> NormalizedValue {
+        NormalizedValue::new(value).expect("test note velocity is valid")
     }
 
     struct SplitChannelBuffers<'buffers, 'samples, S> {
@@ -771,6 +878,7 @@ mod tests {
         assert_eq!(config.guaranteed_min_frames(), None);
         assert_eq!(config.max_frames(), maximum(2048));
         assert_eq!(config.max_parameter_events(), 0);
+        assert_eq!(config.max_note_events(), 0);
     }
 
     #[test]
@@ -893,10 +1001,42 @@ mod tests {
         assert_eq!(context.transport().sample_position(), Some(12));
         assert!(context.parameter_events().is_empty());
         assert_eq!(context.parameter_events().frame_count(), 4);
+        assert!(context.note_events().is_empty());
+        assert_eq!(context.note_events().frame_count(), 4);
         assert_eq!(
             TransportSnapshot::new(None, None, Some(0.0), None),
             Err(TransportSnapshotError::InvalidTempo)
         );
+    }
+
+    #[test]
+    fn process_block_exposes_bounded_note_events() {
+        let process = ProcessConfig::new(48_000.0, None, maximum(8), 0)
+            .expect("test configuration is valid")
+            .with_max_note_events(2);
+        let activation = ActivationConfig::new(process, DEFAULT_EFFECT_CONFIGURATION);
+        let parameters = empty_parameters();
+        let raw_notes = [NoteEvent::new(
+            1,
+            NoteEventKind::On {
+                address: note_address(),
+                velocity: velocity(0.75),
+            },
+        )];
+        let notes = NoteEvents::new(&raw_notes, 2, 2).expect("note events are valid");
+        let context = ProcessContext::with_note_events(
+            ProcessMode::Realtime,
+            TransportSnapshot::unknown(),
+            ParameterEvents::empty_for_block(2),
+            notes,
+        );
+        let mut buffers: [ChannelBuffer<'_, f32>; 0] = [];
+        let mut source = ChannelBufferSlice::new(&mut buffers);
+        let block = ProcessBlock::new(&activation, &parameters, 2, context, &mut source)
+            .expect("bounded note-event context is valid");
+
+        assert_eq!(block.note_events().len(), 1);
+        assert_eq!(block.note_events().iter().next(), Some(&raw_notes[0]));
     }
 
     #[test]
@@ -932,6 +1072,54 @@ mod tests {
         assert!(matches!(
             ProcessBlock::new(&activation, &parameters, 2, context, &mut source),
             Err(ProcessBlockError::ParameterEventCountTooLarge {
+                actual: 1,
+                maximum: 0,
+            })
+        ));
+    }
+
+    #[test]
+    fn process_block_rejects_invalid_note_event_context() {
+        let process =
+            ProcessConfig::new(48_000.0, None, maximum(8), 0).expect("test configuration is valid");
+        let activation = ActivationConfig::new(process, DEFAULT_EFFECT_CONFIGURATION);
+        let parameters = empty_parameters();
+        let raw_notes = [NoteEvent::new(
+            0,
+            NoteEventKind::On {
+                address: note_address(),
+                velocity: velocity(0.5),
+            },
+        )];
+        let wrong_frames =
+            NoteEvents::new(&raw_notes, 1, 1).expect("note event shape is valid");
+        let context = ProcessContext::with_note_events(
+            ProcessMode::Realtime,
+            TransportSnapshot::unknown(),
+            ParameterEvents::empty_for_block(2),
+            wrong_frames,
+        );
+        let mut buffers: [ChannelBuffer<'_, f32>; 0] = [];
+        let mut source = ChannelBufferSlice::new(&mut buffers);
+
+        assert!(matches!(
+            ProcessBlock::new(&activation, &parameters, 2, context, &mut source),
+            Err(ProcessBlockError::NoteEventFrameCountMismatch {
+                expected: 2,
+                actual: 1,
+            })
+        ));
+
+        let notes = NoteEvents::new(&raw_notes, 2, 1).expect("note event shape is valid");
+        let context = ProcessContext::with_note_events(
+            ProcessMode::Realtime,
+            TransportSnapshot::unknown(),
+            ParameterEvents::empty_for_block(2),
+            notes,
+        );
+        assert!(matches!(
+            ProcessBlock::new(&activation, &parameters, 2, context, &mut source),
+            Err(ProcessBlockError::NoteEventCountTooLarge {
                 actual: 1,
                 maximum: 0,
             })
