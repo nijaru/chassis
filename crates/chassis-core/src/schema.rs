@@ -94,7 +94,10 @@ impl fmt::Display for ComponentIdError {
         match self {
             Self::Empty => formatter.write_str("component identity is empty"),
             Self::Whitespace(character) => {
-                write!(formatter, "component identity contains whitespace {character:?}")
+                write!(
+                    formatter,
+                    "component identity contains whitespace {character:?}"
+                )
             }
             Self::Control(character) => write!(
                 formatter,
@@ -271,7 +274,10 @@ mod tests {
 
         assert_eq!(schema.id().as_str(), "org.nijaru.schema-probe");
         assert_eq!(schema.state_schema(), StateSchemaVersion::new(1));
-        assert_eq!(schema.audio_port_index(MAIN_INPUT), Some(AudioPortIndex::new(0)));
+        assert_eq!(
+            schema.audio_port_index(MAIN_INPUT),
+            Some(AudioPortIndex::new(0))
+        );
         assert_eq!(
             schema.event_port_index(note_key),
             Some(EventPortIndex::new(0))
