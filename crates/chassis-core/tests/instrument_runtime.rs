@@ -100,9 +100,9 @@ impl Process<f32> for InstrumentProcessor {
         let initial_gate = self.gate;
 
         for mut channel in block.channels() {
-            if !channel
+            if channel
                 .output_endpoint()
-                .is_some_and(|endpoint| endpoint.port_index() == self.output)
+                .is_none_or(|endpoint| endpoint.port_index() != self.output)
             {
                 continue;
             }
@@ -162,6 +162,13 @@ fn velocity(value: f64) -> NormalizedValue {
     NormalizedValue::new(value).expect("test velocity is normalized")
 }
 
+fn assert_samples(actual: &[f32], expected: &[f32]) {
+    assert_eq!(actual.len(), expected.len());
+    for (actual, expected) in actual.iter().zip(expected) {
+        assert!((*actual - *expected).abs() <= f32::EPSILON);
+    }
+}
+
 #[test]
 fn note_input_drives_stereo_output_without_audio_input() {
     let component = Instrument;
@@ -177,7 +184,10 @@ fn note_input_drives_stereo_output_without_audio_input() {
         .event_port_index(&NOTE_INPUT)
         .expect("instrument note input has a dense runtime index");
 
-    let audio = [ConfiguredAudioPort::new(AUDIO_OUTPUT, ChannelLayout::Stereo)];
+    let audio = [ConfiguredAudioPort::new(
+        AUDIO_OUTPUT,
+        ChannelLayout::Stereo,
+    )];
     runtime
         .activate(
             &component,
@@ -224,6 +234,6 @@ fn note_input_drives_stereo_output_without_audio_input() {
         .expect("instrument output-only process block succeeds");
 
     let expected = [0.0, 0.0, 0.25, 0.25, 0.25, 0.25, 0.0, 0.0];
-    assert_eq!(left, expected);
-    assert_eq!(right, expected);
+    assert_samples(&left, &expected);
+    assert_samples(&right, &expected);
 }
