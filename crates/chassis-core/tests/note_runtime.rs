@@ -13,13 +13,25 @@ use chassis_core::{
     audio::{AudioIoConfiguration, AudioPortDescriptor},
     automation::ParameterEvents,
     buffer::ChannelBuffer,
-    events::{EventPortIndex, NormalizedValue, NoteAddress, NoteEvent, NoteEventKind, NoteEvents},
+    events::{
+        EventDialect, EventPortDescriptor, EventPortDirection, EventPortIndex, EventPortKey,
+        NormalizedValue, NoteAddress, NoteEvent, NoteEventKind, NoteEvents,
+    },
     process::{
         ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessConfig, ProcessContext,
         ProcessMode, TransportSnapshot,
     },
     runtime::{Component, InstanceRuntime, Process, Processor},
 };
+
+const NOTE_INPUT: EventPortKey = EventPortKey::new("notes.in");
+const NOTE_DIALECTS: &[EventDialect] = &[EventDialect::Notes];
+const NOTE_PORTS: &[EventPortDescriptor] = &[EventPortDescriptor {
+    key: NOTE_INPUT,
+    name: "Notes",
+    direction: EventPortDirection::Input,
+    dialects: NOTE_DIALECTS,
+}];
 
 struct NoteProbe {
     observed_note_ons: Arc<AtomicU32>,
@@ -31,6 +43,10 @@ impl Component for NoteProbe {
 
     fn audio_ports(&self) -> &[AudioPortDescriptor] {
         &[]
+    }
+
+    fn event_ports(&self) -> &[EventPortDescriptor] {
+        NOTE_PORTS
     }
 
     fn activate(
@@ -77,9 +93,9 @@ fn process_config() -> ProcessConfig {
     .with_max_note_events(8)
 }
 
-fn note_address(key: u8) -> NoteAddress {
+fn note_address(port: EventPortIndex, key: u8) -> NoteAddress {
     NoteAddress::new(
-        EventPortIndex::new(0),
+        port,
         None,
         None,
         Some(chassis_core::events::NoteKey::new(key).expect("test key is valid")),
@@ -98,6 +114,11 @@ fn zero_audio_processor_receives_bounded_semantic_note_events() {
     };
     let mut runtime: InstanceRuntime<NoteProbeProcessor> =
         InstanceRuntime::for_component(&component).expect("note probe schema is valid");
+    let note_port = runtime
+        .event_port_index(NOTE_INPUT)
+        .expect("stable note port resolves to a dense runtime index");
+    assert_eq!(runtime.event_ports(), NOTE_PORTS);
+
     runtime
         .activate(&component, process_config(), AudioIoConfiguration::new(&[]))
         .expect("zero-audio note probe activates");
@@ -106,21 +127,21 @@ fn zero_audio_processor_receives_bounded_semantic_note_events() {
         NoteEvent::new(
             2,
             NoteEventKind::On {
-                address: note_address(60),
+                address: note_address(note_port, 60),
                 velocity: velocity(0.8),
             },
         ),
         NoteEvent::new(
             9,
             NoteEventKind::On {
-                address: note_address(64),
+                address: note_address(note_port, 64),
                 velocity: velocity(0.7),
             },
         ),
         NoteEvent::new(
             31,
             NoteEventKind::Off {
-                address: note_address(60),
+                address: note_address(note_port, 60),
                 velocity: velocity(0.2),
             },
         ),
