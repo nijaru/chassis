@@ -309,9 +309,8 @@ impl std::error::Error for ProcessConfigError {}
 
 /// Immutable configuration accepted for one processor activation.
 ///
-/// Product code receives this only after framework structural I/O validation.
-/// Product-specific I/O policy remains an explicit future extension; this type
-/// does not silently infer it.
+/// Product code receives this only after framework structural validation and
+/// the component schema's whole-audio-I/O policy have accepted the configuration.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ActivationConfig<'a> {
     process: ProcessConfig,

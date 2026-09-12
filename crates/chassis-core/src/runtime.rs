@@ -432,43 +432,6 @@ impl std::error::Error for InstanceStateError {
     }
 }
 
-/// Failure while decoding, migrating, or applying a complete parameter state.
-#[derive(Debug)]
-pub enum InstanceStateLoadError<E> {
-    /// The encoded state was malformed or exceeded its bounds.
-    Decode(StateDecodeError),
-    /// Product-schema migration failed before live state was touched.
-    Migration(StateMigrationError<E>),
-    /// The migrated state failed current parameter validation.
-    Apply(InstanceStateError),
-}
-
-impl<E> fmt::Display for InstanceStateLoadError<E>
-where
-    E: fmt::Display,
-{
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Decode(error) => write!(formatter, "could not decode state: {error}"),
-            Self::Migration(error) => write!(formatter, "could not migrate state: {error}"),
-            Self::Apply(error) => write!(formatter, "could not apply state: {error}"),
-        }
-    }
-}
-
-impl<E> std::error::Error for InstanceStateLoadError<E>
-where
-    E: std::error::Error + 'static,
-{
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Decode(error) => Some(error),
-            Self::Migration(error) => Some(error),
-            Self::Apply(error) => Some(error),
-        }
-    }
-}
-
 /// Failure while validating a complete semantic instance state.
 #[derive(Debug)]
 pub enum InstanceSemanticStateError<E> {
@@ -906,41 +869,6 @@ where
         })
     }
 
-    /// Build a semantic document containing all durable parameter base values.
-    ///
-    /// This compatibility helper excludes custom product state and still accepts
-    /// explicit identity. Complete instance state should use [`Self::state_document`].
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ParameterStateError`] if document construction fails.
-    pub fn parameter_state_document(
-        &self,
-        product_id: impl Into<String>,
-        product_schema: u32,
-    ) -> Result<StateDocument, ParameterStateError> {
-        self.parameters.state_document(product_id, product_schema)
-    }
-
-    /// Encode all durable parameter base values under explicit state bounds.
-    ///
-    /// This compatibility helper excludes custom product state and still accepts
-    /// explicit identity. Complete instance state should use [`Self::encode_state`].
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ParameterStateError`] if semantic document construction or
-    /// encoding fails.
-    pub fn encode_parameter_state(
-        &self,
-        product_id: impl Into<String>,
-        product_schema: u32,
-        limits: StateLimits,
-    ) -> Result<Vec<u8>, ParameterStateError> {
-        self.parameters
-            .encode_state(product_id, product_schema, limits)
-    }
-
     /// Build the complete durable semantic state using schema-owned identity.
     ///
     /// Framework-managed parameters are emitted from the canonical parameter
@@ -949,35 +877,22 @@ where
     ///
     /// # Errors
     ///
-    /// Returns [`InstanceStateExportError::MissingStateIdentity`] while a
-    /// transitional component still uses an unidentified schema, or wraps a
-    /// parameter/state document error.
+    /// Returns [`InstanceStateExportError::MissingStateIdentity`] when this
+    /// component is intentionally identity-less, or wraps a parameter/state
+    /// document error.
     pub fn state_document(&self) -> Result<StateDocument, InstanceStateExportError> {
         let (product_id, product_schema) = self
             .semantic_state_identity()
             .ok_or(InstanceStateExportError::MissingStateIdentity)?;
-        self.state_document_for_product(product_id, product_schema)
-            .map_err(InstanceStateExportError::State)
-    }
-
-    /// Historical explicit-identity complete-state export.
-    ///
-    /// This remains only while deployment adapters migrate to schema-owned
-    /// semantic state identity.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ParameterStateError`] if document construction fails.
-    pub fn state_document_for_product(
-        &self,
-        product_id: impl Into<String>,
-        product_schema: u32,
-    ) -> Result<StateDocument, ParameterStateError> {
-        let mut document = self.parameters.state_document(product_id, product_schema)?;
+        let mut document = self
+            .parameters
+            .state_document(product_id, product_schema)
+            .map_err(InstanceStateExportError::State)?;
         for entry in &self.custom_state {
             document
                 .insert(entry.clone())
-                .map_err(ParameterStateError::Document)?;
+                .map_err(ParameterStateError::Document)
+                .map_err(InstanceStateExportError::State)?;
         }
         Ok(document)
     }
@@ -994,22 +909,6 @@ where
             .encode_with_limits(limits)
             .map_err(ParameterStateError::Encode)
             .map_err(InstanceStateExportError::State)
-    }
-
-    /// Historical explicit-identity complete-state encoding.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ParameterStateError`] if document construction or encoding fails.
-    pub fn encode_state_for_product(
-        &self,
-        product_id: impl Into<String>,
-        product_schema: u32,
-        limits: StateLimits,
-    ) -> Result<Vec<u8>, ParameterStateError> {
-        self.state_document_for_product(product_id, product_schema)?
-            .encode_with_limits(limits)
-            .map_err(ParameterStateError::Encode)
     }
 
     fn parameter_state_candidate(
@@ -1037,28 +936,11 @@ where
         Ok(candidate)
     }
 
-    /// Replace durable parameter state transactionally from a complete document.
-    ///
-    /// This compatibility path publishes framework-managed parameters only and
-    /// leaves the current custom product state unchanged. Complete semantic state
-    /// should use [`Self::apply_state`].
-    ///
-    /// # Errors
-    ///
-    /// Returns [`InstanceStateError`] for identity/schema/value errors, unknown
-    /// parameter entries, or an incomplete parameter snapshot.
-    pub fn apply_parameter_state_for_product(
-        &mut self,
-        document: &StateDocument,
-        product_id: &str,
-        product_schema: u32,
-    ) -> Result<(), InstanceStateError> {
-        let candidate = self.parameter_state_candidate(document, product_id, product_schema)?;
-        self.parameters = candidate;
-        Ok(())
-    }
-
     /// Replace complete semantic instance state using schema-owned identity.
+    ///
+    /// Framework parameters and custom entries are validated into temporary
+    /// candidates. Product validation sees both candidates, and neither is
+    /// published until every check succeeds.
     ///
     /// # Errors
     ///
@@ -1078,37 +960,8 @@ where
                 .ok_or(InstanceSemanticStateError::Parameters(
                     InstanceStateError::MissingStateIdentity,
                 ))?;
-        self.apply_state_for_product(
-            document,
-            &product_id,
-            product_schema,
-            validate_product_state,
-        )
-    }
-
-    /// Historical explicit-identity complete semantic-state replacement.
-    ///
-    /// Framework parameters are validated into a temporary store. All
-    /// non-`parameter/` entries are copied into a canonical temporary custom
-    /// state projection. `validate_product_state` then receives both candidates
-    /// so products can validate cross-field invariants. Neither candidate is
-    /// published until every framework and product check succeeds.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`InstanceSemanticStateError`] on framework or product rejection.
-    pub fn apply_state_for_product<E, F>(
-        &mut self,
-        document: &StateDocument,
-        product_id: &str,
-        product_schema: u32,
-        validate_product_state: F,
-    ) -> Result<(), InstanceSemanticStateError<E>>
-    where
-        F: FnOnce(&ParameterStore, &[StateEntry]) -> Result<(), E>,
-    {
         let candidate_parameters = self
-            .parameter_state_candidate(document, product_id, product_schema)
+            .parameter_state_candidate(document, &product_id, product_schema)
             .map_err(InstanceSemanticStateError::Parameters)?;
         let mut candidate_custom: Vec<_> = document
             .entries()
@@ -1124,36 +977,6 @@ where
         self.parameters = candidate_parameters;
         self.custom_state = candidate_custom;
         Ok(())
-    }
-
-    /// Decode, migrate, and apply a complete parameter state transactionally.
-    ///
-    /// This compatibility path publishes framework-managed parameters only.
-    /// Custom entries remain unchanged even though migration preserves them.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`InstanceStateLoadError`] when decoding, migration, or current
-    /// schema validation fails. The runtime is unchanged on every failure.
-    pub fn apply_parameter_state_bytes<M>(
-        &mut self,
-        bytes: &[u8],
-        product_id: &str,
-        product_schema: u32,
-        limits: StateLimits,
-        migrations: &[&M],
-    ) -> Result<(), InstanceStateLoadError<M::Error>>
-    where
-        M: StateMigration + ?Sized,
-        M::Error: std::error::Error + 'static,
-    {
-        let document = StateDocument::decode_with_limits(bytes, limits)
-            .map_err(InstanceStateLoadError::Decode)?;
-        let document = document
-            .migrate_to(product_schema, migrations)
-            .map_err(InstanceStateLoadError::Migration)?;
-        self.apply_parameter_state_for_product(&document, product_id, product_schema)
-            .map_err(InstanceStateLoadError::Apply)
     }
 
     /// Decode, migrate, validate, and publish complete semantic state using
@@ -1177,57 +1000,20 @@ where
         E: std::error::Error + 'static,
         F: FnOnce(&ParameterStore, &[StateEntry]) -> Result<(), E>,
     {
-        let (product_id, product_schema) =
-            self.semantic_state_identity()
-                .ok_or(InstanceSemanticStateLoadError::Apply(
-                    InstanceSemanticStateError::Parameters(
-                        InstanceStateError::MissingStateIdentity,
-                    ),
-                ))?;
-        self.apply_state_bytes_for_product(
-            bytes,
-            &product_id,
-            product_schema,
-            limits,
-            migrations,
-            validate_product_state,
-        )
-    }
-
-    /// Historical explicit-identity decoded semantic-state replacement.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`InstanceSemanticStateLoadError`] for bounded decode failures,
-    /// migration failures, framework parameter failures, or product-defined
-    /// semantic validation failures.
-    pub fn apply_state_bytes_for_product<M, E, F>(
-        &mut self,
-        bytes: &[u8],
-        product_id: &str,
-        product_schema: u32,
-        limits: StateLimits,
-        migrations: &[&M],
-        validate_product_state: F,
-    ) -> Result<(), InstanceSemanticStateLoadError<M::Error, E>>
-    where
-        M: StateMigration + ?Sized,
-        M::Error: std::error::Error + 'static,
-        E: std::error::Error + 'static,
-        F: FnOnce(&ParameterStore, &[StateEntry]) -> Result<(), E>,
-    {
+        let target_schema = self
+            .schema
+            .state_identity()
+            .map(|identity| identity.schema().get())
+            .ok_or(InstanceSemanticStateLoadError::Apply(
+                InstanceSemanticStateError::Parameters(InstanceStateError::MissingStateIdentity),
+            ))?;
         let document = StateDocument::decode_with_limits(bytes, limits)
             .map_err(InstanceSemanticStateLoadError::Decode)?;
         let document = document
-            .migrate_to(product_schema, migrations)
+            .migrate_to(target_schema, migrations)
             .map_err(InstanceSemanticStateLoadError::Migration)?;
-        self.apply_state_for_product(
-            &document,
-            product_id,
-            product_schema,
-            validate_product_state,
-        )
-        .map_err(InstanceSemanticStateLoadError::Apply)
+        self.apply_state(&document, validate_product_state)
+            .map_err(InstanceSemanticStateLoadError::Apply)
     }
 }
 

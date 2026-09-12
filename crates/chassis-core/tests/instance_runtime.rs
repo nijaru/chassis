@@ -21,10 +21,7 @@ use chassis_core::{
         ActivationConfig, ProcessBlock, ProcessBlockError, ProcessBufferSource, ProcessChannel,
         ProcessConfig, ProcessContext, ProcessMode, TransportSnapshot,
     },
-    runtime::{
-        Component, InstanceRuntime, InstanceStateError, InstanceStateLoadError, Process, Processor,
-    },
-    state::{StateDocument, StateEntry, StateMigration, StateMigrationError, StateValue},
+    runtime::{Component, InstanceRuntime, Process, Processor},
 };
 
 const MAIN_INPUT_INDEX: AudioPortIndex = AudioPortIndex::new(0);
@@ -169,43 +166,6 @@ impl<'samples, S> ProcessBufferSource<S> for SplitChannelBuffers<'_, 'samples, S
     }
 }
 
-const LEGACY_STATE_V1: &[u8] = &[
-    b'C', b'H', b'S', b'S', 1, 0, 18, 0, 1, 0, 0, 0, 1, 0, 0, 0, b'c', b'o', b'm', b'.', b'e',
-    b'x', b'a', b'm', b'p', b'l', b'e', b'.', b'e', b'f', b'f', b'e', b'c', b't', 18, 0, 3, 0, 8,
-    0, 0, 0, b'p', b'a', b'r', b'a', b'm', b'e', b't', b'e', b'r', b'/', b'o', b'l', b'd', b'_',
-    b'g', b'a', b'i', b'n', 0, 0, 0, 0, 0, 0, 208, 63,
-];
-
-struct RenameGainMigration;
-
-impl StateMigration for RenameGainMigration {
-    type Error = Infallible;
-
-    fn source_schema(&self) -> u32 {
-        1
-    }
-
-    fn to_schema(&self) -> u32 {
-        2
-    }
-
-    fn migrate(&self, document: StateDocument) -> Result<StateDocument, Self::Error> {
-        let mut migrated = StateDocument::new(document.product_id().to_owned(), 2)
-            .expect("migration identity is valid");
-        for entry in document.entries() {
-            let key = if entry.key() == "parameter/old_gain" {
-                "parameter/gain"
-            } else {
-                entry.key()
-            };
-            migrated
-                .insert(StateEntry::new(key, entry.value().clone()))
-                .expect("migration keys are unique");
-        }
-        Ok(migrated)
-    }
-}
-
 fn process_config() -> ProcessConfig {
     ProcessConfig::new(
         48_000.0,
@@ -278,96 +238,6 @@ fn activation_owns_a_dynamic_audio_configuration() {
     assert_eq!(active.audio_io().ports().len(), 2);
     assert_eq!(active.audio_io().ports()[0].key, MAIN_INPUT);
     runtime.deactivate().expect("deactivation succeeds");
-}
-
-#[test]
-fn complete_state_replacement_is_transactional() {
-    let metrics = Arc::new(Metrics::default());
-    let component = Effect::new(metrics);
-    let mut runtime: InstanceRuntime<EffectProcessor> =
-        InstanceRuntime::for_component(&component).expect("instance schema is valid");
-    runtime
-        .parameters_mut()
-        .set("gain", ParameterValue::Float(1.75))
-        .expect("gain is valid");
-
-    let mut incomplete = StateDocument::new("com.example.effect", 1).expect("identity is valid");
-    incomplete
-        .insert(StateEntry::new("state/custom", StateValue::Boolean(true)))
-        .expect("custom entry is valid");
-    assert!(matches!(
-        runtime.apply_parameter_state_for_product(&incomplete, "com.example.effect", 1),
-        Err(InstanceStateError::IncompleteParameterState {
-            expected: 1,
-            actual: 0,
-        })
-    ));
-    assert_eq!(
-        runtime.parameters().get("gain"),
-        Some(&ParameterValue::Float(1.75))
-    );
-
-    let mut complete = StateDocument::new("com.example.effect", 1).expect("identity is valid");
-    complete
-        .insert(StateEntry::new("parameter/gain", StateValue::Float(0.25)))
-        .expect("parameter entry is valid");
-    runtime
-        .apply_parameter_state_for_product(&complete, "com.example.effect", 1)
-        .expect("complete state replaces current values");
-    assert_eq!(
-        runtime.parameters().get("gain"),
-        Some(&ParameterValue::Float(0.25))
-    );
-}
-
-#[test]
-fn state_bytes_are_decoded_migrated_and_applied_transactionally() {
-    let metrics = Arc::new(Metrics::default());
-    let component = Effect::new(metrics);
-    let mut runtime: InstanceRuntime<EffectProcessor> =
-        InstanceRuntime::for_component(&component).expect("instance schema is valid");
-    runtime
-        .parameters_mut()
-        .set("gain", ParameterValue::Float(1.75))
-        .expect("gain is valid");
-
-    let bytes = LEGACY_STATE_V1;
-    let migration = RenameGainMigration;
-    runtime
-        .apply_parameter_state_bytes(
-            bytes,
-            "com.example.effect",
-            2,
-            chassis_core::state::StateLimits::default(),
-            &[&migration],
-        )
-        .expect("state migration and application succeed");
-    assert_eq!(
-        runtime.parameters().get("gain"),
-        Some(&ParameterValue::Float(0.25))
-    );
-
-    runtime
-        .parameters_mut()
-        .set("gain", ParameterValue::Float(1.5))
-        .expect("gain is valid");
-    let error = runtime.apply_parameter_state_bytes(
-        bytes,
-        "com.example.effect",
-        3,
-        chassis_core::state::StateLimits::default(),
-        &[&migration],
-    );
-    assert!(matches!(
-        error,
-        Err(InstanceStateLoadError::Migration(
-            StateMigrationError::MissingMigration { from: 2, target: 3 }
-        ))
-    ));
-    assert_eq!(
-        runtime.parameters().get("gain"),
-        Some(&ParameterValue::Float(1.5))
-    );
 }
 
 #[test]

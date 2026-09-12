@@ -5,6 +5,7 @@ use std::convert::Infallible;
 use chassis_core::{
     parameters::{ParameterDescriptor, ParameterValue},
     runtime::{InstanceRuntime, Processor},
+    schema::{ComponentId, ComponentSchema, StateSchemaVersion},
     state::{StateDecodeError, StateDocument, StateEntry, StateLimits, StateMigration, StateValue},
 };
 
@@ -141,8 +142,12 @@ impl StateMigration for NeverMigration {
 fn every_truncated_runtime_load_is_failure_atomic() {
     let descriptor =
         ParameterDescriptor::float("gain", "Gain", 0.0, 2.0, 1.0).expect("test parameter is valid");
-    let schema = chassis_core::schema::ComponentSchema::stereo_effect(vec![descriptor])
-        .expect("runtime schema is valid");
+    let schema = ComponentSchema::stereo_effect_with_state(
+        ComponentId::new("com.example.effect").expect("semantic identity is valid"),
+        StateSchemaVersion::new(1),
+        vec![descriptor],
+    )
+    .expect("runtime schema is valid");
     let mut runtime =
         InstanceRuntime::<NoopProcessor>::from_schema(schema).expect("runtime schema is valid");
     runtime
@@ -161,12 +166,11 @@ fn every_truncated_runtime_load_is_failure_atomic() {
     for length in 0..encoded.len() {
         assert!(
             runtime
-                .apply_parameter_state_bytes(
+                .apply_state_bytes(
                     &encoded[..length],
-                    "com.example.effect",
-                    1,
                     StateLimits::default(),
                     &migrations,
+                    |_, _| Ok::<(), Infallible>(()),
                 )
                 .is_err(),
             "runtime accepted truncated prefix of {length} bytes"
@@ -178,13 +182,9 @@ fn every_truncated_runtime_load_is_failure_atomic() {
     }
 
     runtime
-        .apply_parameter_state_bytes(
-            &encoded,
-            "com.example.effect",
-            1,
-            StateLimits::default(),
-            &migrations,
-        )
+        .apply_state_bytes(&encoded, StateLimits::default(), &migrations, |_, _| {
+            Ok::<(), Infallible>(())
+        })
         .expect("complete replacement applies");
     assert_eq!(
         runtime.parameters().get("gain"),
