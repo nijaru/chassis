@@ -17,8 +17,12 @@ jobs:
           fetch-depth: 0
       - name: Install Rust 1.98.0
         run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
+      - name: Prepare migration anchor
+        run: python3 .github/audio_io_policy_fix.py before
       - name: Apply migration
         run: python3 .github/audio_io_policy_migrate.py
+      - name: Restore fixture naming
+        run: python3 .github/audio_io_policy_fix.py after
       - name: Format workspace
         run: cargo +1.98.0 fmt --all
       - name: Test workspace
@@ -26,7 +30,7 @@ jobs:
       - name: Lint workspace
         run: cargo +1.98.0 clippy --workspace --all-targets --all-features -- -D warnings
       - name: Remove migration scaffolding
-        run: rm .github/workflows/audio-io-policy-once.yml .github/audio_io_policy_migrate.py
+        run: rm .github/workflows/audio-io-policy-once.yml .github/audio_io_policy_migrate.py .github/audio_io_policy_fix.py
       - name: Commit migration
         run: |
           git config user.name github-actions[bot]
