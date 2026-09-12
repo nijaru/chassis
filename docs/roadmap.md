@@ -1,179 +1,210 @@
 # Roadmap
 
-This roadmap is ordered by architectural proof and real-client pressure, not feature count.
+This roadmap is ordered by framework completeness and architectural proof, not by migration of any existing product.
 
 ## Current position
 
-Chassis is in **Phase 3: first real FX client**. The native CLAP foundation has recorded headless, REAPER, and representative hardware evidence.
+Chassis has a qualified format-independent runtime and native CLAP foundation. Core lifecycle/state/parameter ownership, generic process buffers, f32/f64 processing, sample-accurate automation, offline/render mode, activation-scoped latency, restart signaling, and CLAP projection are implemented and tested. REAPER/macOS host evidence exists for automation, state round-trip, active-save, and PDC through the delayed probe.
 
-The format-independent runtime/state/parameter architecture, generic process-buffer source, mapped f32/f64 CLAP audio path, render-mode projection, typed parameter/state projection, audible exported automation, activation-scoped latency, active-save publication, and adapter realtime/lifecycle semantics are implemented.
+The project is still pre-alpha because the framework is not yet broadly usable for new professional audio projects without bespoke infrastructure. The remaining work is now organized around that completion bar rather than Tonal EQ or limiter migration parity.
 
-The Linux/macOS/Windows Rust and CLAP workflows define the automated matrix. See the [validation record](design/validation.md) for executed checks and dated host/performance results; new changes require fresh evidence.
+## Completion bar
 
-## Phase 0 — semantic foundation
+Chassis is meaningfully complete for general audio work when a new project can use one coherent component/runtime model for:
 
-Status: complete enough for executable work; APIs remain pre-alpha.
+- effects, instruments, event processors, embedded processing, and standalone deployment;
+- mono/stereo/multi-bus/sidechain/multi-output audio I/O;
+- typed parameters, automation, modulation, gestures, formatting/mapping, and versioned state;
+- sample-accurate note/MIDI/expression input and bounded output events;
+- realtime and offline processing, latency, tail, bypass, lookahead/oversampling-friendly activation resources, and deterministic rendering;
+- bounded control -> DSP snapshots and DSP -> control/editor telemetry;
+- explicit background-task lifecycle when non-realtime analysis or preparation is required;
+- production editor lifecycle and bindings without putting a GUI toolkit in core;
+- CLAP, VST3, and Audio Unit with differential semantic qualification;
+- standalone audio/MIDI device deployment using the same component implementation;
+- application-level graph/scheduling infrastructure without moving DAW/application semantics into core;
+- reproducible packaging, signing/notarization, validation, examples, and release tooling.
 
-- format-independent component/processor/runtime ownership;
-- stable semantic identity versus backend/runtime indices;
-- whole-component I/O representation;
-- explicit process modes and activation bounds;
-- safe buffer alias relationships;
-- parameter/base/automation/state ownership model;
-- conservative dependency/licensing policy.
+AAX, ARA, immersive/object workflows, plugin hosting, sandboxing, and specialized ML/DSP infrastructure remain later or demand-driven unless they become necessary to satisfy the general completion bar above.
 
-## Phase 1 — format-independent conformance
+## Foundation — implemented
 
-Status: substantially complete.
+The following are substantially implemented and remain regression-protected:
 
-Implemented:
-
-- durable `InstanceRuntime<P>` lifecycle/state ownership;
-- safe in-place/separate/input-only/output-only buffers;
-- generic allocation-free `ProcessBufferSource<S>`;
+- format-independent `Component` / `InstanceRuntime<P>` / `Processor` ownership;
+- safe process-buffer relationships and generic buffer sources;
+- arbitrary mapped mono/stereo ports supported by current layout semantics;
 - f32/f64 processor capability model;
-- typed parameters and dense realtime indices;
-- deterministic bounded state + adjacent migrations;
-- complete semantic transactional state replacement;
-- borrowed sample-accurate automation and transport;
-- adversarial state corruption/resource-limit coverage;
-- activation-failure recovery with the runtime remaining reusable;
-- executable post-activation process allocation detection;
-- activation-scoped processing latency captured from `Processor`.
+- typed parameter schema/store and dense realtime indices;
+- borrowed sample-accurate automation trajectories;
+- versioned transactional state with migration/resource-limit coverage;
+- activation failure recovery and panic containment at adapter boundaries;
+- post-activation allocation/deallocation checks;
+- activation-scoped processing latency and restart requests;
+- realtime/offline process mode projection;
+- native CLAP adapter through pinned Clack;
+- three-platform headless validation, packaged CLAP conformance, bounded fuzz, and in-process host coverage;
+- representative adapter-overhead measurements;
+- REAPER 7.79/macOS-arm64 scan/instantiate, render, state, active-save, and PDC evidence.
 
-Remaining promotion work:
+Existing conformance components, the delayed probe, and Tonal EQ are retained where they provide useful regression evidence. They are not roadmap authorities.
 
-- representative performance measurements where performance claims are made;
-- semantic whole-I/O policy for products that accept multiple legal configurations when a real product requires it;
-- ergonomics/conveniences only when real clients demonstrate recurring needs.
+## Slice A — core authoring/API closure
 
-## Phase 2 — native CLAP
+Before stabilizing the pre-v1 authoring surface:
 
-Status: current implementation is qualified on the three-platform headless validator + in-process host matrix; production DAW coverage remains incomplete.
+- make `Component` -> runtime construction ergonomic without hiding validation/ownership;
+- define semantic whole-I/O configuration for components with multiple legal layouts;
+- add higher-level bus/port access only where it removes repeated product boilerplate without obscuring buffer legality;
+- finish canonical product/export identity ownership and backend projection;
+- complete parameter value mapping/formatting helpers with round-trip tests;
+- finish explicit parameter modulation semantics without corrupting durable/base state;
+- define common tail and bypass semantics where formats can represent them faithfully;
+- retain activation-time resource ownership for lookahead, oversampling, convolution, model state, and similar delayed DSP;
+- keep product-specific DSP and visual semantics outside core.
 
-Implemented and executable:
+Do not freeze convenience macros or derives until the underlying authoring surface is coherent.
 
-- Clack-backed CLAP adapter isolated from core;
-- stable explicit audio-port and parameter IDs;
-- setup-owned mapped process slots;
-- arbitrary mapped f32/f64 mono/stereo ports supported by current core layout semantics;
-- exact alias, separate, input-only, output-only/asymmetric paths;
-- render/offline mode projection;
-- bounded parameter-event normalization;
-- float/integer/boolean/choice parameter projection;
-- exported `trim` automation driving deterministic f32/f64 DSP at sample offsets;
-- generation-checked scalar publication with direct concurrency and Loom evidence;
-- coherent active state save through the CLAP state extension while processing is active;
-- CHSS state save/load and host value rescan;
-- CLAP latency extension backed by activation-scoped core latency;
-- deliberate nonzero-latency probe whose reported latency matches its actual delayed impulse;
-- full adapter-path allocation/deallocation probe at the configured maximum event count for f32/f64 and main + sidechain topology;
-- CLAP minimum/maximum frame-count processing and over-bound rejection;
-- result-based product activation failure + retry on the same instance;
-- activation panic containment + same-instance retry;
-- process panic containment as host-visible processing failure;
-- repeated inactive instance construction/destruction;
-- sample-rate/block-size reactivation;
-- audio-thread transfer without simultaneous processor mutation;
-- plugin -> host -> plugin main-thread re-entry through parameter-rescan and latency-change callbacks;
-- full workspace tests/checks on Linux, macOS, and Windows;
-- dependency advisory/license/source/dead-dependency policy gates;
-- packaged Linux/macOS/Windows CLAP artifacts passing pinned `clap-validator` 0.4.1 and bounded fuzz;
-- validator suite: 35 passed, 0 failed, 9 intentional skips.
+## Slice B — realtime communication and non-realtime work
 
-Remaining, in order:
+Add a small set of reusable primitives that professional processors repeatedly need:
 
-1. ~~Measure adapter-only overhead on representative stable hardware with the existing benchmark harness.~~ Complete (2026-09-03): recorded in `docs/design/validation.md`; median 49–53 ns/callback no-event, 477–499 ns at 64 events, flat across frames/precision; no material adapter cost, no optimization warranted. (One-time fix: the bench target needed `harness = false` to actually execute.)
-2. ~~Refresh real-DAW current-head evidence when a suitable host is available~~ Complete (2026-09-06): REAPER 7.79/macOS-arm64 (M3 Max, 48 kHz) headless evidence recorded for scan/instantiate, sample-exact automated `trim` render, state save/reload render, active-save during automation, and PDC alignment with the exported delayed probe (`docs/design/validation.md` host matrix).
-3. ~~Exercise native host f64 dispatch~~ Not a DAW-qualification gap: f64 semantics are implemented and qualified through the in-process host matrix and three-platform validator (both double-precision process cases pass); no available host selects `data64` (REAPER chooses f32). Wire-precision preference (`PREFERS_64BITS`) moves to first-client pressure: the first real client decides from its product semantics.
-4. Add further host/architecture coverage when release targets make it useful; Bitwig remains valuable real-world re-entrancy coverage even though re-entrant semantics are now executable in-process.
-5. Start the first real FX client and implement only capabilities its product semantics require.
+- bounded DSP -> UI/control telemetry with explicit publication, overflow/coalescing, and reclamation behavior;
+- immutable control -> DSP snapshots where scalar parameters are not enough;
+- deferred destruction of replaced large state away from the audio callback;
+- explicit background-task lifecycle for analysis/preparation: ownership, cancellation, generation/stale-result rejection, unload/shutdown, and offline determinism.
 
-The 2026-09-06 REAPER 7.79/macOS-arm64 result is a recorded baseline for scan/instantiate, automation render, state round-trip, active-save, and PDC alignment. Native f64 wire dispatch moves to first-client pressure rather than blocking Phase 2.
+Unused facilities must impose no process-time work. Do not add a hidden global executor or generic lock-free container library.
 
-## Phase 3 — first real FX client
+Prove these with purpose-built fixtures such as a meter/analyzer and worker-backed processor rather than an old product migration.
 
-The first real client is the **Tonal EQ** port from Truce `audio-plugins`, opted in 2026-09-06 (`audio-plugins` `docs/migration.md`, commit `92c2b52`). Port order is fixed on the client side: DSP parity against the frozen JUCE four-band oracle (`plugins-juce/eq`, 28 parameters) first, then five-slot product changes as separate verified changes. Do not duplicate or silently migrate Truce; the port moves only as the recorded opt-in directs.
+## Slice C — events, instruments, and modulation
 
-The EQ is the right first client for the current framework surface: zero-latency static-coefficient DSP, parameters/state/automation/latency already qualified, and no lookahead/oversampling/telemetry requirements. It pressures real scale the conformance artifact does not: a 28-parameter surface and per-band shape choice params. Chassis adds surface only where the port demonstrates recurring need.
+Promote the existing event design into executable core/adapters:
 
-A mastering-limiter class of client (Truce Invisibull) is the intended second client. When it opts in, it should pressure-test:
+- stable event-port identities;
+- semantic note on/off/choke/end and note addressing;
+- velocity, tuning, and per-note expression;
+- raw MIDI/SysEx and a path for MIDI 2 / UMP without destructive down-conversion;
+- sample-accurate parameter modulation distinct from base automation/state;
+- bounded realtime output event sinks with explicit rejection behavior;
+- typed borrowed cursors/span processing without forcing one fabricated cross-family total order.
 
-- production lookahead resources whose declared latency matches delayed audio;
-- latency changes across activation/restart rather than live drift;
-- offline/realtime parity;
-- real sample-accurate automation and explicit smoothing policy;
-- state/preset behavior under product use;
-- metering/telemetry publication;
-- activation-time lookahead/oversampling resources;
-- deterministic render/host reopen tests.
+Prove with small fixtures: a basic synth, an event passthrough/transform, and a multi-output instrument.
 
-Graduate only repeated or clearly framework-owned behavior into Chassis.
+## Slice D — production editor contract
 
-A compressor/dynamics client follows when it adds distinct pressure: sidechain/routing/metering.
+Chassis owns editor lifecycle/integration, not product visual design.
 
-## Phase 4 — desktop formats and editor lifecycle
+Complete:
 
-After CLAP semantics are stable under a real client:
+- product-originated begin/change/end gestures and echo suppression;
+- parameter observation/binding;
+- telemetry subscription/publication;
+- parent-window attach/detach;
+- editor recreation/teardown;
+- resize, scale, and high-DPI behavior;
+- focus/input semantics required by supported formats;
+- accessibility path where practical;
+- enough rendering/control flexibility for commercial product UIs.
 
-- project through a pinned/reviewed `clap-wrapper` release/revision to VST3/AUv2/AUv3;
-- run Steinberg validator, `auval`, pluginval where useful, and real-host matrices;
-- add differential audio/state/automation/identity/latency tests across formats;
-- prove editor attach/detach, resize/scaling, recreation, gestures, and telemetry;
-- select the first production GUI adapter without putting toolkit types in core;
-- add packaging/signing/notarization hooks.
+Select GUI adapters based on evidence. Toolkit types stay out of product-facing core contracts.
 
-Replace wrapper projection with a native adapter only when concrete correctness/capability/maintenance evidence warrants ownership.
+## Slice E — desktop format parity
 
-## Phase 5 — instruments and standalone
+Bring VST3 and Audio Unit to the same semantic standard as CLAP, initially through a pinned/reviewed wrapper if it is faithful enough.
 
-Driven by a real instrument/event client:
+For each format prove:
 
-- note/MIDI/event input/output;
-- note identity/expression/MPE where hosts support it;
-- no-audio-input generators and multiple outputs;
-- standalone runtime using the same processor/state/editor model;
-- audio/MIDI device integration;
-- high-event-count and voice-driven stress.
+- identity and metadata;
+- parameters/automation/modulation;
+- state round-trip and migration fixtures;
+- audio/event I/O and layout negotiation;
+- latency/PDC, tail, and bypass;
+- editor lifetime/resize/scaling;
+- real-host save/reopen and automated rendering;
+- differential output/state behavior against native CLAP where semantics are equivalent.
 
-Voice allocation, sample streaming, oscillators/filters, etc. become optional utilities only when repeated products establish reusable semantics.
+Own native adapters only when wrapper limitations are concrete and material.
 
-## Phase 6 — advanced routing / immersive
+## Slice F — standalone and device runtime
 
-Driven by products that require it:
+Add a first-class standalone deployment using the same component/runtime implementation:
 
-- labeled surround layouts;
-- ambisonics ordering/normalization;
-- high-channel-count validation;
-- immersive channel beds;
-- dynamic layout negotiation where formats allow it.
+- audio device enumeration/open/close/change handling;
+- sample-rate/block-size negotiation;
+- MIDI device input/output;
+- xrun/error reporting and recovery policy;
+- component/editor/state reuse rather than a parallel standalone DSP path.
 
-Dolby Atmos object/metadata/renderer workflows remain a separate capability.
+This is the threshold at which Chassis becomes useful beyond plugin-only projects.
 
-## Phase 7 — optional audio-application runtime
+## Slice G — graph/scheduling layer
 
-Only with a real host/application client:
+Add `chassis-graph` only above the component core:
 
-- `chassis-host` for plugin discovery/loading/hosting;
-- `chassis-device` for audio/MIDI devices;
-- `chassis-graph` for realtime graph/scheduling.
+- nodes backed by ordinary Chassis components/processors;
+- fan-in/fan-out and bus/event routing;
+- graph validation and immutable/transactional topology publication;
+- latency propagation and compensation;
+- realtime-safe execution planning;
+- topology/resource mutation off the callback;
+- parallel scheduling only if measurement and workloads justify it.
 
-Timelines, projects, arrangements, media libraries, mixer UX, mastering workflows, and delivery remain application concerns.
+The graph does not own timelines, arrangements, mixer UX, mastering workflows, media libraries, or product-specific semantics.
+
+## Slice H — release/tooling completion
+
+Make new projects cheap to create and ship:
+
+- canonical product/export manifest and generated backend metadata;
+- packaging layouts for supported plugin formats and standalone apps;
+- macOS signing/notarization and Windows signing hooks where release targets require them;
+- reproducible release builds and versioning;
+- validator/host smoke-test commands;
+- state/identity compatibility fixtures;
+- performance/regression harnesses;
+- concise examples/templates for effect, sidechain, meter/analyzer, instrument, multi-output, worker-backed processor, and standalone deployment.
+
+The goal is not a large CLI for its own sake; it is removing repeated release and integration boilerplate.
 
 ## Later / conditional
 
+- `chassis-host` for third-party plugin discovery/loading/editor hosting when a real application needs it;
 - AAX when Avid/PACE access, licensing, and demand justify it;
+- ARA/random-access host integration when a product needs region/asset semantics beyond sequential offline processing;
 - LV2 if Linux demand warrants it;
-- sandboxed/out-of-process hosting when a host application needs crash isolation;
-- additional GUI adapters based on real clients.
+- sandboxed/out-of-process hosting when crash isolation is a product requirement;
+- surround/ambisonics/immersive channel semantics with explicit ordering/normalization fixtures;
+- Dolby Atmos object/metadata/renderer workflows as a separate capability;
+- additional GUI adapters where supported products need them.
+
+## Validation strategy
+
+Prefer focused conformance fixtures over product-migration gates:
+
+- `Gain` — parameter automation/state;
+- `Delay` — latency/PDC/restart;
+- `Meter` — scalar telemetry;
+- `Analyzer` — larger bounded telemetry;
+- `Sidechain` — routing and auxiliary input;
+- `Synth` — notes/MIDI/expression;
+- `MultiOut` — multiple output buses;
+- `WorkerFx` — background work/cancellation/stale-result rejection;
+- `EditorDemo` — editor lifecycle/gestures/scaling.
+
+Real products remain valuable integration tests, but no old product architecture is preserved merely to make Chassis look compatible with it.
 
 ## Promotion rule
 
-A feature enters the common framework only when:
+A facility belongs in the common framework when:
 
-1. owner/lifecycle is explicit;
-2. resource/work bounds are appropriate;
-3. a conformance case or real client demonstrates the need;
+1. it is broadly required to satisfy the completion bar or repeated across materially different component classes;
+2. owner/lifecycle and failure semantics are explicit;
+3. realtime work/resources are bounded where applicable;
 4. negative-space behavior is tested;
-5. performance claims have representative measurements;
-6. dependencies remain compatible with realtime/safety/licensing policy.
+5. adapters can project the semantics faithfully or reject unsupported use;
+6. performance claims have representative measurements;
+7. dependencies remain compatible with realtime/safety/licensing policy.
+
+Framework completion should be deliberate, but not speculative: implement known cross-cutting audio-runtime requirements now; leave domain-specific algorithms and application semantics to clients.
