@@ -59,8 +59,8 @@ fn latency_is_snapshotted_for_each_successful_activation() {
     let component = LatencyComponent {
         next_latency: Arc::clone(&next_latency),
     };
-    let mut runtime = InstanceRuntime::new(component.parameter_descriptors())
-        .expect("empty parameter schema is valid");
+    let mut runtime =
+        InstanceRuntime::for_component(&component).expect("component schema is valid");
 
     assert_eq!(runtime.active_latency(), None);
 
