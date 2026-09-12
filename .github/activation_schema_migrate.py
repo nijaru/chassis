@@ -149,6 +149,7 @@ for path in root.rglob('*.rs'):
     if not re.search(r'(?<![.\w])audio_port_index\(', text):
         text = text.replace('audio_port_index, ', '')
         text = text.replace(', audio_port_index', '')
+        text = text.replace('        audio_port_index,\n', '')
         path.write_text(text)
 
 # Sanity: every crate-private ActivationConfig constructor now has a schema arg.
