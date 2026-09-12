@@ -13,5 +13,6 @@ pub mod events;
 pub mod parameters;
 pub mod process;
 pub mod runtime;
+pub mod schema;
 pub mod state;
 pub mod telemetry;
