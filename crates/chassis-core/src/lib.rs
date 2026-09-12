@@ -9,6 +9,7 @@
 pub mod audio;
 pub mod automation;
 pub mod buffer;
+pub mod events;
 pub mod parameters;
 pub mod process;
 pub mod runtime;
