@@ -4,92 +4,161 @@ This file tracks the next implementation order on `main`. It is not an API compa
 
 ## Current checkpoint
 
-The format-independent runtime and native CLAP adapter are implemented. The [validation guide](design/validation.md) owns the automated checks, dated REAPER results, and representative adapter benchmark. These results are baselines; changes require checks appropriate to the affected guarantees.
+The format-independent runtime and native CLAP adapter are implemented and qualified enough to stop using an existing product migration as the primary roadmap driver. Existing Tonal EQ, delayed-probe, and conformance coverage remain useful regressions, but Chassis itself is now the priority.
 
-## Completed foundation
+The [validation guide](design/validation.md) owns executed checks, dated REAPER results, and representative adapter benchmarks. The high-level completion bar lives in [roadmap.md](../docs/roadmap.md).
 
-- **Slice 1 — adapter performance:** measured on Apple M3 Max hardware on 2026-09-03. Re-run `cargo bench -p chassis-clap --bench adapter_overhead` when adapter changes need a performance comparison.
-- **Slice 2 — real-DAW qualification:** REAPER 7.79/macOS-arm64 baseline recorded on 2026-09-06 for scan/instantiate, automated rendering, state round-trip, active save, and PDC alignment. Refresh affected host scenarios after relevant changes.
+## Execution principle
 
-Native f64 processing is covered headlessly. A client's product requirements determine whether to advertise a preference for native f64 wire dispatch.
+Implement the reusable audio-framework capabilities that are already known to be necessary across multiple project classes. Use small purpose-built fixtures to prove them. Do not block framework completion on parity with an old plugin that was not itself a production-quality target.
 
-## Slice 3 — first real FX client
+At the same time, do not turn “finish Chassis” into speculative framework building. Product-specific DSP, restoration/ML algorithms, synth engines, timelines, mixer UX, and application workflows stay outside core.
 
-The first client is opted in: the **Tonal EQ** port from Truce `audio-plugins` (decision recorded 2026-09-06, `audio-plugins` `docs/migration.md` commit `92c2b52`). Port order is fixed on the client side: DSP parity against the frozen JUCE four-band oracle (`plugins-juce/eq`, 28 parameters) first, then the five-slot product changes as separate verified changes. Do not duplicate or silently migrate the existing Truce implementation.
+## Slice 1 — realtime communication primitives
 
-The EQ exercises the framework at parameter scale the conformance artifact does not reach — a 28-parameter surface, per-band shape choice params — while needing no lookahead, oversampling, or telemetry for the parity pass. Use it as the primary API pressure: promote framework helpers only after the port code demonstrates recurring framework-owned behavior.
+This is the immediate implementation target.
 
-The first parity/runtime checkpoint is implemented (2026-09-07). The client has
-28 mapped parameters, exact-offset automation, state restoration, f32/f64 wire
-processing, and actual 0/64-sample activation latency. Its frozen-core differential
-suite checks 221,184 f32 samples across 108 configurations. Product callback tests
-check dense 4,096-event blocks without heap allocation or reclamation. This client
-exposed stepped display conversion and activation-restart notification gaps, now
-covered in Chassis's own regressions.
+Add the smallest reusable primitives needed for professional processor/editor interaction:
 
-REAPER 7.79/macOS-arm64 rendered the client's analog automation and settled linear
-PDC cases bit exactly (96,000 samples each); the static linear state also survived
-save/reopen unchanged. The host fixture uses a normal message loop for restart
-and waits for completed render statistics. Single-shot offline rendering can
-still defer activation changes until after rendering. The client is usable via
-host-generic parameter controls; a production editor and VST3/AU remain unqualified.
-These client results are local macOS evidence, separate from Chassis's passing
-cross-platform CI.
+1. bounded DSP -> non-realtime telemetry suitable for meters and analyzer/control evidence;
+2. explicit publication/coalescing semantics with no audio-thread allocation, blocking, or reclamation surprises;
+3. immutable control -> DSP snapshot publication for product control state that does not fit ordinary scalar parameters;
+4. tests for concurrent publication/read, stale/coalesced observations, bounded retry/work, and destruction ownership.
 
-The ongoing client validation contract covers:
+Start with a safe scalar/fixed-size telemetry primitive that can be proven without introducing generic unsafe lock-free containers. Expand only when analyzer or other fixture requirements demonstrate the need.
 
-- real parameter-count scale (28 parameters, choice params) through descriptor publication, dense-index mapping, and state save/load;
-- real product latency policy and restart semantics (Tonal EQ minimum phase is zero latency; its linear-phase path requires 64 samples);
-- offline/realtime parity;
-- automation and explicit smoothing policy at product scale;
-- state/preset behavior under product use;
-- deterministic host renders and reopen tests (the REAPER methodology from Slice 2 applies directly).
+Validation fixture: a meter component that publishes block-level values and can be observed without mutating DSP ownership.
 
-The originally intended mastering-limiter pressure (activation-time lookahead and oversampling resources, bounded meter/gain-reduction telemetry) moves to the Invisibull opt-in. The decision trail is recorded here so the delayed client does not silently drop it.
+## Slice 2 — core authoring/API closure
 
-## Slice 4 — editor-facing capabilities driven by the client
+Resolve the remaining general pre-v1 authoring gaps:
 
-When the first Chassis client actually needs a production editor:
+- ergonomic `Component` -> `InstanceRuntime` construction while preserving explicit validation;
+- semantic whole-I/O configuration for products with multiple legal layouts;
+- recurring bus/port access ergonomics only where the core buffer legality remains visible;
+- canonical product/export identity owner;
+- parameter formatting/value mapping with tested round trips;
+- modulation as process-time control distinct from durable/base state;
+- common tail/bypass semantics where adapters can map them faithfully.
 
-1. define product-originated begin/change/end gesture semantics and echo suppression;
-2. add bounded meter/telemetry publication with explicit ownership and reclamation;
-3. prove editor attach/detach, recreation, resize/scaling, and parameter observation;
-4. add tail/status or background task infrastructure only if product semantics require it.
+Do not add proc macros or derives until these contracts settle.
 
-Defer note/MIDI/event ports until an instrument or event processor becomes a real client.
+Validation fixtures: gain, delay, sidechain, and layout-switching processors.
 
-## Slice 5 — VST3/AU and editor qualification
+## Slice 3 — event/note/MIDI execution
 
-After native CLAP semantics are coherent under a real client:
+Promote `docs/design/events-transport.md` from design direction into executable APIs and adapters:
 
-- qualify a pinned/reviewed `clap-wrapper` revision or release;
-- run VST3/AU native validators and real-host matrices;
-- add cross-format differential state/audio/automation/latency tests;
-- include Ableton save/reopen behavior in VST3 qualification because wrapper state restoration is host-sensitive;
-- prove editor lifecycle across projected formats;
-- then add production packaging/signing/notarization.
+- stable event-port identities;
+- note on/off/choke/end and typed note addresses;
+- note velocity/tuning/expression;
+- raw MIDI/SysEx;
+- sample-accurate modulation;
+- bounded event output with explicit rejection;
+- typed borrowed cursors/span processing that preserve source ordering semantics without inventing a global order.
 
-## Explicitly deferred
+Validation fixtures: basic synth, event passthrough/transform, and multi-output instrument.
 
-- speculative note/MIDI infrastructure;
-- generic task/executor services;
-- custom allocator/SIMD/zero-copy work without measurements;
-- API convenience macros before real-client repetition exists;
-- replacing Truce in existing products without an explicit migration decision.
+## Slice 4 — production editor contract
+
+Define and implement framework-level editor integration:
+
+1. product-originated begin/change/end gestures with echo suppression;
+2. parameter observation/binding;
+3. telemetry observation using Slice 1 primitives;
+4. parent attach/detach and editor recreation;
+5. resize, scale, high-DPI, focus/input, and destruction semantics;
+6. accessibility path where practical.
+
+Select a first GUI adapter only after the lifecycle contract is clear. Keep toolkit types out of core.
+
+Validation fixture: `EditorDemo`, deliberately simple visually but exhaustive in lifecycle/interaction behavior.
+
+## Slice 5 — VST3 and Audio Unit parity
+
+Project the same Chassis component semantics through reviewed adapters/wrappers and qualify them independently:
+
+- native validators;
+- state/identity fixtures;
+- automation/modulation trajectories;
+- audio/event layout tests;
+- latency/PDC/tail/bypass parity;
+- editor lifecycle/resize/scaling;
+- real-host save/reopen/automated-render scenarios;
+- differential comparisons against native CLAP where source semantics are equivalent.
+
+A wrapper is acceptable only while it maps Chassis semantics faithfully. Own native adapter code when evidence shows a material limitation.
+
+## Slice 6 — background work and larger snapshots
+
+Once the first concrete analyzer, convolution, restoration, or model-backed fixture requires it, add explicit task support:
+
+- per-instance ownership;
+- cancellation;
+- generation/stale-completion rejection;
+- deterministic unload/shutdown;
+- result destruction off realtime paths;
+- offline determinism;
+- no hidden global executor.
+
+This slice may move earlier if a prior fixture cannot be implemented correctly without it.
+
+## Slice 7 — standalone and devices
+
+Use the same component/runtime/editor/state implementation outside plugin hosts:
+
+- audio devices;
+- MIDI devices;
+- sample-rate/block-size negotiation;
+- device changes;
+- xruns and recoverable errors;
+- standalone application bootstrap.
+
+Do not create a parallel standalone DSP architecture.
+
+## Slice 8 — graph/scheduling
+
+Add application-layer `chassis-graph` after component/device semantics are stable:
+
+- ordinary Chassis processors as nodes;
+- audio/event fan-in/fan-out;
+- validated immutable/transactional execution plans;
+- latency propagation/compensation;
+- realtime-safe execution;
+- topology/resource changes off the callback;
+- parallel scheduling only when measurements justify it.
+
+Do not put timelines, project semantics, mixer UX, or media management into the graph layer.
+
+## Slice 9 — release/tooling hardening
+
+Finish the path from source to distributable project:
+
+- canonical product/export manifest;
+- generated backend metadata;
+- plugin/standalone packaging;
+- signing/notarization hooks;
+- reproducible release builds;
+- validator and host smoke-test commands;
+- state/identity compatibility fixtures;
+- examples/templates for common component classes.
+
+## Existing validation retained
+
+The following remain valuable and should not be removed merely because the roadmap changed:
+
+- CLAP validator and bounded fuzz matrix;
+- in-process Clack host tests;
+- callback allocation/deallocation probes;
+- adapter benchmark;
+- REAPER automation/state/PDC baseline;
+- Tonal EQ parameter-scale, automation, state, latency/restart, differential-DSP and host-render tests where they continue to prove framework behavior;
+- delayed probe for latency/PDC.
+
+Tonal EQ product redesign or parity beyond what proves Chassis behavior is not a Chassis milestone.
 
 ## Processor restart requests
 
-A processor whose observed controls require different activation resources sets
-`Processor::restart_requested()`. It preserves the active resources and latency
-until the host deactivates it. `InstanceRuntime::restart_requested()` exposes this
-semantic signal to embeddings. The CLAP adapter publishes completed parameter
-endpoints before forwarding at most one host restart request per activation.
-Controls received through active flush are evaluated on the next process call.
-A successful CLAP state load requests restart immediately after publication and
-value rescan because it may replace activation-time resources before processing.
-This conservative request also applies while inactive and is separate from the
-once-per-activation processor request. A host may defer either request, so
-processing must remain valid meanwhile; a request does not guarantee that a
-single-shot offline render will start with the newly requested resources.
-The in-process `host_restart` test checks request coalescing, fixed active latency,
-and activation from the published parameter values.
+A processor whose observed controls require different activation resources sets `Processor::restart_requested()`. It preserves the active resources and latency until the host deactivates it. `InstanceRuntime::restart_requested()` exposes this semantic signal to embeddings. The CLAP adapter publishes completed parameter endpoints before forwarding at most one host restart request per activation.
+
+Controls received through active flush are evaluated on the next process call. A successful CLAP state load requests restart immediately after publication and value rescan because it may replace activation-time resources before processing. A host may defer either request, so processing must remain valid meanwhile; a request does not guarantee that a single-shot offline render will start with newly requested resources.
