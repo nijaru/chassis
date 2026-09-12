@@ -23,31 +23,21 @@ use chassis_core::{
 
 const NOTES: &[EventDialect] = &[EventDialect::Notes];
 const INPUT_KEY: EventPortKey = EventPortKey::new("notes.in");
-const INPUT_PORTS: &[EventPortDescriptor] = &[EventPortDescriptor {
-    key: INPUT_KEY,
-    name: "Notes In",
-    direction: EventPortDirection::Input,
-    dialects: NOTES,
-}];
-const OUTPUT_PORTS: &[EventPortDescriptor] = &[EventPortDescriptor {
-    key: EventPortKey::new("notes.out"),
-    name: "Notes Out",
-    direction: EventPortDirection::Output,
-    dialects: NOTES,
-}];
-const DUPLICATE_PORTS: &[EventPortDescriptor] = &[
-    EventPortDescriptor {
-        key: INPUT_KEY,
-        name: "First",
-        direction: EventPortDirection::Input,
-        dialects: NOTES,
-    },
-    EventPortDescriptor {
-        key: INPUT_KEY,
-        name: "Second",
-        direction: EventPortDirection::Input,
-        dialects: NOTES,
-    },
+static INPUT_PORTS: &[EventPortDescriptor] = &[EventPortDescriptor::new(
+    INPUT_KEY,
+    "Notes In",
+    EventPortDirection::Input,
+    NOTES,
+)];
+static OUTPUT_PORTS: &[EventPortDescriptor] = &[EventPortDescriptor::new(
+    EventPortKey::new("notes.out"),
+    "Notes Out",
+    EventPortDirection::Output,
+    NOTES,
+)];
+static DUPLICATE_PORTS: &[EventPortDescriptor] = &[
+    EventPortDescriptor::new(INPUT_KEY, "First", EventPortDirection::Input, NOTES),
+    EventPortDescriptor::new(INPUT_KEY, "Second", EventPortDirection::Input, NOTES),
 ];
 
 struct EventComponent {
@@ -136,7 +126,7 @@ fn process_rejects_unknown_note_port_before_product_dsp() {
     let mut runtime =
         InstanceRuntime::<EventProcessor>::for_component(&component).expect("schema is valid");
     assert_eq!(
-        runtime.event_port_index(INPUT_KEY),
+        runtime.event_port_index(&INPUT_KEY),
         Some(EventPortIndex::new(0))
     );
     runtime

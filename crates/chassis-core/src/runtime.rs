@@ -614,7 +614,7 @@ where
 
     /// Resolve a stable event-port key to the schema-local dense index.
     #[must_use]
-    pub fn event_port_index(&self, key: EventPortKey) -> Option<EventPortIndex> {
+    pub fn event_port_index(&self, key: &EventPortKey) -> Option<EventPortIndex> {
         self.schema.event_port_index(key)
     }
 

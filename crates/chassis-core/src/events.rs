@@ -10,28 +10,41 @@
 //! timing model without requiring one fabricated cross-family event order.
 
 use core::fmt;
+use std::{borrow::Cow, string::String, vec::Vec};
 
 /// Stable author-facing identity for an event port.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct EventPortKey(&'static str);
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct EventPortKey(Cow<'static, str>);
 
 impl EventPortKey {
-    /// Construct a stable event-port key from static product metadata.
+    /// Construct a zero-allocation event-port key from static product metadata.
     #[must_use]
     pub const fn new(value: &'static str) -> Self {
-        Self(value)
+        Self(Cow::Borrowed(value))
+    }
+
+    /// Construct an event-port key owned by setup/control-domain metadata.
+    #[must_use]
+    pub fn owned(value: impl Into<String>) -> Self {
+        Self(Cow::Owned(value.into()))
     }
 
     /// Return the canonical string form.
     #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        self.0
+    pub fn as_str(&self) -> &str {
+        self.0.as_ref()
+    }
+}
+
+impl AsRef<str> for EventPortKey {
+    fn as_ref(&self) -> &str {
+        self.as_str()
     }
 }
 
 impl fmt::Display for EventPortKey {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.0)
+        formatter.write_str(self.as_str())
     }
 }
 
@@ -82,20 +95,54 @@ pub enum EventDialect {
 }
 
 /// Stable metadata for one event port.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EventPortDescriptor {
     /// Persistent product key.
     pub key: EventPortKey,
     /// Human-readable display name. This is not persistent identity.
-    pub name: &'static str,
+    pub name: Cow<'static, str>,
     /// Input/output direction.
     pub direction: EventPortDirection,
     /// Dialects this port can represent.
-    pub dialects: &'static [EventDialect],
+    pub dialects: Cow<'static, [EventDialect]>,
+}
+
+impl EventPortDescriptor {
+    /// Construct static product metadata without allocating.
+    #[must_use]
+    pub const fn new(
+        key: EventPortKey,
+        name: &'static str,
+        direction: EventPortDirection,
+        dialects: &'static [EventDialect],
+    ) -> Self {
+        Self {
+            key,
+            name: Cow::Borrowed(name),
+            direction,
+            dialects: Cow::Borrowed(dialects),
+        }
+    }
+
+    /// Construct runtime-owned event-port metadata for hosted/dynamic components.
+    #[must_use]
+    pub fn owned(
+        key: impl Into<String>,
+        name: impl Into<String>,
+        direction: EventPortDirection,
+        dialects: Vec<EventDialect>,
+    ) -> Self {
+        Self {
+            key: EventPortKey::owned(key),
+            name: Cow::Owned(name.into()),
+            direction,
+            dialects: Cow::Owned(dialects),
+        }
+    }
 }
 
 /// Failure while validating a component's immutable event-port schema.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EventPortSchemaError {
     /// A descriptor used an empty stable key.
     EmptyKey,
@@ -144,15 +191,15 @@ pub fn validate_event_port_schema(
             .iter()
             .any(|previous| previous.key == descriptor.key)
         {
-            return Err(EventPortSchemaError::DuplicateKey(descriptor.key));
+            return Err(EventPortSchemaError::DuplicateKey(descriptor.key.clone()));
         }
         if descriptor.dialects.is_empty() {
-            return Err(EventPortSchemaError::NoDialects(descriptor.key));
+            return Err(EventPortSchemaError::NoDialects(descriptor.key.clone()));
         }
         for (dialect_index, dialect) in descriptor.dialects.iter().enumerate() {
             if descriptor.dialects[..dialect_index].contains(dialect) {
                 return Err(EventPortSchemaError::DuplicateDialect {
-                    port: descriptor.key,
+                    port: descriptor.key.clone(),
                     dialect: *dialect,
                 });
             }
@@ -165,11 +212,11 @@ pub fn validate_event_port_schema(
 #[must_use]
 pub fn event_port_index(
     descriptors: &[EventPortDescriptor],
-    key: EventPortKey,
+    key: &EventPortKey,
 ) -> Option<EventPortIndex> {
     descriptors
         .iter()
-        .position(|descriptor| descriptor.key == key)
+        .position(|descriptor| &descriptor.key == key)
         .and_then(|index| u32::try_from(index).ok())
         .map(EventPortIndex::new)
 }
@@ -671,15 +718,15 @@ mod tests {
 
     #[test]
     fn validates_port_schema() {
-        let ports = [EventPortDescriptor {
-            key: NOTE_INPUT,
-            name: "Notes",
-            direction: EventPortDirection::Input,
-            dialects: NOTE_DIALECTS,
-        }];
+        let ports = [EventPortDescriptor::new(
+            NOTE_INPUT,
+            "Notes",
+            EventPortDirection::Input,
+            NOTE_DIALECTS,
+        )];
         assert_eq!(validate_event_port_schema(&ports), Ok(()));
         assert_eq!(
-            event_port_index(&ports, NOTE_INPUT),
+            event_port_index(&ports, &NOTE_INPUT),
             Some(EventPortIndex::new(0))
         );
     }
@@ -687,12 +734,12 @@ mod tests {
     #[test]
     fn rejects_duplicate_port_dialects() {
         const DUPLICATED: &[EventDialect] = &[EventDialect::Notes, EventDialect::Notes];
-        let ports = [EventPortDescriptor {
-            key: NOTE_INPUT,
-            name: "Notes",
-            direction: EventPortDirection::Input,
-            dialects: DUPLICATED,
-        }];
+        let ports = [EventPortDescriptor::new(
+            NOTE_INPUT,
+            "Notes",
+            EventPortDirection::Input,
+            DUPLICATED,
+        )];
         assert_eq!(
             validate_event_port_schema(&ports),
             Err(EventPortSchemaError::DuplicateDialect {
@@ -700,6 +747,23 @@ mod tests {
                 dialect: EventDialect::Notes,
             })
         );
+    }
+
+    #[test]
+    fn event_port_metadata_can_be_owned_at_runtime() {
+        let descriptor = EventPortDescriptor::owned(
+            String::from("notes.dynamic"),
+            String::from("Dynamic Notes"),
+            EventPortDirection::Input,
+            vec![EventDialect::Notes, EventDialect::Midi1],
+        );
+        assert_eq!(descriptor.key.as_str(), "notes.dynamic");
+        assert_eq!(descriptor.name.as_ref(), "Dynamic Notes");
+        assert_eq!(
+            descriptor.dialects.as_ref(),
+            &[EventDialect::Notes, EventDialect::Midi1]
+        );
+        assert_eq!(validate_event_port_schema(&[descriptor]), Ok(()));
     }
 
     #[test]
@@ -736,12 +800,12 @@ mod tests {
 
     #[test]
     fn note_port_validation_rejects_unknown_and_output_ports() {
-        const OUTPUT_PORTS: &[EventPortDescriptor] = &[EventPortDescriptor {
-            key: EventPortKey::new("notes.out"),
-            name: "Notes Out",
-            direction: EventPortDirection::Output,
-            dialects: NOTE_DIALECTS,
-        }];
+        static OUTPUT_PORTS: &[EventPortDescriptor] = &[EventPortDescriptor::new(
+            EventPortKey::new("notes.out"),
+            "Notes Out",
+            EventPortDirection::Output,
+            NOTE_DIALECTS,
+        )];
         let events = [NoteEvent::new(
             0,
             NoteEventKind::On {
@@ -762,12 +826,12 @@ mod tests {
 
     #[test]
     fn note_port_validation_accepts_declared_input_note_port() {
-        const INPUT_PORTS: &[EventPortDescriptor] = &[EventPortDescriptor {
-            key: NOTE_INPUT,
-            name: "Notes",
-            direction: EventPortDirection::Input,
-            dialects: NOTE_DIALECTS,
-        }];
+        static INPUT_PORTS: &[EventPortDescriptor] = &[EventPortDescriptor::new(
+            NOTE_INPUT,
+            "Notes",
+            EventPortDirection::Input,
+            NOTE_DIALECTS,
+        )];
         let events = [NoteEvent::new(
             0,
             NoteEventKind::On {

@@ -26,12 +26,12 @@ use chassis_core::{
 
 const NOTE_INPUT: EventPortKey = EventPortKey::new("notes.in");
 const NOTE_DIALECTS: &[EventDialect] = &[EventDialect::Notes];
-const NOTE_PORTS: &[EventPortDescriptor] = &[EventPortDescriptor {
-    key: NOTE_INPUT,
-    name: "Notes",
-    direction: EventPortDirection::Input,
-    dialects: NOTE_DIALECTS,
-}];
+static NOTE_PORTS: &[EventPortDescriptor] = &[EventPortDescriptor::new(
+    NOTE_INPUT,
+    "Notes",
+    EventPortDirection::Input,
+    NOTE_DIALECTS,
+)];
 
 struct NoteProbe {
     observed_note_ons: Arc<AtomicU32>,
@@ -114,7 +114,7 @@ fn zero_audio_processor_receives_bounded_semantic_note_events() {
     let mut runtime: InstanceRuntime<NoteProbeProcessor> =
         InstanceRuntime::for_component(&component).expect("note probe schema is valid");
     let note_port = runtime
-        .event_port_index(NOTE_INPUT)
+        .event_port_index(&NOTE_INPUT)
         .expect("stable note port resolves to a dense runtime index");
     assert_eq!(runtime.event_ports(), NOTE_PORTS);
 

@@ -294,7 +294,7 @@ impl ComponentSchema {
 
     /// Resolve a stable event-port key to its dense schema-local index.
     #[must_use]
-    pub fn event_port_index(&self, key: EventPortKey) -> Option<EventPortIndex> {
+    pub fn event_port_index(&self, key: &EventPortKey) -> Option<EventPortIndex> {
         event_port_index(&self.event_ports, key)
     }
 }
@@ -346,12 +346,12 @@ mod tests {
             ComponentId::new("org.nijaru.schema-probe").expect("component id is valid"),
             StateSchemaVersion::new(1),
             DEFAULT_EFFECT_PORTS.to_vec(),
-            vec![EventPortDescriptor {
-                key: note_key,
-                name: "Notes",
-                direction: EventPortDirection::Input,
-                dialects: NOTE_DIALECTS,
-            }],
+            vec![EventPortDescriptor::new(
+                note_key.clone(),
+                "Notes",
+                EventPortDirection::Input,
+                NOTE_DIALECTS,
+            )],
             vec![
                 ParameterDescriptor::float("gain", "Gain", 0.0, 2.0, 1.0)
                     .expect("parameter is valid"),
@@ -367,7 +367,7 @@ mod tests {
             Some(AudioPortIndex::new(0))
         );
         assert_eq!(
-            schema.event_port_index(note_key),
+            schema.event_port_index(&note_key),
             Some(EventPortIndex::new(0))
         );
         assert_eq!(schema.parameters().len(), 1);
