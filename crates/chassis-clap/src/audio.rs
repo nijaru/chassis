@@ -9,8 +9,8 @@ use core::{cmp::Ordering, fmt};
 use std::vec::Vec;
 
 use chassis_core::audio::{
-    AudioIoConfiguration, AudioPortDescriptor, ChannelLayout, ConfiguredAudioPort, MAIN_INPUT,
-    MAIN_OUTPUT, PortDirection, PortKey, PortRole, SIDECHAIN_INPUT,
+    AudioIoConfiguration, AudioPortDescriptor, AudioPortIndex, ChannelLayout, ConfiguredAudioPort,
+    MAIN_INPUT, MAIN_OUTPUT, PortDirection, PortKey, PortRole, SIDECHAIN_INPUT, audio_port_index,
 };
 use clack_extensions::audio_ports::{AudioPortFlags, AudioPortInfo, AudioPortType};
 use clack_plugin::prelude::ClapId;
@@ -64,6 +64,7 @@ pub const DEFAULT_CLAP_AUDIO_PORTS: [ClapAudioPort; 3] = [
 #[derive(Debug, Clone, Copy)]
 struct PortBinding {
     descriptor: AudioPortDescriptor,
+    index: AudioPortIndex,
     mapping: ClapAudioPort,
     in_place_pair_id: Option<u32>,
 }
@@ -92,7 +93,10 @@ impl PortBinding {
 /// One direction-specific port projected into a dense CLAP process slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ClapProcessPort {
+    /// Stable setup identity retained only while process endpoint consumers migrate.
     pub(crate) key: PortKey,
+    /// Dense Chassis schema-local audio-port identity for callback use.
+    pub(crate) index: AudioPortIndex,
     pub(crate) layout: ChannelLayout,
 }
 
@@ -252,14 +256,16 @@ fn port_binding(
     mapping: &[ClapAudioPort],
     mapped: &ClapAudioPort,
 ) -> Result<PortBinding, AudioMappingError> {
+    let index = audio_port_index(descriptors, mapped.key)
+        .ok_or(AudioMappingError::UnknownMappedPort(mapped.key))?;
     let descriptor = descriptors
-        .iter()
+        .get(usize::try_from(index.get()).map_err(|_| AudioMappingError::IndexNotRepresentable)?)
         .copied()
-        .find(|descriptor| descriptor.key == mapped.key)
         .ok_or(AudioMappingError::UnknownMappedPort(mapped.key))?;
     let in_place_pair_id = in_place_pair_id(descriptors, mapping, descriptor, *mapped)?;
     Ok(PortBinding {
         descriptor,
+        index,
         mapping: *mapped,
         in_place_pair_id,
     })
@@ -421,6 +427,7 @@ fn process_slots(
 fn process_port(binding: &PortBinding) -> ClapProcessPort {
     ClapProcessPort {
         key: binding.mapping.key,
+        index: binding.index,
         layout: binding.mapping.layout,
     }
 }
@@ -428,6 +435,7 @@ fn process_port(binding: &PortBinding) -> ClapProcessPort {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AudioMappingError {
     AllocationFailed,
+    IndexNotRepresentable,
     InvalidClapId(PortKey),
     DuplicateMappedPort(PortKey),
     UnknownMappedPort(PortKey),
@@ -446,6 +454,9 @@ impl fmt::Display for AudioMappingError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::AllocationFailed => formatter.write_str("audio mapping allocation failed"),
+            Self::IndexNotRepresentable => {
+                formatter.write_str("audio port index is not representable on this platform")
+            }
             Self::InvalidClapId(port) => {
                 write!(
                     formatter,
@@ -556,11 +567,32 @@ mod tests {
         assert_eq!(configuration.audio_io().ports()[2].key, SIDECHAIN_INPUT);
         assert!(configuration.process_slots()[0].paired);
         assert_eq!(
+            configuration.process_slots()[0]
+                .input
+                .expect("main slot has an input")
+                .index,
+            AudioPortIndex::new(0)
+        );
+        assert_eq!(
+            configuration.process_slots()[0]
+                .output
+                .expect("main slot has an output")
+                .index,
+            AudioPortIndex::new(1)
+        );
+        assert_eq!(
             configuration.process_slots()[1]
                 .input
                 .expect("sidechain slot has an input")
                 .key,
             SIDECHAIN_INPUT
+        );
+        assert_eq!(
+            configuration.process_slots()[1]
+                .input
+                .expect("sidechain slot has an input")
+                .index,
+            AudioPortIndex::new(2)
         );
         assert!(configuration.process_slots()[1].output.is_none());
     }
@@ -597,7 +629,9 @@ mod tests {
                 .expect("reordered mapping is valid");
         let main = configuration.process_slots()[0];
         assert_eq!(main.input.expect("main input exists").key, MAIN_INPUT);
+        assert_eq!(main.input.expect("main input exists").index, AudioPortIndex::new(0));
         assert_eq!(main.output.expect("main output exists").key, MAIN_OUTPUT);
+        assert_eq!(main.output.expect("main output exists").index, AudioPortIndex::new(1));
         assert!(main.paired);
         assert_eq!(
             configuration.process_slots()[1]
@@ -681,6 +715,13 @@ mod tests {
                 .expect("aux input exists")
                 .key,
             AUX_INPUT
+        );
+        assert_eq!(
+            configuration.process_slots()[1]
+                .input
+                .expect("aux input exists")
+                .index,
+            AudioPortIndex::new(1)
         );
     }
 
