@@ -16,7 +16,7 @@ jobs:
         with:
           fetch-depth: 0
       - name: Install Rust 1.98.0
-        run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt clippy
+        run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
       - name: Apply migration
         run: python3 .github/activation_schema_migrate.py
       - name: Format workspace
