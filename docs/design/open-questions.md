@@ -8,38 +8,49 @@ Chassis is unpublished pre-alpha. Existing product migrations and current public
 
 The target direction is documented in `docs/design/component-schema.md`.
 
-Implemented foundation:
+Implemented and exercised:
 
-- `Component` / `InstanceRuntime<P>` / `Processor` lifecycle ownership;
-- validated typed parameter schema/store;
-- stable event-port schema with runtime-owned dense indices;
-- `AudioPortIndex` plus standalone audio-schema validation/dense lookup;
-- initial owned `ComponentSchema` with semantic component/state identity, state-schema version, audio/event/parameter schemas, and dense port lookup.
+- one coherent `Component::schema()` authority for state identity, audio ports, audio-I/O policy, event ports, and parameters;
+- `InstanceRuntime<P>` ownership of one validated immutable schema generation;
+- neutral core semantics with conventional effect helpers above the core model;
+- stable audio/event/parameter identities with dense activation-local indices for processing;
+- dense-only audio callback endpoints and dense note/event port addressing;
+- runtime-owned audio/event metadata for dynamically constructed/hosted components;
+- semantic state identity/version separated from deployment/export identity;
+- schema and policy drift rejection before product activation;
+- activation-owned resolved audio endpoint legality;
+- schema-owned whole-I/O policy;
+- runtime state save/load with one schema-owned identity authority;
+- removal of proof-order constructors and runtime explicit-product-ID/parameter-only state compatibility APIs;
+- direct non-plugin runtime proofs plus conventional effect, event-only, instrument, multi-output, multi-layout/sidechain, dynamic-metadata, and CLAP adapter proofs.
 
-Before freezing the core authoring surface:
+The current `ComponentSchema` / `InstanceRuntime` ownership model is therefore a candidate-stable architecture. It is not a compatibility promise yet, but there is no unresolved schema migration that justifies reopening the model speculatively.
 
-- migrate `Component` from separate incremental schema methods to one coherent schema authority;
-- make `InstanceRuntime` own/validate the complete immutable schema snapshot, including audio schema;
-- remove proof-era constructors such as `new_with_event_ports` once the complete schema constructor is established;
-- remove the core semantic default that makes every `Component` a conventional stereo effect; keep conventional effect helpers above neutral core semantics;
-- migrate audio process endpoints from stable string keys to dense schema-local `AudioPortIndex` values;
-- replace static-only audio/event stable identities where necessary so dynamically constructed/hosted components are representable without callback string work;
-- separate semantic state identity/version from deployment/export identities such as CLAP/VST3/AU IDs;
-- ensure schema drift is rejected before activation and dynamic configuration changes have explicit semantics.
+Remaining questions that could still affect this surface:
 
-Do not freeze macros/derives until this model is exercised by effects, event-only processors, instruments, multi-output components, embedded/graph use, and plugin deployment.
+- whether materially larger configuration families eventually justify rule-based `AudioIoPolicy` variants beyond explicit enumeration;
+- whether repeated real component patterns justify more authoring conveniences without creating parallel lifecycles;
+- whether graph/device/hosting layers expose a concrete capability or ownership requirement not expressible by the current schema.
+
+Do not add generality until one of those clients proves the need.
 
 ## Process buffers and I/O
 
-The generic safe buffer-source shape is implemented and the CLAP adapter traverses setup-mapped channels without callback-owned channel collections.
+Implemented:
 
-Freeze gates:
+- generic safe buffer sources without callback-owned channel vectors;
+- exact in-place, separate, input-only, and output-only relationships;
+- dense activation-local audio endpoints;
+- activation-owned endpoint legality validation for active port, direction, and channel range;
+- whole-I/O policy acceptance before activation;
+- dynamic reactivation across accepted layouts;
+- multi-output routing by semantic dense identity rather than callback ordering.
 
-- complete dense audio-port migration;
-- semantic whole-I/O policy for components with multiple legal configurations;
-- ergonomic bus/port views that preserve explicit buffer legality;
-- target-specific legality for inactive/null/zero-buffer cases;
-- benchmark controlled copy/conversion paths before adding unsafe/ownership complexity merely to remove them;
+Remaining freeze questions:
+
+- whether recurring bus/port access patterns justify a more ergonomic view API without weakening explicit legality;
+- backend-specific inactive/null/zero-buffer semantics in each deployment adapter;
+- benchmark controlled copy/conversion paths before adding unsafe or ownership complexity merely to remove them;
 - cross-format layout parity once VST3/AU projections exist;
 - surround/ambisonics/immersive semantics only with explicit ordering/mapping fixtures.
 
@@ -61,27 +72,29 @@ Freeze gates:
 
 - parameter formatting/value-mapping helpers with explicit round-trip/domain tests;
 - product/editor begin/change/end gesture semantics and echo suppression;
-- sample-accurate modulation distinct from durable/base state publication;
+- sample-accurate modulation distinct from durable/base state publication and ordinary automation;
 - adapter-specific automation/modulation semantics must be preserved rather than normalized to a weaker invented model;
 - production-host automated-render evidence for supported formats.
 
 ## State identity, save/load, and compatibility
 
-Implemented CLAP consistency behavior:
+Implemented:
 
+- semantic state identity and schema version owned by `ComponentSchema` / `InstanceRuntime`;
+- complete runtime state export/load without duplicate identity/version arguments;
+- runtime explicit-product-ID and parameter-only compatibility paths removed;
 - active state save serializes one coherent completed scalar generation;
 - newer control/state generations win over stale realtime endpoint publication;
-- state load is transactional and requests host value rescan after accepted publication;
-- direct tests/Loom/in-process-host coverage exercise the current behavior.
+- state load is bounded, migratable, transactional, and failure-atomic;
+- CLAP state save/load consumes schema-owned semantic identity while CLAP deployment identity remains separate;
+- direct tests, adversarial decode/load tests, Loom, and in-process host coverage exercise the current behavior.
 
-Freeze gates:
+Remaining freeze gates:
 
-- make semantic component/state identity and schema version runtime-owned through `ComponentSchema` rather than caller-supplied on every operation;
-- derive/export deployment identities from explicit product/export metadata without conflating them with semantic state identity;
-- migrate runtime save/load APIs to the canonical identity owner;
-- cross-format state round trips;
+- cross-format state round trips for every supported deployment format;
 - decide when the CHSS wire envelope becomes a compatibility promise;
-- define compatibility/versioning policy before a stable release.
+- define semver/state compatibility/versioning policy before a stable release;
+- establish canonical product/export manifest/tooling without making deployment IDs semantic-state identity.
 
 ## Latency, tail, bypass, and delayed processing
 
@@ -124,13 +137,15 @@ No hidden global executor or generalized lock-free container library.
 
 Implemented core foundation:
 
-- stable event-port schema/keys and dense indices;
+- owned-capable event-port schema/keys and dense indices;
 - runtime-owned event schema and schema-drift checks;
 - note IDs/channels/keys and wildcard-aware note addresses;
 - semantic note on/off/choke/end;
 - bounded borrowed note-event streams in process context/block;
 - validation against event-port direction/note capability;
-- zero-audio/event-schema runtime fixtures.
+- zero-audio/event-schema runtime fixture;
+- event-driven instrument fixture using output-only audio buffers;
+- multi-output runtime fixture.
 
 Before stable instrument/event claims:
 
@@ -142,11 +157,11 @@ Before stable instrument/event claims:
 - bounded output-event sinks and note-end output;
 - typed span/change-boundary processing without fabricated cross-family total order;
 - high-event-count allocation/work evidence;
-- synth/event-transform/multi-output fixtures.
+- event passthrough/transform and fuller synth fixtures through deployment adapters.
 
 ## DSP utility layer
 
-Common DSP infrastructure is now explicit Chassis scope, but the package/API boundary is not frozen.
+Common DSP infrastructure is explicit Chassis scope, but the package/API boundary is not frozen.
 
 Questions to resolve through concrete use:
 
@@ -177,13 +192,20 @@ Before a stable editor claim:
 
 CLAP is the first qualified plugin deployment. Existing headless and recorded REAPER evidence remains valuable.
 
+Already true:
+
+- CLAP audio/parameter setup derives from the coherent component schema;
+- CLAP audio mapping is checked against schema-owned audio policy;
+- CLAP state uses schema-owned semantic state identity;
+- f32/f64 processing, latency, restart, active save, panic containment, re-entrancy, and allocation/work bounds have headless/in-process coverage.
+
 Before stable plugin-format claims:
 
-- generalize proof-era CLAP concepts such as `ClapStereoEffect` after the neutral component-schema migration;
-- derive audio/event/parameter projection from the complete component schema and explicit deployment metadata;
+- replace/generalize proof-target adapter surfaces such as `ClapStereoEffect` when adding non-effect CLAP deployment makes the concrete requirement clear;
+- complete CLAP event/note projection and output-event support;
 - VST3/AU native validators;
 - identity/state/automation/modulation/audio/event/latency/editor differential fixtures;
-- real-host save/reopen/render scenarios;
+- real-host save/reopen/render scenarios for each supported format;
 - native adapters only when concrete wrapper limitations justify them.
 
 AAX/LV2 remain additional deployment targets rather than core semantic dependencies.
@@ -279,4 +301,4 @@ Before a stable/public compatibility promise:
 - complete the supported framework layers in `docs/roadmap.md` to the declared release scope;
 - establish curated facade, packaging, validation, examples, and reference docs;
 - define semver/MSRV/state compatibility policies;
-- exercise the final core API across materially different clients instead of one plugin class.
+- exercise the final supported API through the actual deployment/device/graph/host layers rather than assuming core proofs alone guarantee every outer contract.
