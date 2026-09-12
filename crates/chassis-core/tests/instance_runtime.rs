@@ -11,8 +11,8 @@ use std::{
 
 use chassis_core::{
     audio::{
-        AudioIoConfiguration, ChannelLayout, ConfiguredAudioPort, DEFAULT_EFFECT_CONFIGURATION,
-        MAIN_INPUT, MAIN_OUTPUT,
+        AudioIoConfiguration, AudioPortIndex, ChannelLayout, ConfiguredAudioPort,
+        DEFAULT_EFFECT_CONFIGURATION, MAIN_INPUT, MAIN_OUTPUT,
     },
     automation::ParameterEvents,
     buffer::{ChannelBuffer, InputEndpoint, OutputEndpoint},
@@ -26,6 +26,17 @@ use chassis_core::{
     },
     state::{StateDocument, StateEntry, StateMigration, StateMigrationError, StateValue},
 };
+
+const MAIN_INPUT_INDEX: AudioPortIndex = AudioPortIndex::new(0);
+const MAIN_OUTPUT_INDEX: AudioPortIndex = AudioPortIndex::new(1);
+
+fn main_input(channel: u32) -> InputEndpoint {
+    InputEndpoint::resolved(MAIN_INPUT, MAIN_INPUT_INDEX, channel)
+}
+
+fn main_output(channel: u32) -> OutputEndpoint {
+    OutputEndpoint::resolved(MAIN_OUTPUT, MAIN_OUTPUT_INDEX, channel)
+}
 
 #[derive(Default)]
 struct Metrics {
@@ -378,8 +389,8 @@ fn process_uses_durable_base_state() {
 
     let mut left = [1.0_f32, 0.5];
     let mut buffers = [ChannelBuffer::in_place(
-        InputEndpoint::new(MAIN_INPUT, 0),
-        OutputEndpoint::new(MAIN_OUTPUT, 0),
+        main_input(0),
+        main_output(0),
         &mut left,
         2,
     )
@@ -417,17 +428,17 @@ fn process_source_accepts_noncontiguous_channel_storage() {
     let mut left_output = [0.0_f32; 2];
     let mut right_output = [0.0_f32; 2];
     let mut first = [ChannelBuffer::separate(
-        InputEndpoint::new(MAIN_INPUT, 0),
+        main_input(0),
         &left_input,
-        OutputEndpoint::new(MAIN_OUTPUT, 0),
+        main_output(0),
         &mut left_output,
         2,
     )
     .expect("left channel is valid")];
     let mut second = [ChannelBuffer::separate(
-        InputEndpoint::new(MAIN_INPUT, 1),
+        main_input(1),
         &right_input,
-        OutputEndpoint::new(MAIN_OUTPUT, 1),
+        main_output(1),
         &mut right_output,
         2,
     )
