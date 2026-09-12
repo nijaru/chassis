@@ -1,21 +1,24 @@
 # Crate and Package Boundaries
 
-Status: design direction; `chassis-core` and the first `chassis-clap` adapter now exist.
+Status: design direction; `chassis-core` and the first `chassis-clap` adapter exist.
 
 ## Goal
 
-Use crate boundaries where they isolate unsafe/FFI code, large optional dependencies, tooling, or test-only machinery. Do not turn every domain noun into a crate or force normal authors to understand the implementation graph.
+Use crate boundaries where they isolate unsafe/FFI code, large optional dependencies, platform integrations, tooling, or test-only machinery. Do not turn every domain noun into a crate or force normal authors to understand the implementation graph.
+
+Chassis is one audio framework, not a collection of unrelated microcrates.
 
 ## Public authoring surface
 
-The intended ordinary surface is small:
+The intended ordinary surface should remain small even as the internal framework grows:
 
 ```text
-chassis-audio     main author-facing package/facade
-chassis-iced      optional first-class Iced integration
+chassis-audio     curated author-facing package/facade
 chassis-test      author/conformance testing helpers
 cargo-chassis     build/validate/package tooling
 ```
+
+Optional GUI, hosting, device, media, and other integrations may be exposed through features or companion packages where dependency boundaries justify that split.
 
 The bare crates.io package `chassis` is already occupied. `chassis-audio` can be documented with a dependency rename so source code still uses the natural path:
 
@@ -24,93 +27,146 @@ The bare crates.io package `chassis` is already occupied. `chassis-audio` can be
 chassis = { package = "chassis-audio", version = "..." }
 ```
 
-Do not publish placeholders merely to reserve names. Publish only when a useful initial package exists.
+Do not publish placeholders merely to reserve names. Publish only when a useful package exists.
 
-## Facade versus accidental re-export
+## Facade versus internal graph
 
 `chassis-core` should keep deliberate domain modules and avoid glob-exporting every implementation detail at its root.
 
-That does **not** mean the umbrella package must expose the internal crate graph. `chassis-audio` may deliberately re-export the small author-facing semantic traits/types and enable selected plugin/export integration behind documented features when that produces the best user experience.
+The umbrella package should intentionally curate the concepts ordinary authors need. A plugin tutorial, standalone processor, or embedded DSP component should not begin with an explanation of the internal crate graph.
 
-The distinction is:
+Likewise, an application using graph/device/host layers should opt into those facilities without forcing plugin-only users to build unrelated dependencies.
 
-- internal crate roots avoid accidental API expansion;
-- the public facade intentionally curates the API most plugin authors should use.
+## Durable boundary principles
 
-A gain/EQ/compressor tutorial should not begin with an explanation of `chassis-core` versus `chassis-clap`.
+### `chassis-core`
 
-## Current / likely durable boundaries
+Format-independent semantic/runtime contracts:
+
+- component/processor lifecycle;
+- audio/event ports and layouts;
+- process buffers/context;
+- parameters/automation/modulation;
+- semantic events/transport views;
+- state/migrations;
+- latency/tail/bypass semantics;
+- narrow realtime communication primitives;
+- stable identities required by the runtime.
+
+Properties:
+
+- std-first;
+- no plugin SDK, GUI toolkit, device backend, codec, or OS API dependency;
+- unsafe denied;
+- usable directly by embedded/application processors without plugin deployment.
+
+### Deployment adapters
+
+Examples:
 
 ```text
-chassis-core
-  format-independent semantic/runtime contracts
-  std-first, no format SDK or GUI toolkit
-  unsafe denied
-
-chassis-clap                    [exists, pre-alpha]
-  Clack/CLAP deployment adapter
-  current first slice uses only Clack safe APIs
-  future host translation/format-specific unsafe stays here if required
-
-examples/clap-conformance       [exists, validation artifact]
-  rlib/cdylib export probe
-  not a framework dependency or product API
-
-chassis-derive
-  proc macros only after explicit APIs prove repetitive declarations
-
-chassis-gui
-  toolkit-independent editor/host-window/parameter-binding contract
-  only if this contract proves substantial enough to deserve a crate
-
-chassis-iced
-  Iced/wgpu integration
-
-chassis-test
-  conformance runtime/component, allocation/work guards, fixtures, property helpers
-
-chassis-standalone
-  standalone component/device host once that product surface is implemented
-
-cargo-chassis
-  workspace discovery, export builds, identity manifests, validators, packaging
+chassis-clap       [exists]
+chassis-vst3       [only if Chassis owns a native adapter]
+chassis-au         [only if Chassis owns a native adapter]
 ```
 
-This is an upper bound, not a checklist. A proposed crate must have a dependency/safety/release/test boundary that a module cannot express as well.
+FFI/format glue has a different risk profile: external bindings, host lifecycle quirks, platform builds, native validators, and potential unsafe boundaries. Isolate it from core.
 
-## Why some boundaries deserve crates
+CLAP is the first native adapter. VST3/AU through a reviewed wrapper initially belong primarily to deployment/build integration; create native adapter crates only when Chassis actually owns those adapters.
 
-### Core
+### Editor/UI integration
 
-Core remains testable/usable without plugin SDKs, GUI, devices, or packaging. Embedded/application components can depend on it without inheriting export dependencies.
+Potential boundaries:
 
-### CLAP adapter
+```text
+chassis-editor     toolkit-independent editor/host-window/binding contract if large enough
+chassis-iced       optional Iced integration
+<other adapters>   only with real supported clients
+```
 
-Format glue has a different risk profile: external bindings, host lifecycle quirks, platform builds, native validators, and potentially FFI/unsafe where a lower layer cannot provide the required safe abstraction. Isolate it so core can forbid unsafe code and product semantics cannot accidentally depend on backend types.
+A GUI toolkit brings substantial rendering/window dependencies. Headless users must not inherit them.
 
-The first `chassis-clap` slice deliberately owns **no** unsafe code: Clack validates the raw CLAP buffers and returns safe `ChannelPair` views, which Chassis translates into `ChannelBuffer`. This is preferable to adding an unsafe layer merely because format adapters are allowed to contain one.
+Chassis owns editor lifecycle/integration, not a widget library or product visual design.
 
-CLAP is the first native adapter. VST3/AU through `clap-wrapper` initially belong primarily to export/build integration; create native `chassis-vst3`/`chassis-au` crates only if Chassis actually owns those adapters later.
+### DSP utilities
 
-The current adapter provides the conventional stereo effect mapping with optional f64 capability and a generic lazy buffer source. Native host qualification remains narrower than the source mapping; do not mistake either validation slice for the eventual author-facing CLAP feature set.
+Common DSP utilities are planned framework scope, but **do not create `chassis-dsp` merely because the domain exists**.
 
-### Conformance export
+Start with modules/integrations where practical. Split a DSP package only when it provides a coherent optional dependency/release boundary—for example if FFT/resampling/convolution integrations would otherwise pull significant dependencies into all core users.
 
-`examples/clap-conformance` exists so the adapter can produce a real loadable library without making a test product part of `chassis-clap` itself. Keep validation products outside the framework runtime dependency graph.
+Broad candidates include units, ramps/smoothing, delays, metering, filters, oscillators/envelopes, FFT/STFT/window integration, oversampling/resampling, convolution helpers, and buffer/channel operations.
 
-If richer synthetic host/test machinery becomes substantial, move reusable pieces into `chassis-test` rather than growing production adapter crates around tests.
+Strong existing FFT/resampling/etc. crates should normally remain dependencies behind Chassis semantics rather than being copied into the repository.
 
-### Proc macros
+### Device/runtime layer
 
-Rust requires a proc-macro crate mechanically. Macro expansions stay thin and target documented explicit Chassis APIs; the macro crate does not become a hidden second runtime.
+Likely boundary:
 
-### GUI
+```text
+chassis-device
+```
 
-A production GUI toolkit brings a large dependency/rendering/window stack. Headless products/core users should not compile it. Whether a separate `chassis-gui` crate is needed versus keeping a small editor contract in the facade/core should be decided by implementation size and dependency pressure, not aesthetics.
+Own Chassis semantics for audio/MIDI enumeration, open/close/reconfiguration, sample-rate/block-size negotiation, xruns/errors, timestamps, and device/application integration. Platform/device backend crates remain implementation dependencies.
+
+This layer is optional for plugin-only/embedded users.
+
+### Graph/scheduling layer
+
+Likely boundary:
+
+```text
+chassis-graph
+```
+
+Own generic audio/event routing, validated execution plans, latency propagation/compensation, and realtime scheduling over ordinary Chassis processors.
+
+The graph must not own DAW concepts such as tracks, clips, arrangements, project workflows, or mixer UX.
+
+### Plugin hosting layer
+
+Likely boundary:
+
+```text
+chassis-host
+```
+
+Own discovery/scanning, loading, lifecycle, hosted state/parameters/editors, failure policy, and graph integration for third-party plugin formats.
+
+Hosting dependencies and FFI must not flow into `chassis-core` or ordinary plugin-authoring builds.
+
+### Media/offline layer
+
+A package split such as `chassis-media` or `chassis-offline` is possible only if concrete dependency/ownership boundaries justify it.
+
+This logical area covers audio source/sink metadata, stream/read/write/seek integration, codec adapters, resampling/channel adaptation, deterministic rendering, and future random-access/multi-pass processing.
+
+Chassis should not implement or own project media libraries, clip editing, or codec algorithms merely to create a package.
+
+### Standalone layer
+
+Potential boundary:
+
+```text
+chassis-standalone
+```
+
+Application bootstrap over core + device + optional editor/graph facilities. It must run the same component/runtime implementation rather than introduce a second DSP architecture.
 
 ### Test support
 
-Synthetic hosts, global allocation guards, fuzz/property fixtures, and lifecycle torture machinery should not ship merely because product code uses Chassis.
+```text
+chassis-test
+```
+
+Synthetic hosts/devices, allocation guards, property/fuzz helpers, lifecycle torture machinery, graph fixtures, and conformance utilities should not ship through every production dependency merely because products need them in tests.
+
+### Tooling
+
+```text
+cargo-chassis
+```
+
+Workspace discovery, identity manifests, export builds, validators, packaging, signing/notarization hooks, compatibility checks, and templates. Tooling is not part of the runtime DSP dependency graph.
 
 ## What stays as modules initially
 
@@ -118,54 +174,55 @@ Inside `chassis-core`, prefer modules for tightly coupled semantic contracts:
 
 - audio ports/layouts/I/O policy;
 - activation/process context/buffer interfaces;
-- parameters/automation;
+- parameters/automation/modulation;
 - events/transport;
 - persistent state/migrations;
 - component/runtime ownership traits;
-- latency/tail/bypass metadata when implemented;
-- stable identity primitives needed at runtime.
+- latency/tail/bypass metadata;
+- realtime communication primitives;
+- stable runtime identity primitives.
 
-Do not split state/parameters/events into separate crates simply because they are sizable concepts.
+Do not split state/parameters/events into separate crates merely because they are substantial concepts.
 
-## Common utilities
+Likewise, do not create crates for `meter`, `filter`, `transport`, `offline`, etc. until there is a meaningful dependency/release boundary.
 
-Smoothing, metering, analyzer transport, snapshot publication, voice helpers, FFT/resampling helpers, etc. can begin in the product or appropriate existing framework module.
+## Current / likely dependency direction
 
-Extract a new optional crate only when repeated clients reveal one coherent capability with meaningfully different dependencies/release cadence. Chassis should not become a generic DSP algorithm collection by default.
-
-## Hosting/application layers
-
-Conditional future layers may include:
+A plausible end-state graph is:
 
 ```text
-chassis-host
-chassis-device
-chassis-graph
+product/application
+        |
+        v
+chassis-audio              curated facade
+   |        |       |       |       |
+   |        |       |       |       `-> optional tooling metadata helpers
+   |        |       |       `----------> optional host/media integrations
+   |        |       `------------------> optional graph/device/standalone
+   |        `--------------------------> optional deployment/editor integration
+   `-----------------------------------> chassis-core + lightweight utilities
+
+chassis-clap       -> chassis-core + Clack
+chassis-device     -> chassis-core + reviewed device/MIDI backends
+chassis-graph      -> chassis-core (+ utility modules)
+chassis-host       -> chassis-core/graph + plugin-host adapters
+chassis-standalone -> core + device (+ graph/editor as selected)
+chassis-test       -> core (+ adapters/layers behind test features)
+cargo-chassis      -> build/tooling dependencies only
 ```
 
-They appear only with a real host/application client. Plugin authors do not inherit hosting/device/graph dependencies through the normal facade unless explicitly requested.
+Exact package names and edges are not frozen. Keep the graph acyclic and keep large optional/platform dependencies from flowing downward.
 
-## Dependency direction
+## Dependency integration rule
 
-Current/proposed graph:
+A dependency should be wrapped behind Chassis semantics when:
 
-```text
-product
-   ↓
-chassis-audio (future curated facade)
-   ├── chassis-core
-   ├── optional chassis-clap/export support
-   └── optional derive support
+- its API exposes backend/platform concepts that should not become framework compatibility identity;
+- Chassis needs stronger realtime/lifecycle guarantees than the dependency alone expresses;
+- multiple backends should present one semantic capability;
+- Chassis needs to constrain configuration, ownership, or failure behavior.
 
-examples/clap-conformance -> chassis-core + chassis-clap
-chassis-clap              -> chassis-core + Clack
-chassis-iced              -> editor contract/core + Iced
-chassis-test              -> core (+ adapters behind test features)
-chassis-standalone        -> core + device/window deps
-cargo-chassis             -> build/tooling metadata; not runtime DSP
-```
-
-Keep the graph acyclic. Large GUI/device/tooling dependencies must not flow downward into `chassis-core`.
+Do not wrap dependencies merely to hide their names when direct use is already the best stable abstraction.
 
 ## Features
 
@@ -173,19 +230,20 @@ Use Cargo features for genuinely optional integration, not to create a combinato
 
 Rules before publication:
 
-- default features should give the most common author experience without pulling obviously unrelated GUI/device/tooling stacks;
-- disabling defaults must not change compatibility identity/state semantics silently;
-- feature combinations used for releases are validated explicitly;
-- avoid target-dependent public APIs where a runtime/adapter capability query is more honest.
-
-The current Clack extension feature set is deliberately narrow (`audio-ports` plus plugin-side integration). Add extension features only with the semantic layer that consumes them.
+- default features should give the most common author experience without pulling unrelated GUI/device/host/media stacks;
+- disabling defaults must not silently change compatibility identity/state semantics;
+- release feature combinations are validated explicitly;
+- avoid target-dependent public APIs where a runtime/adapter capability query is more honest;
+- graph/host/device/media functionality should normally be opt-in for plugin-only users.
 
 ## Versioning
 
 Pre-alpha internal crates can version together. Once external users exist, closely coupled framework crates should normally keep synchronized compatible releases so authors are not solving an internal dependency puzzle.
 
-`cargo-chassis` can detect incompatible mixed framework versions in a product workspace.
+`cargo-chassis` can eventually detect incompatible mixed framework versions in a product workspace.
 
 ## User-experience rule
 
-Internal modularity serves safety, optionality, build times, and maintenance. If ordinary plugin documentation has to teach the crate graph before an author can write product DSP, the public boundary is wrong.
+Internal modularity serves safety, optionality, build times, and maintenance. It is not the user model.
+
+If an ordinary plugin author must understand graph/device/media crates to write an effect, the facade is wrong. If a DAW/audio-application author must bypass Chassis core and invent another processor model to use graph/devices/hosting, the architecture is wrong.
