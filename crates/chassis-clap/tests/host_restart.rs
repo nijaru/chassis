@@ -34,14 +34,18 @@ impl Component for DelayedProbe {
     type Processor = DelayedProcessor;
     type ActivationError = Infallible;
 
+    fn schema(
+        &self,
+    ) -> Result<chassis_core::schema::ComponentSchema, chassis_core::schema::ComponentSchemaError>
+    {
+        chassis_core::schema::ComponentSchema::stereo_effect(self.parameters.clone())
+    }
+
     fn activate(
         &self,
         config: &ActivationConfig<'_>,
     ) -> Result<Self::Processor, Self::ActivationError> {
         self.activate_with_parameters(config, &ParameterStore::new(&self.parameters).unwrap())
-    }
-    fn parameter_descriptors(&self) -> &[ParameterDescriptor] {
-        &self.parameters
     }
     fn activate_with_parameters(
         &self,

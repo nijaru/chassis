@@ -3,7 +3,7 @@
 use std::{convert::Infallible, num::NonZeroU32};
 
 use chassis_core::{
-    audio::{AudioIoConfiguration, AudioPortDescriptor},
+    audio::AudioIoConfiguration,
     automation::ParameterEvents,
     buffer::ChannelBuffer,
     events::{
@@ -58,12 +58,11 @@ impl Component for EventComponent {
     type Processor = EventProcessor;
     type ActivationError = Infallible;
 
-    fn audio_ports(&self) -> &[AudioPortDescriptor] {
-        &[]
-    }
-
-    fn event_ports(&self) -> &[EventPortDescriptor] {
-        self.ports
+    fn schema(
+        &self,
+    ) -> Result<chassis_core::schema::ComponentSchema, chassis_core::schema::ComponentSchemaError>
+    {
+        chassis_core::schema::ComponentSchema::unidentified(vec![], self.ports.to_vec(), vec![])
     }
 
     fn activate(

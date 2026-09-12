@@ -53,10 +53,6 @@ impl Component for Probe {
     type Processor = ProbeProcessor;
     type ActivationError = Infallible;
 
-    fn audio_ports(&self) -> &[AudioPortDescriptor] {
-        self.audio_ports
-    }
-
     fn schema(&self) -> Result<ComponentSchema, chassis_core::schema::ComponentSchemaError> {
         Ok(self.schema_value())
     }

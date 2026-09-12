@@ -32,6 +32,13 @@ impl Component for ProbeComponent {
     type Processor = ProbeProcessor;
     type ActivationError = Infallible;
 
+    fn schema(
+        &self,
+    ) -> Result<chassis_core::schema::ComponentSchema, chassis_core::schema::ComponentSchemaError>
+    {
+        chassis_core::schema::ComponentSchema::stereo_effect(vec![])
+    }
+
     fn activate(
         &self,
         _config: &ActivationConfig<'_>,

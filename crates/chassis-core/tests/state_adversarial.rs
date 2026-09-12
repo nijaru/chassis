@@ -141,8 +141,10 @@ impl StateMigration for NeverMigration {
 fn every_truncated_runtime_load_is_failure_atomic() {
     let descriptor =
         ParameterDescriptor::float("gain", "Gain", 0.0, 2.0, 1.0).expect("test parameter is valid");
+    let schema = chassis_core::schema::ComponentSchema::stereo_effect(vec![descriptor])
+        .expect("runtime schema is valid");
     let mut runtime =
-        InstanceRuntime::<NoopProcessor>::new(&[descriptor]).expect("runtime schema is valid");
+        InstanceRuntime::<NoopProcessor>::from_schema(schema).expect("runtime schema is valid");
     runtime
         .parameters_mut()
         .set("gain", ParameterValue::Float(1.5))

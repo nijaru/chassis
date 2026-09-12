@@ -10,8 +10,8 @@ use std::vec::Vec;
 
 use crate::{
     audio::{
-        AudioIoConfigurationError, AudioPortDescriptor, AudioPortIndex, PortKey, audio_port_index,
-        validate_audio_port_schema,
+        AudioIoConfigurationError, AudioPortDescriptor, AudioPortIndex, DEFAULT_EFFECT_PORTS,
+        PortKey, audio_port_index, validate_audio_port_schema,
     },
     events::{
         EventPortDescriptor, EventPortIndex, EventPortKey, EventPortSchemaError, event_port_index,
@@ -209,6 +209,20 @@ impl ComponentSchema {
         parameters: Vec<ParameterDescriptor>,
     ) -> Result<Self, ComponentSchemaError> {
         Self::build(None, audio_ports, event_ports, parameters)
+    }
+
+    /// Construct the conventional stereo-effect schema with optional sidechain.
+    ///
+    /// This is an authoring convenience above neutral core semantics; components
+    /// with different audio/event I/O construct their schema explicitly.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ComponentSchemaError`] when the supplied parameter schema is invalid.
+    pub fn stereo_effect(
+        parameters: Vec<ParameterDescriptor>,
+    ) -> Result<Self, ComponentSchemaError> {
+        Self::unidentified(DEFAULT_EFFECT_PORTS.to_vec(), Vec::new(), parameters)
     }
 
     fn build(

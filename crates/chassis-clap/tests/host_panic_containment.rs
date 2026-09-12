@@ -52,6 +52,13 @@ impl Component for ActivationPanicProbe {
     type Processor = NoopProcessor;
     type ActivationError = Infallible;
 
+    fn schema(
+        &self,
+    ) -> Result<chassis_core::schema::ComponentSchema, chassis_core::schema::ComponentSchemaError>
+    {
+        chassis_core::schema::ComponentSchema::stereo_effect(vec![])
+    }
+
     fn activate(
         &self,
         _config: &ActivationConfig<'_>,
@@ -123,6 +130,13 @@ struct ProcessPanicProbe;
 impl Component for ProcessPanicProbe {
     type Processor = ProcessPanicProcessor;
     type ActivationError = Infallible;
+
+    fn schema(
+        &self,
+    ) -> Result<chassis_core::schema::ComponentSchema, chassis_core::schema::ComponentSchemaError>
+    {
+        chassis_core::schema::ComponentSchema::stereo_effect(vec![])
+    }
 
     fn activate(
         &self,

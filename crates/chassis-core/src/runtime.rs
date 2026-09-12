@@ -10,17 +10,13 @@ use std::vec::Vec;
 use crate::{
     audio::{
         AudioEndpointError, AudioIoConfiguration, AudioIoConfigurationError, AudioPortDescriptor,
-        AudioPortIndex, ConfiguredAudioPort, DEFAULT_EFFECT_PORTS, PortDirection, PortKey,
-        ResolvedAudioIoConfiguration,
+        AudioPortIndex, ConfiguredAudioPort, PortDirection, PortKey, ResolvedAudioIoConfiguration,
     },
     buffer::ChannelBuffer,
     events::{
         EventPortDescriptor, EventPortIndex, EventPortKey, EventPortSchemaError, NoteEventPortError,
     },
-    parameters::{
-        ParameterDescriptor, ParameterStateError, ParameterStore, ParameterStoreError,
-        ParameterValuesMut,
-    },
+    parameters::{ParameterStateError, ParameterStore, ParameterStoreError, ParameterValuesMut},
     process::{
         ActivationConfig, ChannelBufferSlice, ProcessBlock, ProcessBlockError, ProcessBufferSource,
         ProcessChannel, ProcessConfig, ProcessContext,
@@ -45,51 +41,16 @@ pub trait Component {
     /// Product-specific activation failure.
     type ActivationError;
 
-    /// Return the stable audio-port schema for this component.
+    /// Build one coherent immutable component schema for this generation.
     ///
-    /// The current migration bridge retains the historical conventional-effect
-    /// default. Neutral core semantics will remove this default after current
-    /// components/adapters construct explicit schemas.
-    #[must_use]
-    fn audio_ports(&self) -> &[AudioPortDescriptor] {
-        &DEFAULT_EFFECT_PORTS
-    }
-
-    /// Return the stable event-port schema for this component.
-    ///
-    /// Event ports are format-independent product identity. Runtime/backend
-    /// indices are derived projections and must not become persistence identity.
-    /// Audio-only components use the empty default schema.
-    #[must_use]
-    fn event_ports(&self) -> &[EventPortDescriptor] {
-        &[]
-    }
-
-    /// Return the immutable parameter schema for this component instance.
-    ///
-    /// Components without parameters use the empty default schema.
-    #[must_use]
-    fn parameter_descriptors(&self) -> &[ParameterDescriptor] {
-        &[]
-    }
-
-    /// Build one coherent immutable component schema.
-    ///
-    /// This default is an explicit migration bridge while semantic state identity
-    /// remains supplied by existing deployment/state callers. New core work must
-    /// consume the resulting [`ComponentSchema`] instead of independently treating
-    /// the legacy accessors as authorities.
+    /// Schema construction is a setup/control-domain operation. The runtime
+    /// validates and owns the returned snapshot; activation receives that exact
+    /// frozen generation through [`ActivationConfig::schema`].
     ///
     /// # Errors
     ///
     /// Returns [`ComponentSchemaError`] when any immutable schema is invalid.
-    fn schema(&self) -> Result<ComponentSchema, ComponentSchemaError> {
-        ComponentSchema::unidentified(
-            self.audio_ports().to_vec(),
-            self.event_ports().to_vec(),
-            self.parameter_descriptors().to_vec(),
-        )
-    }
+    fn schema(&self) -> Result<ComponentSchema, ComponentSchemaError>;
 
     /// Create the exclusively-owned realtime processor for one activation.
     ///
@@ -612,46 +573,6 @@ where
             custom_state: Vec::new(),
             active: None,
         })
-    }
-
-    /// Historical pre-alpha constructor for a conventional-effect schema.
-    ///
-    /// This remains only while existing tests/adapters migrate to
-    /// [`Self::from_schema`] / [`Self::for_component`]. It is not the target
-    /// stable authoring surface.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`InstanceRuntimeError`] when the transitional schema is invalid.
-    pub fn new(descriptors: &[ParameterDescriptor]) -> Result<Self, InstanceRuntimeError> {
-        let schema = ComponentSchema::unidentified(
-            DEFAULT_EFFECT_PORTS.to_vec(),
-            Vec::new(),
-            descriptors.to_vec(),
-        )
-        .map_err(runtime_schema_error)?;
-        Self::from_schema(schema)
-    }
-
-    /// Historical pre-alpha constructor for a conventional effect with event ports.
-    ///
-    /// Prefer [`Self::for_component`]. This exists only to keep migration changes
-    /// independently reviewable and will be removed before the authoring API freezes.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`InstanceRuntimeError`] when the transitional schema is invalid.
-    pub fn new_with_event_ports(
-        descriptors: &[ParameterDescriptor],
-        event_ports: &[EventPortDescriptor],
-    ) -> Result<Self, InstanceRuntimeError> {
-        let schema = ComponentSchema::unidentified(
-            DEFAULT_EFFECT_PORTS.to_vec(),
-            event_ports.to_vec(),
-            descriptors.to_vec(),
-        )
-        .map_err(runtime_schema_error)?;
-        Self::from_schema(schema)
     }
 
     /// Construct one inactive runtime from a component's coherent immutable schema.

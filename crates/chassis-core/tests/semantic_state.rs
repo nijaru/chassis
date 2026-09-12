@@ -47,10 +47,6 @@ impl Component for StateAwareEffect {
     type Processor = StateProcessor;
     type ActivationError = Infallible;
 
-    fn parameter_descriptors(&self) -> &[ParameterDescriptor] {
-        &self.parameters
-    }
-
     fn schema(&self) -> Result<ComponentSchema, chassis_core::schema::ComponentSchemaError> {
         ComponentSchema::new(
             ComponentId::new("com.example.semantic").expect("component identity is valid"),

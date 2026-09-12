@@ -46,8 +46,11 @@ impl Component for BenchComponent {
     type Processor = BenchProcessor;
     type ActivationError = Infallible;
 
-    fn parameter_descriptors(&self) -> &[ParameterDescriptor] {
-        &self.parameters
+    fn schema(
+        &self,
+    ) -> Result<chassis_core::schema::ComponentSchema, chassis_core::schema::ComponentSchemaError>
+    {
+        chassis_core::schema::ComponentSchema::stereo_effect(self.parameters.clone())
     }
 
     fn activate(

@@ -10,7 +10,7 @@ use std::{
 };
 
 use chassis_core::{
-    audio::{AudioIoConfiguration, AudioPortDescriptor},
+    audio::AudioIoConfiguration,
     automation::ParameterEvents,
     buffer::ChannelBuffer,
     events::{
@@ -41,12 +41,11 @@ impl Component for NoteProbe {
     type Processor = NoteProbeProcessor;
     type ActivationError = Infallible;
 
-    fn audio_ports(&self) -> &[AudioPortDescriptor] {
-        &[]
-    }
-
-    fn event_ports(&self) -> &[EventPortDescriptor] {
-        NOTE_PORTS
+    fn schema(
+        &self,
+    ) -> Result<chassis_core::schema::ComponentSchema, chassis_core::schema::ComponentSchemaError>
+    {
+        chassis_core::schema::ComponentSchema::unidentified(vec![], NOTE_PORTS.to_vec(), vec![])
     }
 
     fn activate(

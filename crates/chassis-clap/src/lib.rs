@@ -24,7 +24,7 @@ use audio::{AudioMappingError, ClapAudioConfiguration, ClapProcessSlot};
 use chassis_core::{
     audio::PortDirection,
     automation::ParameterEvents,
-    parameters::{ChoiceOption, ParameterKind, ParameterStore},
+    parameters::{ChoiceOption, ParameterKind},
     process::{ProcessConfig, ProcessContext, ProcessMode, TransportSnapshot},
     runtime::{Component, InstanceRuntime, Process as ChassisProcess, Processor},
     state::{StateDocument, StateLimits},
@@ -271,9 +271,10 @@ where
     C: ClapStereoEffect,
 {
     let component = C::default();
-    ParameterStore::new(component.parameter_descriptors())
-        .map_err(|_| PluginError::Message("Invalid Chassis parameter schema"))?;
-    if !component.parameter_descriptors().is_empty() && C::CLAP_MAX_PARAMETER_EVENTS == 0 {
+    let schema = component
+        .schema()
+        .map_err(|_| PluginError::Message("Invalid Chassis component schema"))?;
+    if !schema.parameters().is_empty() && C::CLAP_MAX_PARAMETER_EVENTS == 0 {
         return Err(PluginError::Message(
             "CLAP parameter projection requires a positive event bound",
         ));
@@ -283,10 +284,9 @@ where
             "CLAP parameter event bound exceeds total input event bound",
         ));
     }
-    let parameters =
-        ClapParameterState::new(component.parameter_descriptors(), C::CLAP_PARAMETER_IDS)
-            .map_err(|error| parameter_mapping_error(&error))?
-            .with_input_event_bound(C::CLAP_MAX_INPUT_EVENTS);
+    let parameters = ClapParameterState::new(schema.parameters(), C::CLAP_PARAMETER_IDS)
+        .map_err(|error| parameter_mapping_error(&error))?
+        .with_input_event_bound(C::CLAP_MAX_INPUT_EVENTS);
     Ok(ChassisShared {
         parameters: Arc::new(parameters),
         render: Arc::new(RenderState::default()),
@@ -302,15 +302,15 @@ where
     C: ClapStereoEffect,
 {
     let component = C::default();
-    if !shared
-        .parameters
-        .matches_descriptors(component.parameter_descriptors())
-    {
+    let schema = component
+        .schema()
+        .map_err(|_| PluginError::Message("Invalid Chassis component schema"))?;
+    if !shared.parameters.matches_descriptors(schema.parameters()) {
         return Err(PluginError::Message(
             "CLAP component schema changed between shared and main-thread construction",
         ));
     }
-    let mut audio = ClapAudioConfiguration::new(component.audio_ports(), C::CLAP_AUDIO_PORTS)
+    let mut audio = ClapAudioConfiguration::new(schema.audio_ports(), C::CLAP_AUDIO_PORTS)
         .map_err(|error| audio_mapping_error(&error))?;
     if supports_f64 {
         audio = audio.with_f64_support();
@@ -340,16 +340,17 @@ where
     C: ClapStereoEffect<Processor = P>,
     P: Processor,
 {
-    if !shared
-        .parameters
-        .matches_descriptors(main_thread.component.parameter_descriptors())
-    {
+    let schema = main_thread
+        .component
+        .schema()
+        .map_err(|_| PluginError::Message("Invalid Chassis component schema"))?;
+    if !shared.parameters.matches_descriptors(schema.parameters()) {
         return Err(PluginError::Message(
             "CLAP component schema does not match its parameter projection",
         ));
     }
     let process = map_process_config(audio_config, C::CLAP_MAX_PARAMETER_EVENTS)?;
-    let runtime = InstanceRuntime::for_component(&main_thread.component)
+    let runtime = InstanceRuntime::from_schema(schema)
         .map_err(|_| PluginError::Message("Invalid Chassis instance runtime"))?;
 
     let maximum_events = usize::try_from(C::CLAP_MAX_PARAMETER_EVENTS)
