@@ -96,11 +96,7 @@ fn processor_publishes_meter_snapshot_without_owning_display_state() {
     let mut runtime: InstanceRuntime<MeterProcessor> =
         InstanceRuntime::for_component(&component).expect("meter schema is valid");
     runtime
-        .activate(
-            &component,
-            process_config(),
-            DEFAULT_EFFECT_CONFIGURATION,
-        )
+        .activate(&component, process_config(), DEFAULT_EFFECT_CONFIGURATION)
         .expect("meter activation succeeds");
 
     let mut left = [1.0_f32, -1.0];
