@@ -9,8 +9,9 @@ use std::vec::Vec;
 
 use crate::{
     audio::{
-        AudioIoConfiguration, AudioIoConfigurationError, AudioPortDescriptor, AudioPortIndex,
-        ConfiguredAudioPort, DEFAULT_EFFECT_PORTS, PortKey,
+        AudioEndpointError, AudioIoConfiguration, AudioIoConfigurationError, AudioPortDescriptor,
+        AudioPortIndex, ConfiguredAudioPort, DEFAULT_EFFECT_PORTS, PortDirection, PortKey,
+        ResolvedAudioIoConfiguration,
     },
     buffer::ChannelBuffer,
     events::{
@@ -22,7 +23,7 @@ use crate::{
     },
     process::{
         ActivationConfig, ChannelBufferSlice, ProcessBlock, ProcessBlockError, ProcessBufferSource,
-        ProcessConfig, ProcessContext,
+        ProcessChannel, ProcessConfig, ProcessContext,
     },
     schema::{ComponentSchema, ComponentSchemaError},
     state::{
@@ -344,6 +345,8 @@ impl std::error::Error for InstanceLifecycleError {}
 pub enum InstanceProcessError {
     /// No processor is active.
     NotActive,
+    /// A process-time audio endpoint is illegal for this activation.
+    InvalidAudioEndpoint(AudioEndpointError),
     /// The process block violated the active configuration or parameter schema.
     InvalidBlock(ProcessBlockError),
     /// Semantic note events targeted invalid event-port capabilities.
@@ -354,6 +357,7 @@ impl fmt::Display for InstanceProcessError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NotActive => formatter.write_str("component instance is not active"),
+            Self::InvalidAudioEndpoint(error) => write!(formatter, "invalid audio endpoint: {error}"),
             Self::InvalidBlock(error) => write!(formatter, "invalid process block: {error}"),
             Self::InvalidNoteEvents(error) => write!(formatter, "invalid note events: {error}"),
         }
@@ -364,6 +368,7 @@ impl std::error::Error for InstanceProcessError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::NotActive => None,
+            Self::InvalidAudioEndpoint(error) => Some(error),
             Self::InvalidBlock(error) => Some(error),
             Self::InvalidNoteEvents(error) => Some(error),
         }
@@ -555,6 +560,7 @@ where
 struct ActiveRuntime<P> {
     process: ProcessConfig,
     audio_ports: Vec<ConfiguredAudioPort>,
+    resolved_audio: ResolvedAudioIoConfiguration,
     latency: LatencySamples,
     processor: P,
 }
@@ -737,6 +743,12 @@ where
         self.active.as_ref().map(ActiveRuntime::config)
     }
 
+    /// Return the activation-owned dense audio configuration when active.
+    #[must_use]
+    pub fn active_audio(&self) -> Option<&ResolvedAudioIoConfiguration> {
+        self.active.as_ref().map(|active| &active.resolved_audio)
+    }
+
     /// Return the latency captured for the current activation.
     #[must_use]
     pub fn active_latency(&self) -> Option<LatencySamples> {
@@ -794,10 +806,9 @@ where
             return Err(ActivateError::EventPortSchemaMismatch);
         }
 
-        audio_io
-            .validate(self.schema.audio_ports())
+        let resolved_audio = audio_io
+            .resolve(self.schema.audio_ports())
             .map_err(ActivateError::InvalidAudioIo)?;
-
         let audio_ports = audio_io.ports().to_vec();
         let config = ActivationConfig::new(process, AudioIoConfiguration::new(&audio_ports));
         let processor = component
@@ -807,6 +818,7 @@ where
         self.active = Some(ActiveRuntime {
             process,
             audio_ports,
+            resolved_audio,
             latency,
             processor,
         });
@@ -834,9 +846,8 @@ where
     ///
     /// # Errors
     ///
-    /// Returns [`InstanceProcessError::NotActive`] when inactive or
-    /// [`InstanceProcessError::InvalidBlock`] before product DSP runs when the
-    /// callback violates the active process/parameter contract.
+    /// Returns [`InstanceProcessError::NotActive`] when inactive or a validated
+    /// process-boundary error before product DSP runs.
     pub fn process<S>(
         &mut self,
         frame_count: u32,
@@ -852,16 +863,17 @@ where
 
     /// Process one allocation-free safe buffer source through the active processor.
     ///
-    /// Source-specific stable endpoint mapping belongs to setup/adapter state;
-    /// this boundary validates callback dimensions, parameter events, and note
-    /// event-port capabilities before product DSP can traverse the source.
+    /// The runtime validates endpoint identity/direction/channel legality against
+    /// the activation-owned dense audio configuration before product DSP. Source-
+    /// specific raw-pointer/alias proofs still belong to adapters/embeddings.
     ///
     /// # Errors
     ///
     /// Returns [`InstanceProcessError::NotActive`] when inactive,
-    /// [`InstanceProcessError::InvalidBlock`] for callback shape/parameter
-    /// failures, or [`InstanceProcessError::InvalidNoteEvents`] when semantic
-    /// note events target incompatible event-port capabilities.
+    /// [`InstanceProcessError::InvalidAudioEndpoint`] for endpoint/configuration
+    /// mismatches, [`InstanceProcessError::InvalidBlock`] for callback
+    /// shape/parameter failures, or [`InstanceProcessError::InvalidNoteEvents`]
+    /// for incompatible note-event port capabilities.
     pub fn process_source<S, B>(
         &mut self,
         frame_count: u32,
@@ -882,9 +894,14 @@ where
         let ActiveRuntime {
             process,
             audio_ports,
+            resolved_audio,
             latency: _,
             processor,
         } = active;
+
+        validate_audio_endpoints(source, resolved_audio)
+            .map_err(InstanceProcessError::InvalidAudioEndpoint)?;
+
         let config = ActivationConfig::new(*process, AudioIoConfiguration::new(audio_ports));
         let mut block = ProcessBlock::new(&config, parameters, frame_count, context, source)
             .map_err(InstanceProcessError::InvalidBlock)?;
@@ -1251,4 +1268,28 @@ where
         )
         .map_err(InstanceSemanticStateLoadError::Apply)
     }
+}
+
+fn validate_audio_endpoints<S, B>(
+    source: &mut B,
+    resolved: &ResolvedAudioIoConfiguration,
+) -> Result<(), AudioEndpointError>
+where
+    B: ProcessBufferSource<S> + ?Sized,
+{
+    for channel in source.channels() {
+        if let Some(endpoint) = channel.input_endpoint() {
+            let port = endpoint
+                .port_index()
+                .ok_or(AudioEndpointError::UnresolvedPortIdentity)?;
+            resolved.validate_endpoint(port, endpoint.channel(), PortDirection::Input)?;
+        }
+        if let Some(endpoint) = channel.output_endpoint() {
+            let port = endpoint
+                .port_index()
+                .ok_or(AudioEndpointError::UnresolvedPortIdentity)?;
+            resolved.validate_endpoint(port, endpoint.channel(), PortDirection::Output)?;
+        }
+    }
+    Ok(())
 }
