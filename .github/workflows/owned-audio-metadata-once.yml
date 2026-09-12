@@ -19,6 +19,8 @@ jobs:
         run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
       - name: Apply migration
         run: python3 .github/owned_audio_metadata_migrate.py
+      - name: Apply migration fixups
+        run: python3 .github/owned_audio_metadata_fix.py
       - name: Format workspace
         run: cargo +1.98.0 fmt --all
       - name: Test workspace
@@ -26,7 +28,7 @@ jobs:
       - name: Lint workspace
         run: cargo +1.98.0 clippy --workspace --all-targets --all-features -- -D warnings
       - name: Remove migration scaffolding
-        run: rm .github/workflows/owned-audio-metadata-once.yml .github/owned_audio_metadata_migrate.py
+        run: rm .github/workflows/owned-audio-metadata-once.yml .github/owned_audio_metadata_migrate.py .github/owned_audio_metadata_fix.py
       - name: Commit migration
         run: |
           git config user.name github-actions[bot]
