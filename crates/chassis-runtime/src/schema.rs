@@ -157,13 +157,12 @@ impl StateIdentity {
 ///
 /// The schema owns setup-domain metadata so dynamically constructed components
 /// are not forced to rely on Rust declaration order as compatibility identity.
-/// The current audio/event descriptor types still contain static strings; those
-/// identities will migrate to owned validated keys before this surface freezes.
+/// Audio/event keys and labels may borrow static data or own runtime metadata;
+/// processing uses dense indices rather than those strings.
 ///
-/// `state_identity` is temporarily optional while the existing adapters/runtime
-/// state APIs are migrated from caller-supplied identity. New identified schemas
-/// should use [`Self::new`]. [`Self::unidentified`] exists only as a pre-alpha
-/// migration bridge and is not the target stable authoring surface.
+/// [`Self::new`] establishes persistence identity. [`Self::unidentified`] supports
+/// transient components that do not export/load semantic state; persistence
+/// operations reject a missing identity rather than accepting one from a caller.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ComponentSchema {
     state_identity: Option<StateIdentity>,
@@ -199,9 +198,9 @@ impl ComponentSchema {
 
     /// Construct a validated schema without semantic state identity.
     ///
-    /// This is a migration bridge for current pre-alpha components whose state
-    /// identity is still supplied by deployment adapters/callers. Do not use it
-    /// as the basis of a stable public API.
+    /// Use for transient/embedded components without persistent state. Runtime
+    /// state export/load rejects these schemas; adapters requiring persistence
+    /// identity must reject them during setup.
     ///
     /// # Errors
     ///
@@ -278,7 +277,7 @@ impl ComponentSchema {
         })
     }
 
-    /// Return semantic state identity when this schema has been fully migrated.
+    /// Return semantic state identity, if this component supports persistence.
     #[must_use]
     pub const fn state_identity(&self) -> Option<&StateIdentity> {
         self.state_identity.as_ref()

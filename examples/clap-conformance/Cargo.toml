@@ -11,7 +11,7 @@ description = "Minimal exported CLAP plugin used to validate the Chassis adapter
 crate-type = ["rlib", "cdylib"]
 
 [dependencies]
-chassis-core.workspace = true
+chassis-runtime.workspace = true
 chassis-clap.workspace = true
 
 [lints]

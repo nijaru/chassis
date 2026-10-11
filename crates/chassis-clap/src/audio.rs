@@ -8,7 +8,7 @@
 use core::{cmp::Ordering, fmt};
 use std::vec::Vec;
 
-use chassis_core::audio::{
+use chassis_runtime::audio::{
     AudioIoConfiguration, AudioPortDescriptor, AudioPortIndex, ChannelLayout, ConfiguredAudioPort,
     MAIN_INPUT, MAIN_OUTPUT, PortDirection, PortKey, PortRole, SIDECHAIN_INPUT, audio_port_index,
 };
@@ -432,7 +432,7 @@ pub(crate) enum AudioMappingError {
     InvalidClapId(PortKey),
     DuplicateMappedPort(PortKey),
     UnknownMappedPort(PortKey),
-    InvalidConfiguration(chassis_core::audio::AudioIoConfigurationError),
+    InvalidConfiguration(chassis_runtime::audio::AudioIoConfigurationError),
     DuplicateClapId(u32),
     MultipleMainPorts,
     UnknownInPlacePair { port: PortKey, pair: PortKey },
@@ -528,7 +528,7 @@ impl std::error::Error for AudioMappingError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chassis_core::audio::{
+    use chassis_runtime::audio::{
         AudioPortDescriptor, MAIN_INPUT, MAIN_OUTPUT, PortDirection, PortKey, PortRole,
         SIDECHAIN_INPUT,
     };
@@ -536,7 +536,7 @@ mod tests {
     #[test]
     fn default_mapping_projects_main_and_sidechain_without_derived_ids() {
         let configuration = ClapAudioConfiguration::new(
-            &chassis_core::audio::DEFAULT_EFFECT_PORTS,
+            &chassis_runtime::audio::DEFAULT_EFFECT_PORTS,
             &DEFAULT_CLAP_AUDIO_PORTS,
         )
         .expect("default mapping is valid");
@@ -586,7 +586,7 @@ mod tests {
     #[test]
     fn f64_support_advertises_common_sample_size() {
         let configuration = ClapAudioConfiguration::new(
-            &chassis_core::audio::DEFAULT_EFFECT_PORTS,
+            &chassis_runtime::audio::DEFAULT_EFFECT_PORTS,
             &DEFAULT_CLAP_AUDIO_PORTS,
         )
         .expect("default mapping is valid")
@@ -611,7 +611,7 @@ mod tests {
             DEFAULT_CLAP_AUDIO_PORTS[0].clone(),
         ];
         let configuration =
-            ClapAudioConfiguration::new(&chassis_core::audio::DEFAULT_EFFECT_PORTS, &reordered)
+            ClapAudioConfiguration::new(&chassis_runtime::audio::DEFAULT_EFFECT_PORTS, &reordered)
                 .expect("reordered mapping is valid");
         let main = configuration.process_slots()[0];
         assert_eq!(
@@ -633,7 +633,7 @@ mod tests {
             ClapAudioPort::new(SIDECHAIN_INPUT, 0, ChannelLayout::Stereo, None),
         ];
         assert_eq!(
-            ClapAudioConfiguration::new(&chassis_core::audio::DEFAULT_EFFECT_PORTS, &duplicate)
+            ClapAudioConfiguration::new(&chassis_runtime::audio::DEFAULT_EFFECT_PORTS, &duplicate)
                 .err(),
             Some(AudioMappingError::DuplicateClapId(0))
         );
@@ -643,7 +643,7 @@ mod tests {
     fn missing_required_mapping_is_rejected() {
         let incomplete = [DEFAULT_CLAP_AUDIO_PORTS[0].clone()];
         assert!(matches!(
-            ClapAudioConfiguration::new(&chassis_core::audio::DEFAULT_EFFECT_PORTS, &incomplete),
+            ClapAudioConfiguration::new(&chassis_runtime::audio::DEFAULT_EFFECT_PORTS, &incomplete),
             Err(AudioMappingError::InvalidConfiguration(_))
         ));
     }

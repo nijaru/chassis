@@ -31,10 +31,9 @@ use crate::{
 
 /// Immutable product definition/factory for one Chassis component type.
 ///
-/// The component is not the live mutable processor. During the current pre-alpha
-/// migration, the separate audio/event/parameter accessors remain as authoring
-/// compatibility hooks and [`Self::schema`] folds them into one coherent schema.
-/// The target API makes that coherent schema the direct component authority.
+/// The component is not the live mutable processor. [`Self::schema`] supplies
+/// its coherent immutable definition; activation creates processor-owned DSP
+/// history and resources for one accepted configuration.
 pub trait Component {
     /// Realtime processor created for one successful activation.
     type Processor: Processor;
@@ -362,7 +361,7 @@ impl std::error::Error for InstanceProcessError {
 /// Failure while exporting complete semantic state through schema-owned identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InstanceStateExportError {
-    /// This transitional component schema does not yet own semantic state identity.
+    /// This component schema has no semantic persistence identity.
     MissingStateIdentity,
     /// Parameter/state document construction or encoding failed.
     State(ParameterStateError),
@@ -391,7 +390,7 @@ impl std::error::Error for InstanceStateExportError {
 /// Failure while replacing the durable instance's framework-managed parameter state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InstanceStateError {
-    /// The component schema has not yet been migrated to semantic state identity.
+    /// The component schema has no semantic persistence identity.
     MissingStateIdentity,
     /// Rebuilding the already-validated parameter schema unexpectedly failed.
     InvalidParameters(ParameterStoreError),
@@ -615,14 +614,14 @@ where
     /// The returned view cannot replace the immutable schema:
     ///
     /// ```compile_fail
-    /// use chassis_core::{parameters::ParameterStore, runtime::{Component, InstanceRuntime, Processor}};
+    /// use chassis_runtime::{parameters::ParameterStore, runtime::{Component, InstanceRuntime, Processor}};
     /// struct Dsp;
     /// impl Processor for Dsp {}
     /// struct Definition;
     /// impl Component for Definition {
     ///     type Processor = Dsp;
     ///     type ActivationError = core::convert::Infallible;
-    ///     fn activate(&self, _: &chassis_core::process::ActivationConfig<'_>) -> Result<Dsp, Self::ActivationError> { Ok(Dsp) }
+    ///     fn activate(&self, _: &chassis_runtime::process::ActivationConfig<'_>) -> Result<Dsp, Self::ActivationError> { Ok(Dsp) }
     /// }
     /// let definition = Definition;
     /// let mut runtime = InstanceRuntime::<Dsp>::for_component(&definition).unwrap();

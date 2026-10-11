@@ -2,8 +2,8 @@
 
 use core::convert::Infallible;
 
-use chassis_clap::{ClapStereoEffect, SingleComponentEntryWithF64, clack_export_entry};
-use chassis_core::{
+use chassis_clap::{ClapComponent, F32AndF64, SingleComponentEntry, clack_export_entry};
+use chassis_runtime::{
     buffer::BufferRelationship,
     parameters::{ChoiceOption, ParameterDescriptor, ParameterValue},
     process::{ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessChannel},
@@ -46,14 +46,16 @@ impl Component for ConformanceEffect {
 
     fn schema(
         &self,
-    ) -> Result<chassis_core::schema::ComponentSchema, chassis_core::schema::ComponentSchemaError>
-    {
-        chassis_core::schema::ComponentSchema::stereo_effect_with_state(
-            chassis_core::schema::ComponentId::new(
+    ) -> Result<
+        chassis_runtime::schema::ComponentSchema,
+        chassis_runtime::schema::ComponentSchemaError,
+    > {
+        chassis_runtime::schema::ComponentSchema::stereo_effect_with_state(
+            chassis_runtime::schema::ComponentId::new(
                 "org.nijaru.chassis.semantic.examples.clap-conformance.src.lib.conformanceeffect",
             )
             .expect("semantic component identity is valid"),
-            chassis_core::schema::StateSchemaVersion::new(1),
+            chassis_runtime::schema::StateSchemaVersion::new(1),
             self.parameters.clone(),
         )
     }
@@ -66,9 +68,10 @@ impl Component for ConformanceEffect {
     }
 }
 
-impl ClapStereoEffect for ConformanceEffect {
+impl ClapComponent for ConformanceEffect {
     const CLAP_ID: &'static str = "com.nijaru.chassis.conformance";
     const CLAP_NAME: &'static str = "Chassis Conformance";
+    const CLAP_FEATURES: &'static [&'static std::ffi::CStr] = &[c"audio-effect", c"stereo"];
     const CLAP_PARAMETER_IDS: &'static [(&'static str, u32)] = &[("mode", 7001), ("trim", 7002)];
     const CLAP_MAX_PARAMETER_EVENTS: u32 = 512;
 }
@@ -161,7 +164,7 @@ impl Process<f64> for ConformanceProcessor {
     }
 }
 
-clack_export_entry!(SingleComponentEntryWithF64<ConformanceEffect>);
+clack_export_entry!(SingleComponentEntry<ConformanceEffect, F32AndF64>);
 
 fn apply_trim_f32(sample: &mut f32, gain: f64) {
     #[allow(clippy::cast_possible_truncation)]

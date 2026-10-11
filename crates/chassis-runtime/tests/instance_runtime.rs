@@ -9,7 +9,7 @@ use std::{
     },
 };
 
-use chassis_core::{
+use chassis_runtime::{
     audio::{
         AudioIoConfiguration, AudioPortIndex, ChannelLayout, ConfiguredAudioPort,
         DEFAULT_EFFECT_CONFIGURATION, MAIN_INPUT, MAIN_OUTPUT,
@@ -65,9 +65,11 @@ impl Component for Effect {
 
     fn schema(
         &self,
-    ) -> Result<chassis_core::schema::ComponentSchema, chassis_core::schema::ComponentSchemaError>
-    {
-        chassis_core::schema::ComponentSchema::stereo_effect(self.parameters.clone())
+    ) -> Result<
+        chassis_runtime::schema::ComponentSchema,
+        chassis_runtime::schema::ComponentSchemaError,
+    > {
+        chassis_runtime::schema::ComponentSchema::stereo_effect(self.parameters.clone())
     }
 
     fn activate(

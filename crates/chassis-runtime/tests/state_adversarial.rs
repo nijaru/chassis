@@ -2,7 +2,7 @@
 
 use std::convert::Infallible;
 
-use chassis_core::{
+use chassis_runtime::{
     parameters::{ParameterDescriptor, ParameterValue},
     runtime::{InstanceRuntime, Processor},
     schema::{ComponentId, ComponentSchema, StateSchemaVersion},

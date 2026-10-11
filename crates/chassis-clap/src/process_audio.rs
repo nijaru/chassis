@@ -8,7 +8,7 @@
 
 use core::{marker::PhantomData, slice};
 
-use chassis_core::{
+use chassis_runtime::{
     buffer::{BufferAccessError, BufferRelationship, InputEndpoint, OutputEndpoint},
     process::{ProcessBlockError, ProcessBufferSource, ProcessChannel},
 };

@@ -9,7 +9,7 @@ use std::{
     },
 };
 
-use chassis_core::{
+use chassis_runtime::{
     audio::{AudioEndpointError, AudioPortIndex, DEFAULT_EFFECT_CONFIGURATION},
     automation::ParameterEvents,
     buffer::{ChannelBuffer, InputEndpoint, OutputEndpoint},
@@ -34,9 +34,11 @@ impl Component for ProbeComponent {
 
     fn schema(
         &self,
-    ) -> Result<chassis_core::schema::ComponentSchema, chassis_core::schema::ComponentSchemaError>
-    {
-        chassis_core::schema::ComponentSchema::stereo_effect(vec![])
+    ) -> Result<
+        chassis_runtime::schema::ComponentSchema,
+        chassis_runtime::schema::ComponentSchemaError,
+    > {
+        chassis_runtime::schema::ComponentSchema::stereo_effect(vec![])
     }
 
     fn activate(

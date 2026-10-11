@@ -9,7 +9,7 @@ use std::{
     },
 };
 
-use chassis_core::{
+use chassis_runtime::{
     audio::AudioIoConfiguration,
     automation::ParameterEvents,
     buffer::ChannelBuffer,
@@ -43,11 +43,13 @@ impl Component for NoteProbe {
 
     fn schema(
         &self,
-    ) -> Result<chassis_core::schema::ComponentSchema, chassis_core::schema::ComponentSchemaError>
-    {
-        chassis_core::schema::ComponentSchema::unidentified(
+    ) -> Result<
+        chassis_runtime::schema::ComponentSchema,
+        chassis_runtime::schema::ComponentSchemaError,
+    > {
+        chassis_runtime::schema::ComponentSchema::unidentified(
             vec![],
-            chassis_core::audio::AudioIoPolicy::any_structurally_valid(),
+            chassis_runtime::audio::AudioIoPolicy::any_structurally_valid(),
             NOTE_PORTS.to_vec(),
             vec![],
         )
@@ -102,7 +104,7 @@ fn note_address(port: EventPortIndex, key: u8) -> NoteAddress {
         port,
         None,
         None,
-        Some(chassis_core::events::NoteKey::new(key).expect("test key is valid")),
+        Some(chassis_runtime::events::NoteKey::new(key).expect("test key is valid")),
     )
 }
 

@@ -12,7 +12,7 @@ use std::{
     },
 };
 
-use chassis_core::{
+use chassis_runtime::{
     audio::{
         AudioIoConfiguration, AudioIoConfigurationError, AudioPortIndex, ChannelLayout,
         ConfiguredAudioPort, DEFAULT_EFFECT_CONFIGURATION, MAIN_INPUT, MAIN_OUTPUT,
@@ -83,9 +83,11 @@ impl Component for ConformanceEffect {
 
     fn schema(
         &self,
-    ) -> Result<chassis_core::schema::ComponentSchema, chassis_core::schema::ComponentSchemaError>
-    {
-        chassis_core::schema::ComponentSchema::stereo_effect(self.parameters.clone())
+    ) -> Result<
+        chassis_runtime::schema::ComponentSchema,
+        chassis_runtime::schema::ComponentSchemaError,
+    > {
+        chassis_runtime::schema::ComponentSchema::stereo_effect(self.parameters.clone())
     }
 
     fn activate(
@@ -271,8 +273,8 @@ fn parameter_automation_is_sample_accurate_through_runtime() {
         .expect("gain index exists");
 
     let raw_events = [
-        chassis_core::automation::ParameterEvent::set(1, gain, ParameterEventValue::Float(0.5)),
-        chassis_core::automation::ParameterEvent::linear(3, gain, 0.0),
+        chassis_runtime::automation::ParameterEvent::set(1, gain, ParameterEventValue::Float(0.5)),
+        chassis_runtime::automation::ParameterEvent::linear(3, gain, 0.0),
     ];
     let events = ParameterEvents::new(&raw_events, 4, 8).expect("events are valid");
     let context = ProcessContext::new(
@@ -306,7 +308,7 @@ fn invalid_parameter_events_never_reach_product_dsp() {
         .expect("parameter definition is valid");
     let component = ConformanceEffect::with_parameters(Arc::clone(&metrics), 1.0, vec![descriptor]);
     let mut runtime = activate_runtime(&component, Some(1), 8);
-    let raw_events = [chassis_core::automation::ParameterEvent::set(
+    let raw_events = [chassis_runtime::automation::ParameterEvent::set(
         0,
         ParameterIndex::new(99),
         ParameterEventValue::Float(0.5),
@@ -348,8 +350,8 @@ fn invalid_parameter_schema_never_reaches_product_activation() {
     assert!(matches!(
         result,
         Err(InstanceRuntimeError::InvalidParameters(
-            chassis_core::parameters::ParameterStoreError::InvalidDefinition(
-                chassis_core::parameters::ParameterDefinitionError::DuplicateParameter(_)
+            chassis_runtime::parameters::ParameterStoreError::InvalidDefinition(
+                chassis_runtime::parameters::ParameterDefinitionError::DuplicateParameter(_)
             )
         ))
     ));

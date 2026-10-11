@@ -12,8 +12,8 @@ use std::{
     },
 };
 
-use chassis_clap::{ClapStereoEffect, SingleComponentEntryWithF64};
-use chassis_core::{
+use chassis_clap::{ClapComponent, F32AndF64, SingleComponentEntry};
+use chassis_runtime::{
     audio::{AudioPortIndex, MAIN_INPUT, MAIN_OUTPUT},
     parameters::{ParameterDescriptor, ParameterValue},
     process::{ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessChannel},
@@ -100,12 +100,14 @@ impl Component for ProbeComponent {
 
     fn schema(
         &self,
-    ) -> Result<chassis_core::schema::ComponentSchema, chassis_core::schema::ComponentSchemaError>
-    {
-        chassis_core::schema::ComponentSchema::stereo_effect_with_state(
-            chassis_core::schema::ComponentId::new("org.nijaru.chassis.semantic.crates.chassis-clap.tests.host-conformance.probecomponent")
+    ) -> Result<
+        chassis_runtime::schema::ComponentSchema,
+        chassis_runtime::schema::ComponentSchemaError,
+    > {
+        chassis_runtime::schema::ComponentSchema::stereo_effect_with_state(
+            chassis_runtime::schema::ComponentId::new("org.nijaru.chassis.semantic.crates.chassis-clap.tests.host-conformance.probecomponent")
                 .expect("semantic component identity is valid"),
-            chassis_core::schema::StateSchemaVersion::new(1),
+            chassis_runtime::schema::StateSchemaVersion::new(1),
             self.parameters.clone(),
         )
     }
@@ -220,9 +222,10 @@ impl Process<f64> for ProbeProcessor {
     }
 }
 
-impl ClapStereoEffect for ProbeComponent {
+impl ClapComponent for ProbeComponent {
     const CLAP_ID: &'static str = "org.nijaru.chassis.host-probe";
     const CLAP_NAME: &'static str = "Chassis Host Probe";
+    const CLAP_FEATURES: &'static [&'static std::ffi::CStr] = &[c"audio-effect", c"stereo"];
     const CLAP_PARAMETER_IDS: &'static [(&'static str, u32)] = &[("trim", TRIM_CLAP_ID)];
     const CLAP_MAX_PARAMETER_EVENTS: u32 = MAX_PARAMETER_EVENTS;
 }
@@ -423,8 +426,9 @@ fn measure_f64_adapter_path(
 
 #[test]
 fn full_adapter_process_path_is_allocation_free_at_event_bound_for_f32_and_f64() {
-    let entry = PluginEntry::load_from_clack::<SingleComponentEntryWithF64<ProbeComponent>>(c"")
-        .expect("static probe entry loads");
+    let entry =
+        PluginEntry::load_from_clack::<SingleComponentEntry<ProbeComponent, F32AndF64>>(c"")
+            .expect("static probe entry loads");
     let descriptor = entry
         .get_factory::<PluginFactory>()
         .expect("plugin factory exists")
@@ -468,8 +472,9 @@ fn full_adapter_process_path_is_allocation_free_at_event_bound_for_f32_and_f64()
 
 #[test]
 fn latency_reactivation_and_audio_thread_transfer_follow_clap_lifecycle() {
-    let entry = PluginEntry::load_from_clack::<SingleComponentEntryWithF64<ProbeComponent>>(c"")
-        .expect("static probe entry loads");
+    let entry =
+        PluginEntry::load_from_clack::<SingleComponentEntry<ProbeComponent, F32AndF64>>(c"")
+            .expect("static probe entry loads");
     let descriptor = entry
         .get_factory::<PluginFactory>()
         .expect("plugin factory exists")
@@ -540,8 +545,9 @@ fn latency_reactivation_and_audio_thread_transfer_follow_clap_lifecycle() {
 
 #[test]
 fn repeated_instances_can_be_created_and_destroyed_without_activation() {
-    let entry = PluginEntry::load_from_clack::<SingleComponentEntryWithF64<ProbeComponent>>(c"")
-        .expect("static probe entry loads");
+    let entry =
+        PluginEntry::load_from_clack::<SingleComponentEntry<ProbeComponent, F32AndF64>>(c"")
+            .expect("static probe entry loads");
     let descriptor = entry
         .get_factory::<PluginFactory>()
         .expect("plugin factory exists")

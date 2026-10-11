@@ -2,7 +2,7 @@
 
 use std::{convert::Infallible, num::NonZeroU32};
 
-use chassis_core::{
+use chassis_runtime::{
     audio::AudioIoConfiguration,
     automation::ParameterEvents,
     buffer::ChannelBuffer,
@@ -50,11 +50,13 @@ impl Component for EventComponent {
 
     fn schema(
         &self,
-    ) -> Result<chassis_core::schema::ComponentSchema, chassis_core::schema::ComponentSchemaError>
-    {
-        chassis_core::schema::ComponentSchema::unidentified(
+    ) -> Result<
+        chassis_runtime::schema::ComponentSchema,
+        chassis_runtime::schema::ComponentSchemaError,
+    > {
+        chassis_runtime::schema::ComponentSchema::unidentified(
             vec![],
-            chassis_core::audio::AudioIoPolicy::any_structurally_valid(),
+            chassis_runtime::audio::AudioIoPolicy::any_structurally_valid(),
             self.ports.to_vec(),
             vec![],
         )

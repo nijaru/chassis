@@ -1,6 +1,6 @@
 //! In-process proof of bounded restart requests and durable parameter publication.
 
-use chassis_core::parameters::{ParameterDescriptor, ParameterStore, ParameterValue};
+use chassis_runtime::parameters::{ParameterDescriptor, ParameterStore, ParameterValue};
 use clack_host::events::event_types::ParamValueEvent;
 use std::{
     convert::Infallible,
@@ -10,8 +10,8 @@ use std::{
     },
 };
 
-use chassis_clap::{ClapStereoEffect, SingleComponentEntry};
-use chassis_core::{
+use chassis_clap::{ClapComponent, SingleComponentEntry};
+use chassis_runtime::{
     audio::{AudioPortIndex, MAIN_INPUT, MAIN_OUTPUT},
     process::{ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessChannel},
     runtime::{Component, LatencySamples, Process, Processor},
@@ -36,14 +36,16 @@ impl Component for DelayedProbe {
 
     fn schema(
         &self,
-    ) -> Result<chassis_core::schema::ComponentSchema, chassis_core::schema::ComponentSchemaError>
-    {
-        chassis_core::schema::ComponentSchema::stereo_effect_with_state(
-            chassis_core::schema::ComponentId::new(
+    ) -> Result<
+        chassis_runtime::schema::ComponentSchema,
+        chassis_runtime::schema::ComponentSchemaError,
+    > {
+        chassis_runtime::schema::ComponentSchema::stereo_effect_with_state(
+            chassis_runtime::schema::ComponentId::new(
                 "org.nijaru.chassis.semantic.crates.chassis-clap.tests.host-restart.delayedprobe",
             )
             .expect("semantic component identity is valid"),
-            chassis_core::schema::StateSchemaVersion::new(1),
+            chassis_runtime::schema::StateSchemaVersion::new(1),
             self.parameters.clone(),
         )
     }
@@ -145,11 +147,12 @@ impl Process<f32> for DelayedProcessor {
     }
 }
 
-impl ClapStereoEffect for DelayedProbe {
+impl ClapComponent for DelayedProbe {
     const CLAP_MAX_PARAMETER_EVENTS: u32 = 1;
     const CLAP_PARAMETER_IDS: &'static [(&'static str, u32)] = &[("phase", 17)];
     const CLAP_ID: &'static str = "org.nijaru.chassis.delayed-probe";
     const CLAP_NAME: &'static str = "Chassis Delayed Probe";
+    const CLAP_FEATURES: &'static [&'static std::ffi::CStr] = &[c"audio-effect", c"stereo"];
 }
 
 struct TestHostShared(Arc<AtomicUsize>);
@@ -328,7 +331,7 @@ fn restart_is_bounded_and_reactivation_uses_published_parameters() {
 
 #[test]
 fn state_load_requests_restart_before_processing_and_reactivation_uses_loaded_state() {
-    use chassis_core::state::{StateDocument, StateEntry, StateValue};
+    use chassis_runtime::state::{StateDocument, StateEntry, StateValue};
     use clack_extensions::state::PluginState;
     let entry = PluginEntry::load_from_clack::<SingleComponentEntry<DelayedProbe>>(c"").unwrap();
     let host_info = HostInfo::new("chassis-test", "", "", "").unwrap();

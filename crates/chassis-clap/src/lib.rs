@@ -21,7 +21,7 @@ use std::{
 };
 
 use audio::{AudioMappingError, ClapAudioConfiguration, ClapProcessSlot};
-use chassis_core::{
+use chassis_runtime::{
     audio::PortDirection,
     automation::ParameterEvents,
     parameters::{ChoiceOption, ParameterKind},
@@ -46,7 +46,6 @@ use clack_plugin::{
         event_types::{TransportEvent, TransportFlags},
         io::{InputEvents, OutputEvents},
     },
-    plugin::features::{AUDIO_EFFECT, STEREO},
     prelude::{
         Audio, ClapId, Events, HostAudioProcessorHandle, HostMainThreadHandle, HostSharedHandle,
         Plugin, PluginAudioConfiguration, PluginAudioProcessor, PluginDescriptor, PluginError,
@@ -66,18 +65,24 @@ pub use audio::{ClapAudioPort, DEFAULT_CLAP_AUDIO_PORTS};
 /// Re-export of Clack's CLAP entry macro for Chassis export crates.
 pub use clack_plugin::clack_export_entry;
 
-/// Temporary CLAP metadata contract for the conventional effect export.
+/// CLAP deployment metadata for a Chassis component.
+///
+/// The current projection supports mapped audio and scalar parameter state;
+/// event ports are rejected until their CLAP projection is implemented.
 ///
 /// Parameter and audio-port IDs are explicit because stable Chassis keys cannot
 /// be silently hashed or assigned from declaration order without creating a
 /// persistence compatibility hazard. Audio layouts and in-place relationships
 /// are validated at setup and projected into an allocation-free process plan.
-pub trait ClapStereoEffect: Component + Default + 'static {
+pub trait ClapComponent: Component + Default + 'static {
     /// Stable reverse-domain CLAP plugin identifier.
     const CLAP_ID: &'static str;
 
     /// Human-readable CLAP plugin name.
     const CLAP_NAME: &'static str;
+
+    /// CLAP feature strings describing this export, without inferred product roles.
+    const CLAP_FEATURES: &'static [&'static std::ffi::CStr];
 
     /// Stable CLAP audio-port IDs and layouts keyed by canonical Chassis port key.
     ///
@@ -116,14 +121,13 @@ pub struct F32Only;
 /// Precision capability marker for a CLAP export that accepts f32 and f64 audio.
 pub struct F32AndF64;
 
-/// Clack plugin marker that exports one [`ClapStereoEffect`] through Chassis.
+/// Clack plugin marker that exports one [`ClapComponent`] through Chassis.
 pub struct ChassisPlugin<C, M = F32Only>(PhantomData<fn() -> (C, M)>);
 
-/// Single-plugin CLAP entry type for an f32-only Chassis stereo effect.
-pub type SingleComponentEntry<C> = SinglePluginEntry<ChassisPlugin<C, F32Only>>;
-
-/// Single-plugin CLAP entry type for a Chassis stereo effect with f64 support.
-pub type SingleComponentEntryWithF64<C> = SinglePluginEntry<ChassisPlugin<C, F32AndF64>>;
+/// Single-plugin CLAP entry with an explicit audio precision capability.
+///
+/// Defaults to [`F32Only`]; use [`F32AndF64`] for a dual-precision export.
+pub type SingleComponentEntry<C, M = F32Only> = SinglePluginEntry<ChassisPlugin<C, M>>;
 
 #[derive(Default)]
 struct RenderState {
@@ -178,7 +182,7 @@ where
     host: HostAudioProcessorHandle<'a>,
     restart_sent: bool,
     shared: &'a ChassisShared,
-    normalized_events: Vec<chassis_core::automation::ParameterEvent<'a>>,
+    normalized_events: Vec<chassis_runtime::automation::ParameterEvent<'a>>,
     control_values: Vec<f64>,
     process_slots: Vec<ClapProcessSlot>,
     _precision: PhantomData<fn() -> M>,
@@ -186,7 +190,7 @@ where
 
 impl<C> Plugin for ChassisPlugin<C, F32Only>
 where
-    C: ClapStereoEffect,
+    C: ClapComponent,
     C::Processor: ChassisProcess<f32> + Send + 'static,
 {
     type AudioProcessor<'a> = ChassisAudioProcessor<'a, C::Processor, F32Only>;
@@ -206,11 +210,12 @@ where
 
 impl<C> DefaultPluginFactory for ChassisPlugin<C>
 where
-    C: ClapStereoEffect,
+    C: ClapComponent,
     C::Processor: ChassisProcess<f32> + Send + 'static,
 {
     fn get_descriptor() -> PluginDescriptor {
-        PluginDescriptor::new(C::CLAP_ID, C::CLAP_NAME).with_features([AUDIO_EFFECT, STEREO])
+        PluginDescriptor::new(C::CLAP_ID, C::CLAP_NAME)
+            .with_features(C::CLAP_FEATURES.iter().copied())
     }
 
     fn new_shared(_host: HostSharedHandle) -> Result<ChassisShared, PluginError> {
@@ -227,7 +232,7 @@ where
 
 impl<C> Plugin for ChassisPlugin<C, F32AndF64>
 where
-    C: ClapStereoEffect,
+    C: ClapComponent,
     C::Processor: ChassisProcess<f32> + ChassisProcess<f64> + Send + 'static,
 {
     type AudioProcessor<'a> = ChassisAudioProcessor<'a, C::Processor, F32AndF64>;
@@ -247,11 +252,12 @@ where
 
 impl<C> DefaultPluginFactory for ChassisPlugin<C, F32AndF64>
 where
-    C: ClapStereoEffect,
+    C: ClapComponent,
     C::Processor: ChassisProcess<f32> + ChassisProcess<f64> + Send + 'static,
 {
     fn get_descriptor() -> PluginDescriptor {
-        PluginDescriptor::new(C::CLAP_ID, C::CLAP_NAME).with_features([AUDIO_EFFECT, STEREO])
+        PluginDescriptor::new(C::CLAP_ID, C::CLAP_NAME)
+            .with_features(C::CLAP_FEATURES.iter().copied())
     }
 
     fn new_shared(_host: HostSharedHandle) -> Result<ChassisShared, PluginError> {
@@ -268,7 +274,7 @@ where
 
 fn new_shared<C>() -> Result<ChassisShared, PluginError>
 where
-    C: ClapStereoEffect,
+    C: ClapComponent,
 {
     let component = C::default();
     let schema = component
@@ -277,6 +283,11 @@ where
     if schema.state_identity().is_none() {
         return Err(PluginError::Message(
             "CLAP state projection requires semantic component state identity",
+        ));
+    }
+    if !schema.event_ports().is_empty() {
+        return Err(PluginError::Message(
+            "CLAP event-port projection is not implemented",
         ));
     }
     if !schema.parameters().is_empty() && C::CLAP_MAX_PARAMETER_EVENTS == 0 {
@@ -305,7 +316,7 @@ fn new_main_thread<'a, C>(
     host: HostMainThreadHandle<'a>,
 ) -> Result<ChassisMainThread<'a, C>, PluginError>
 where
-    C: ClapStereoEffect,
+    C: ClapComponent,
 {
     let component = C::default();
     let schema = component
@@ -338,7 +349,7 @@ where
 }
 
 impl<'host, C> PluginMainThread<'host, ChassisShared> for ChassisMainThread<'host, C> where
-    C: ClapStereoEffect
+    C: ClapComponent
 {
 }
 
@@ -349,7 +360,7 @@ fn activate_processor<'a, C, P, M>(
     audio_config: PluginAudioConfiguration,
 ) -> Result<ChassisAudioProcessor<'a, P, M>, PluginError>
 where
-    C: ClapStereoEffect<Processor = P>,
+    C: ClapComponent<Processor = P>,
     P: Processor,
 {
     let process = map_process_config(audio_config, C::CLAP_MAX_PARAMETER_EVENTS)?;
@@ -413,7 +424,7 @@ where
 
 impl<C> PluginAudioPortsImpl for ChassisMainThread<'_, C>
 where
-    C: ClapStereoEffect,
+    C: ClapComponent,
 {
     fn count(&self, is_input: bool) -> u32 {
         self.audio.count(if is_input {
@@ -437,7 +448,7 @@ where
 
 impl<C> PluginLatencyImpl for ChassisMainThread<'_, C>
 where
-    C: ClapStereoEffect,
+    C: ClapComponent,
 {
     fn get(&self) -> u32 {
         self.latency.load(Ordering::Acquire)
@@ -446,7 +457,7 @@ where
 
 impl<C> PluginMainThreadParams for ChassisMainThread<'_, C>
 where
-    C: ClapStereoEffect,
+    C: ClapComponent,
 {
     fn count(&self) -> u32 {
         u32::try_from(self.shared.bindings().len()).unwrap_or(u32::MAX)
@@ -541,7 +552,7 @@ where
 
 impl<C> PluginRenderImpl for ChassisMainThread<'_, C>
 where
-    C: ClapStereoEffect,
+    C: ClapComponent,
 {
     fn has_hard_realtime_requirement(&self) -> bool {
         false
@@ -555,7 +566,7 @@ where
 
 impl<C> PluginStateImpl for ChassisMainThread<'_, C>
 where
-    C: ClapStereoEffect,
+    C: ClapComponent,
 {
     fn save(&self, output: &mut OutputStream) -> Result<(), PluginError> {
         let identity = self
@@ -598,7 +609,7 @@ where
 impl<'a, C, P> PluginAudioProcessor<'a, ChassisShared, ChassisMainThread<'a, C>>
     for ChassisAudioProcessor<'a, P, F32Only>
 where
-    C: ClapStereoEffect<Processor = P>,
+    C: ClapComponent<Processor = P>,
     P: ChassisProcess<f32> + Processor + Send + 'static,
 {
     fn activate(
@@ -631,7 +642,7 @@ where
 impl<'a, C, P> PluginAudioProcessor<'a, ChassisShared, ChassisMainThread<'a, C>>
     for ChassisAudioProcessor<'a, P, F32AndF64>
 where
-    C: ClapStereoEffect<Processor = P>,
+    C: ClapComponent<Processor = P>,
     P: ChassisProcess<f32> + ChassisProcess<f64> + Processor + Send + 'static,
 {
     fn activate(

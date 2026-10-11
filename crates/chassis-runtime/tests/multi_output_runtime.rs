@@ -5,7 +5,7 @@
 
 use std::{convert::Infallible, num::NonZeroU32};
 
-use chassis_core::{
+use chassis_runtime::{
     audio::{
         AudioIoConfiguration, AudioIoConfigurationSpec, AudioIoPolicy, AudioPortDescriptor,
         AudioPortIndex, ChannelLayout, ConfiguredAudioPort, PortDirection, PortKey, PortRole,
@@ -53,7 +53,7 @@ impl Component for MultiOutput {
     type Processor = MultiOutputProcessor;
     type ActivationError = Infallible;
 
-    fn schema(&self) -> Result<ComponentSchema, chassis_core::schema::ComponentSchemaError> {
+    fn schema(&self) -> Result<ComponentSchema, chassis_runtime::schema::ComponentSchemaError> {
         ComponentSchema::unidentified(AUDIO_PORTS.to_vec(), audio_policy(), vec![], vec![])
     }
 

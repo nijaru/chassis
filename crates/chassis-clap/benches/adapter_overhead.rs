@@ -9,8 +9,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-use chassis_clap::{ClapStereoEffect, SingleComponentEntryWithF64};
-use chassis_core::{
+use chassis_clap::{ClapComponent, F32AndF64, SingleComponentEntry};
+use chassis_runtime::{
     parameters::ParameterDescriptor,
     process::{ActivationConfig, ProcessBlock, ProcessBufferSource},
     runtime::{Component, Process, Processor},
@@ -48,12 +48,14 @@ impl Component for BenchComponent {
 
     fn schema(
         &self,
-    ) -> Result<chassis_core::schema::ComponentSchema, chassis_core::schema::ComponentSchemaError>
-    {
-        chassis_core::schema::ComponentSchema::stereo_effect_with_state(
-            chassis_core::schema::ComponentId::new("org.nijaru.chassis.semantic.crates.chassis-clap.benches.adapter-overhead.benchcomponent")
+    ) -> Result<
+        chassis_runtime::schema::ComponentSchema,
+        chassis_runtime::schema::ComponentSchemaError,
+    > {
+        chassis_runtime::schema::ComponentSchema::stereo_effect_with_state(
+            chassis_runtime::schema::ComponentId::new("org.nijaru.chassis.semantic.crates.chassis-clap.benches.adapter-overhead.benchcomponent")
                 .expect("semantic component identity is valid"),
-            chassis_core::schema::StateSchemaVersion::new(1),
+            chassis_runtime::schema::StateSchemaVersion::new(1),
             self.parameters.clone(),
         )
     }
@@ -86,9 +88,10 @@ impl Process<f64> for BenchProcessor {
     }
 }
 
-impl ClapStereoEffect for BenchComponent {
+impl ClapComponent for BenchComponent {
     const CLAP_ID: &'static str = "org.nijaru.chassis.adapter-bench";
     const CLAP_NAME: &'static str = "Chassis Adapter Benchmark";
+    const CLAP_FEATURES: &'static [&'static std::ffi::CStr] = &[c"audio-effect", c"stereo"];
     const CLAP_PARAMETER_IDS: &'static [(&'static str, u32)] = &[("value", PARAMETER_ID)];
     const CLAP_MAX_PARAMETER_EVENTS: u32 = MAX_EVENTS;
 }
@@ -270,8 +273,9 @@ fn bench_f64(
 }
 
 fn main() {
-    let entry = PluginEntry::load_from_clack::<SingleComponentEntryWithF64<BenchComponent>>(c"")
-        .expect("static benchmark entry loads");
+    let entry =
+        PluginEntry::load_from_clack::<SingleComponentEntry<BenchComponent, F32AndF64>>(c"")
+            .expect("static benchmark entry loads");
     let descriptor = entry
         .get_factory::<PluginFactory>()
         .expect("plugin factory exists")

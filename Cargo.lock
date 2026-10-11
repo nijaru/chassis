@@ -37,7 +37,7 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 name = "chassis-clap"
 version = "0.0.0"
 dependencies = [
- "chassis-core",
+ "chassis-runtime",
  "clack-extensions",
  "clack-host",
  "clack-plugin",
@@ -49,7 +49,7 @@ name = "chassis-clap-conformance"
 version = "0.0.0"
 dependencies = [
  "chassis-clap",
- "chassis-core",
+ "chassis-runtime",
 ]
 
 [[package]]
@@ -57,11 +57,11 @@ name = "chassis-clap-delayed-probe"
 version = "0.0.0"
 dependencies = [
  "chassis-clap",
- "chassis-core",
+ "chassis-runtime",
 ]
 
 [[package]]
-name = "chassis-core"
+name = "chassis-runtime"
 version = "0.0.0"
 
 [[package]]

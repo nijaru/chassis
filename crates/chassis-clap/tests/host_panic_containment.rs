@@ -5,8 +5,8 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
-use chassis_clap::{ClapStereoEffect, SingleComponentEntry};
-use chassis_core::{
+use chassis_clap::{ClapComponent, SingleComponentEntry};
+use chassis_runtime::{
     process::{ActivationConfig, ProcessBlock, ProcessBufferSource},
     runtime::{Component, Process, Processor},
 };
@@ -54,12 +54,14 @@ impl Component for ActivationPanicProbe {
 
     fn schema(
         &self,
-    ) -> Result<chassis_core::schema::ComponentSchema, chassis_core::schema::ComponentSchemaError>
-    {
-        chassis_core::schema::ComponentSchema::stereo_effect_with_state(
-            chassis_core::schema::ComponentId::new("org.nijaru.chassis.semantic.crates.chassis-clap.tests.host-panic-containment.activationpanicprobe")
+    ) -> Result<
+        chassis_runtime::schema::ComponentSchema,
+        chassis_runtime::schema::ComponentSchemaError,
+    > {
+        chassis_runtime::schema::ComponentSchema::stereo_effect_with_state(
+            chassis_runtime::schema::ComponentId::new("org.nijaru.chassis.semantic.crates.chassis-clap.tests.host-panic-containment.activationpanicprobe")
                 .expect("semantic component identity is valid"),
-            chassis_core::schema::StateSchemaVersion::new(1),
+            chassis_runtime::schema::StateSchemaVersion::new(1),
             vec![],
         )
     }
@@ -76,9 +78,10 @@ impl Component for ActivationPanicProbe {
     }
 }
 
-impl ClapStereoEffect for ActivationPanicProbe {
+impl ClapComponent for ActivationPanicProbe {
     const CLAP_ID: &'static str = "org.nijaru.chassis.activation-panic-probe";
     const CLAP_NAME: &'static str = "Chassis Activation Panic Probe";
+    const CLAP_FEATURES: &'static [&'static std::ffi::CStr] = &[c"audio-effect", c"stereo"];
 }
 
 struct NoopProcessor;
@@ -138,12 +141,14 @@ impl Component for ProcessPanicProbe {
 
     fn schema(
         &self,
-    ) -> Result<chassis_core::schema::ComponentSchema, chassis_core::schema::ComponentSchemaError>
-    {
-        chassis_core::schema::ComponentSchema::stereo_effect_with_state(
-            chassis_core::schema::ComponentId::new("org.nijaru.chassis.semantic.crates.chassis-clap.tests.host-panic-containment.processpanicprobe")
+    ) -> Result<
+        chassis_runtime::schema::ComponentSchema,
+        chassis_runtime::schema::ComponentSchemaError,
+    > {
+        chassis_runtime::schema::ComponentSchema::stereo_effect_with_state(
+            chassis_runtime::schema::ComponentId::new("org.nijaru.chassis.semantic.crates.chassis-clap.tests.host-panic-containment.processpanicprobe")
                 .expect("semantic component identity is valid"),
-            chassis_core::schema::StateSchemaVersion::new(1),
+            chassis_runtime::schema::StateSchemaVersion::new(1),
             vec![],
         )
     }
@@ -156,9 +161,10 @@ impl Component for ProcessPanicProbe {
     }
 }
 
-impl ClapStereoEffect for ProcessPanicProbe {
+impl ClapComponent for ProcessPanicProbe {
     const CLAP_ID: &'static str = "org.nijaru.chassis.process-panic-probe";
     const CLAP_NAME: &'static str = "Chassis Process Panic Probe";
+    const CLAP_FEATURES: &'static [&'static std::ffi::CStr] = &[c"audio-effect", c"stereo"];
 }
 
 struct ProcessPanicProcessor;

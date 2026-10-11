@@ -666,7 +666,6 @@ where
     }
 
     /// Start an allocation-free traversal over all safe channel views.
-    #[must_use]
     pub fn channels(&mut self) -> B::Channels<'_> {
         self.source.channels()
     }

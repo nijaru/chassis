@@ -31,7 +31,7 @@ allow = [
 exceptions = [
     # Chassis workspace crates are AGPL; add each new workspace package here
     # explicitly rather than allowing third-party AGPL dependencies globally.
-    { allow = ["AGPL-3.0-or-later"], crate = "chassis-core" },
+    { allow = ["AGPL-3.0-or-later"], crate = "chassis-runtime" },
     { allow = ["AGPL-3.0-or-later"], crate = "chassis-clap" },
     { allow = ["AGPL-3.0-or-later"], crate = "chassis-clap-conformance" },
     { allow = ["AGPL-3.0-or-later"], crate = "chassis-clap-delayed-probe" },

@@ -5,7 +5,7 @@
 
 use std::{convert::Infallible, num::NonZeroU32};
 
-use chassis_core::{
+use chassis_runtime::{
     audio::{
         AudioIoConfiguration, AudioIoConfigurationSpec, AudioIoPolicy, AudioPortDescriptor,
         AudioPortIndex, ChannelLayout, ConfiguredAudioPort, PortDirection, PortKey, PortRole,
@@ -54,7 +54,7 @@ impl Component for HostedComponent {
     type Processor = HostedProcessor;
     type ActivationError = Infallible;
 
-    fn schema(&self) -> Result<ComponentSchema, chassis_core::schema::ComponentSchemaError> {
+    fn schema(&self) -> Result<ComponentSchema, chassis_runtime::schema::ComponentSchemaError> {
         let audio_key = self.audio_key();
         let audio_ports = vec![AudioPortDescriptor::owned(
             self.audio_key.clone(),
@@ -183,7 +183,7 @@ fn runtime_owned_metadata_resolves_to_dense_process_identities() {
                 note_port,
                 None,
                 None,
-                Some(chassis_core::events::NoteKey::new(64).expect("test note is valid")),
+                Some(chassis_runtime::events::NoteKey::new(64).expect("test note is valid")),
             ),
             velocity: velocity(0.8),
         },

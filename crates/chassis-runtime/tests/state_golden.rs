@@ -1,6 +1,6 @@
-//! Golden compatibility fixtures for released Chassis state envelopes.
+//! Byte-regression fixture for the provisional CHSS v1 envelope.
 
-use chassis_core::state::{StateDocument, StateValue};
+use chassis_runtime::state::{StateDocument, StateValue};
 
 const STATE_V1: &[u8] = include_bytes!("fixtures/state-v1.chss");
 

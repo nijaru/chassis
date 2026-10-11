@@ -1,6 +1,6 @@
 [workspace]
 members = [
-    "crates/chassis-core",
+    "crates/chassis-runtime",
     "crates/chassis-clap",
     "examples/clap-conformance",
     "examples/clap-delayed-probe",
@@ -13,7 +13,7 @@ license = "AGPL-3.0-or-later"
 repository = "https://github.com/nijaru/chassis"
 
 [workspace.dependencies]
-chassis-core = { path = "crates/chassis-core", version = "0.0.0" }
+chassis-runtime = { path = "crates/chassis-runtime", version = "0.0.0" }
 chassis-clap = { path = "crates/chassis-clap", version = "0.0.0" }
 clack-plugin = { version = "0.2.0", git = "https://github.com/prokopyl/clack", rev = "c5975f9f89f0953b00768680357985d46178078a" }
 clack-host = { version = "0.2.0", git = "https://github.com/prokopyl/clack", rev = "c5975f9f89f0953b00768680357985d46178078a", default-features = false, features = ["clack-plugin"] }

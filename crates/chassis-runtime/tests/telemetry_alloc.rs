@@ -8,7 +8,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use chassis_core::telemetry::F32Telemetry;
+use chassis_runtime::telemetry::F32Telemetry;
 
 struct CountingAllocator;
 

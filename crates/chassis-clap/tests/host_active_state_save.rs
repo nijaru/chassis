@@ -5,8 +5,8 @@ use std::{
     sync::{Arc, Barrier, OnceLock},
 };
 
-use chassis_clap::{ClapStereoEffect, SingleComponentEntry};
-use chassis_core::{
+use chassis_clap::{ClapComponent, SingleComponentEntry};
+use chassis_runtime::{
     parameters::ParameterDescriptor,
     process::{ActivationConfig, ProcessBlock, ProcessBufferSource},
     runtime::{Component, Process, Processor},
@@ -50,12 +50,14 @@ impl Component for StateProbe {
 
     fn schema(
         &self,
-    ) -> Result<chassis_core::schema::ComponentSchema, chassis_core::schema::ComponentSchemaError>
-    {
-        chassis_core::schema::ComponentSchema::stereo_effect_with_state(
-            chassis_core::schema::ComponentId::new("org.nijaru.chassis.semantic.crates.chassis-clap.tests.host-active-state-save.stateprobe")
+    ) -> Result<
+        chassis_runtime::schema::ComponentSchema,
+        chassis_runtime::schema::ComponentSchemaError,
+    > {
+        chassis_runtime::schema::ComponentSchema::stereo_effect_with_state(
+            chassis_runtime::schema::ComponentId::new("org.nijaru.chassis.semantic.crates.chassis-clap.tests.host-active-state-save.stateprobe")
                 .expect("semantic component identity is valid"),
-            chassis_core::schema::StateSchemaVersion::new(1),
+            chassis_runtime::schema::StateSchemaVersion::new(1),
             self.parameters.clone(),
         )
     }
@@ -89,9 +91,10 @@ impl Process<f32> for StateProcessor {
     }
 }
 
-impl ClapStereoEffect for StateProbe {
+impl ClapComponent for StateProbe {
     const CLAP_ID: &'static str = "org.nijaru.chassis.active-state-probe";
     const CLAP_NAME: &'static str = "Chassis Active State Probe";
+    const CLAP_FEATURES: &'static [&'static std::ffi::CStr] = &[c"audio-effect", c"stereo"];
     const CLAP_PARAMETER_IDS: &'static [(&'static str, u32)] =
         &[("first", FIRST_CLAP_ID), ("second", SECOND_CLAP_ID)];
     const CLAP_MAX_PARAMETER_EVENTS: u32 = 2;

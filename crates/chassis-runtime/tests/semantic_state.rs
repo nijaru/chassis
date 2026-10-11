@@ -10,7 +10,7 @@ use std::{
     },
 };
 
-use chassis_core::{
+use chassis_runtime::{
     audio::{DEFAULT_EFFECT_CONFIGURATION, DEFAULT_EFFECT_PORTS},
     parameters::{ParameterDescriptor, ParameterStore, ParameterValue},
     process::{ActivationConfig, ProcessConfig},
@@ -47,12 +47,12 @@ impl Component for StateAwareEffect {
     type Processor = StateProcessor;
     type ActivationError = Infallible;
 
-    fn schema(&self) -> Result<ComponentSchema, chassis_core::schema::ComponentSchemaError> {
+    fn schema(&self) -> Result<ComponentSchema, chassis_runtime::schema::ComponentSchemaError> {
         ComponentSchema::new(
             ComponentId::new("com.example.semantic").expect("component identity is valid"),
             StateSchemaVersion::new(2),
             DEFAULT_EFFECT_PORTS.to_vec(),
-            chassis_core::audio::AudioIoPolicy::stereo_effect(),
+            chassis_runtime::audio::AudioIoPolicy::stereo_effect(),
             vec![],
             self.parameters.clone(),
         )

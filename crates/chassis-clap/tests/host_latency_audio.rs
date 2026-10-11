@@ -2,8 +2,8 @@
 
 use std::convert::Infallible;
 
-use chassis_clap::{ClapStereoEffect, SingleComponentEntry};
-use chassis_core::{
+use chassis_clap::{ClapComponent, SingleComponentEntry};
+use chassis_runtime::{
     audio::{AudioPortIndex, MAIN_INPUT, MAIN_OUTPUT},
     process::{ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessChannel},
     runtime::{Component, LatencySamples, Process, Processor},
@@ -20,12 +20,14 @@ impl Component for DelayedProbe {
 
     fn schema(
         &self,
-    ) -> Result<chassis_core::schema::ComponentSchema, chassis_core::schema::ComponentSchemaError>
-    {
-        chassis_core::schema::ComponentSchema::stereo_effect_with_state(
-            chassis_core::schema::ComponentId::new("org.nijaru.chassis.semantic.crates.chassis-clap.tests.host-latency-audio.delayedprobe")
+    ) -> Result<
+        chassis_runtime::schema::ComponentSchema,
+        chassis_runtime::schema::ComponentSchemaError,
+    > {
+        chassis_runtime::schema::ComponentSchema::stereo_effect_with_state(
+            chassis_runtime::schema::ComponentId::new("org.nijaru.chassis.semantic.crates.chassis-clap.tests.host-latency-audio.delayedprobe")
                 .expect("semantic component identity is valid"),
-            chassis_core::schema::StateSchemaVersion::new(1),
+            chassis_runtime::schema::StateSchemaVersion::new(1),
             vec![],
         )
     }
@@ -109,9 +111,10 @@ impl Process<f32> for DelayedProcessor {
     }
 }
 
-impl ClapStereoEffect for DelayedProbe {
+impl ClapComponent for DelayedProbe {
     const CLAP_ID: &'static str = "org.nijaru.chassis.delayed-probe";
     const CLAP_NAME: &'static str = "Chassis Delayed Probe";
+    const CLAP_FEATURES: &'static [&'static std::ffi::CStr] = &[c"audio-effect", c"stereo"];
 }
 
 struct TestHostShared;

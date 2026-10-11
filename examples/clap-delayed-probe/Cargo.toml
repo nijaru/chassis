@@ -11,7 +11,7 @@ description = "Nonzero-latency exported CLAP probe used to qualify host PDC alig
 crate-type = ["rlib", "cdylib"]
 
 [dependencies]
-chassis-core.workspace = true
+chassis-runtime.workspace = true
 chassis-clap.workspace = true
 
 [lints]

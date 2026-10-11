@@ -6,7 +6,7 @@
 
 use std::{convert::Infallible, num::NonZeroU32};
 
-use chassis_core::{
+use chassis_runtime::{
     audio::{
         AudioIoConfiguration, AudioIoConfigurationSpec, AudioIoPolicy, AudioPortDescriptor,
         ChannelLayout, ConfiguredAudioPort, PortDirection, PortKey, PortRole,
@@ -56,7 +56,7 @@ impl Component for Instrument {
     type Processor = InstrumentProcessor;
     type ActivationError = Infallible;
 
-    fn schema(&self) -> Result<ComponentSchema, chassis_core::schema::ComponentSchemaError> {
+    fn schema(&self) -> Result<ComponentSchema, chassis_runtime::schema::ComponentSchemaError> {
         ComponentSchema::unidentified(
             AUDIO_PORTS.to_vec(),
             instrument_audio_policy(),
@@ -84,7 +84,7 @@ impl Component for Instrument {
 }
 
 struct InstrumentProcessor {
-    output: chassis_core::audio::AudioPortIndex,
+    output: chassis_runtime::audio::AudioPortIndex,
     notes: EventPortIndex,
     gate: bool,
 }
@@ -154,7 +154,7 @@ fn note_address(port: EventPortIndex, key: u8) -> NoteAddress {
         port,
         None,
         None,
-        Some(chassis_core::events::NoteKey::new(key).expect("test key is valid")),
+        Some(chassis_runtime::events::NoteKey::new(key).expect("test key is valid")),
     )
 }
 

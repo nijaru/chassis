@@ -1,6 +1,6 @@
 use std::{fmt, string::String, vec::Vec};
 
-use chassis_core::{
+use chassis_runtime::{
     automation::{ParameterEvent, ParameterEventChange, ParameterEventValue},
     parameters::{
         ChoiceId, ChoiceOption, ParameterDescriptor, ParameterIndex, ParameterKind, ParameterValue,
@@ -210,8 +210,14 @@ impl ClapParameterBinding {
             (ParameterKind::Float { .. }, StateValue::Float(value)) if value.is_finite() => {
                 Some(*value)
             }
-            (ParameterKind::Integer { .. }, StateValue::Signed(value)) => {
-                Some(integer_to_plain(*value))
+            (
+                ParameterKind::Integer {
+                    minimum, maximum, ..
+                },
+                StateValue::Signed(value),
+            ) if (*minimum..=*maximum).contains(value) => {
+                let plain = integer_to_plain(*value);
+                (integer_from_plain(plain) == Some(*value)).then_some(plain)
             }
             (ParameterKind::Boolean { .. }, StateValue::Boolean(value)) => {
                 Some(f64::from(u8::from(*value)))
@@ -586,7 +592,9 @@ impl ClapParameterState {
         let mut parameter_entries = 0_usize;
         for entry in document.entries() {
             let Some(key) = entry.key().strip_prefix("parameter/") else {
-                continue;
+                return Err(ParameterStateError::UnsupportedCustomState(
+                    entry.key().to_owned(),
+                ));
             };
             let Some(index) = self.index_for_key(key) else {
                 return Err(ParameterStateError::UnknownParameter(key.to_owned()));
@@ -641,6 +649,7 @@ pub(crate) enum ParameterStateError {
     ProductIdentityMismatch,
     ProductSchemaMismatch,
     UnknownParameter(String),
+    UnsupportedCustomState(String),
     IncompleteParameterState { expected: usize, actual: usize },
     InvalidValue,
 }
@@ -669,6 +678,10 @@ impl fmt::Display for ParameterStateError {
             Self::UnknownParameter(parameter) => write!(
                 formatter,
                 "parameter state names unknown parameter {parameter}"
+            ),
+            Self::UnsupportedCustomState(key) => write!(
+                formatter,
+                "CLAP scalar state projection cannot preserve custom field {key}"
             ),
             Self::IncompleteParameterState { expected, actual } => write!(
                 formatter,
@@ -738,7 +751,7 @@ pub(crate) fn normalized_events<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chassis_core::{
+    use chassis_runtime::{
         automation::{ParameterEventChange, ParameterEvents},
         parameters::{ChoiceId, ChoiceOption, ParameterDescriptor, ParameterStore},
         schema::{ComponentId, StateSchemaVersion},
@@ -853,7 +866,7 @@ mod tests {
             normalized_events(&state, &input, &mut normalized),
             Err("CLAP input event count exceeds the activation bound")
         );
-        assert!(normalized.is_empty());
+        assert_eq!(normalized, []);
         state.apply_input(&input);
         assert_eq!(state.value(0).to_bits(), 0.0_f64.to_bits());
     }
@@ -1029,6 +1042,49 @@ mod tests {
     }
 
     #[test]
+    fn state_projection_rejects_custom_fields_without_publishing_parameters() {
+        let descriptors = descriptors();
+        let state =
+            ClapParameterState::new(&descriptors, &[("gain", 1), ("steps", 2), ("bypass", 3)])
+                .expect("parameter mapping is valid");
+        let encoded = state
+            .encode_state(&state_identity(), StateLimits::default())
+            .expect("state encodes");
+        let mut document = StateDocument::decode(&encoded).expect("state decodes");
+        document
+            .insert(StateEntry::new(
+                "custom/calibration",
+                StateValue::Signed(123),
+            ))
+            .expect("custom entry is structurally valid");
+        assert!(state.apply_plain_value(ClapId::new(1), 0.75));
+
+        assert!(state.apply_state(&document, &state_identity()).is_err());
+        assert!((state.value(0) - 0.75).abs() <= f64::EPSILON);
+    }
+
+    #[test]
+    fn state_projection_checks_integer_domain_before_conversion() {
+        const LIMIT: i64 = 9_007_199_254_740_992;
+        let descriptor = ParameterDescriptor::integer("count", "Count", -LIMIT, LIMIT, 0)
+            .expect("integer domain is valid");
+        let state = ClapParameterState::new(&[descriptor], &[("count", 1)])
+            .expect("integer domain is representable");
+        for invalid in [LIMIT + 1, -LIMIT - 1] {
+            let mut document =
+                StateDocument::new("com.example.test", 1).expect("document is valid");
+            document
+                .insert(StateEntry::new(
+                    "parameter/count",
+                    StateValue::Signed(invalid),
+                ))
+                .expect("entry is structurally valid");
+            assert!(state.apply_state(&document, &state_identity()).is_err());
+            assert_eq!(state.value(0).to_bits(), 0.0_f64.to_bits());
+        }
+    }
+
+    #[test]
     fn state_projection_round_trips_scalar_values() {
         let descriptors = descriptors();
         let state =
@@ -1102,7 +1158,7 @@ mod tests {
         let bad_input = InputEvents::from_buffer(&bad);
         let mut bad_normalized = Vec::with_capacity(1);
         normalized_events(&state, &bad_input, &mut bad_normalized).expect("events normalize");
-        assert!(bad_normalized.is_empty());
+        assert_eq!(bad_normalized, []);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 //! In-process CLAP host coverage for product activation failure and retry.
 
-use chassis_clap::{ClapStereoEffect, SingleComponentEntry};
-use chassis_core::{
+use chassis_clap::{ClapComponent, SingleComponentEntry};
+use chassis_runtime::{
     process::{ActivationConfig, ProcessBlock, ProcessBufferSource},
     runtime::{Component, Process, Processor},
 };
@@ -16,12 +16,14 @@ impl Component for ActivationProbe {
 
     fn schema(
         &self,
-    ) -> Result<chassis_core::schema::ComponentSchema, chassis_core::schema::ComponentSchemaError>
-    {
-        chassis_core::schema::ComponentSchema::stereo_effect_with_state(
-            chassis_core::schema::ComponentId::new("org.nijaru.chassis.semantic.crates.chassis-clap.tests.host-activation-failure.activationprobe")
+    ) -> Result<
+        chassis_runtime::schema::ComponentSchema,
+        chassis_runtime::schema::ComponentSchemaError,
+    > {
+        chassis_runtime::schema::ComponentSchema::stereo_effect_with_state(
+            chassis_runtime::schema::ComponentId::new("org.nijaru.chassis.semantic.crates.chassis-clap.tests.host-activation-failure.activationprobe")
                 .expect("semantic component identity is valid"),
-            chassis_core::schema::StateSchemaVersion::new(1),
+            chassis_runtime::schema::StateSchemaVersion::new(1),
             vec![],
         )
     }
@@ -50,9 +52,55 @@ impl Process<f32> for ActivationProcessor {
     }
 }
 
-impl ClapStereoEffect for ActivationProbe {
+impl ClapComponent for ActivationProbe {
     const CLAP_ID: &'static str = "org.nijaru.chassis.activation-probe";
     const CLAP_NAME: &'static str = "Chassis Activation Probe";
+    const CLAP_FEATURES: &'static [&'static std::ffi::CStr] = &[c"audio-effect", c"stereo"];
+}
+
+#[derive(Default)]
+struct EventProbe;
+
+impl Component for EventProbe {
+    type Processor = ActivationProcessor;
+    type ActivationError = ();
+
+    fn schema(
+        &self,
+    ) -> Result<
+        chassis_runtime::schema::ComponentSchema,
+        chassis_runtime::schema::ComponentSchemaError,
+    > {
+        use chassis_runtime::{
+            audio::AudioIoPolicy,
+            events::{EventDialect, EventPortDescriptor, EventPortDirection, EventPortKey},
+            schema::{ComponentId, ComponentSchema, StateSchemaVersion},
+        };
+        ComponentSchema::new(
+            ComponentId::new("org.nijaru.chassis.event-probe").expect("valid identity"),
+            StateSchemaVersion::new(1),
+            vec![],
+            AudioIoPolicy::AnyStructurallyValid,
+            vec![EventPortDescriptor::new(
+                EventPortKey::new("notes.in"),
+                "Notes",
+                EventPortDirection::Input,
+                &[EventDialect::Notes],
+            )],
+            vec![],
+        )
+    }
+
+    fn activate(&self, _: &ActivationConfig<'_>) -> Result<Self::Processor, Self::ActivationError> {
+        Ok(ActivationProcessor)
+    }
+}
+
+impl ClapComponent for EventProbe {
+    const CLAP_ID: &'static str = "org.nijaru.chassis.event-probe";
+    const CLAP_NAME: &'static str = "Chassis Event Probe";
+    const CLAP_FEATURES: &'static [&'static std::ffi::CStr] = &[c"note-effect"];
+    const CLAP_AUDIO_PORTS: &'static [chassis_clap::ClapAudioPort] = &[];
 }
 
 struct TestHostShared;
@@ -73,6 +121,29 @@ impl HostHandlers for TestHostHandlers {
     type Shared<'a> = TestHostShared;
     type MainThread<'a> = TestHostMainThread;
     type AudioProcessor<'a> = TestHostAudioProcessor;
+}
+
+#[test]
+fn clap_preserves_descriptor_features_but_rejects_unprojected_event_ports() {
+    let entry =
+        PluginEntry::load_from_clack::<SingleComponentEntry<EventProbe>>(c"").expect("entry loads");
+    let descriptor = entry
+        .get_factory::<PluginFactory>()
+        .expect("factory exists")
+        .plugin_descriptor(0)
+        .expect("descriptor exists");
+    assert_eq!(descriptor.features().collect::<Vec<_>>(), [c"note-effect"]);
+    let host_info = HostInfo::new("chassis-test", "", "", "").expect("host info is valid");
+    assert!(
+        PluginInstance::<TestHostHandlers>::new(
+            |()| TestHostShared,
+            |_| TestHostMainThread,
+            &entry,
+            descriptor.id().expect("id exists"),
+            &host_info,
+        )
+        .is_err()
+    );
 }
 
 #[test]

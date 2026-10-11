@@ -2,7 +2,7 @@
 
 use std::{convert::Infallible, num::NonZeroU32};
 
-use chassis_core::{
+use chassis_runtime::{
     audio::{
         AudioIoConfiguration, AudioPortDescriptor, AudioPortIndex, DEFAULT_EFFECT_CONFIGURATION,
         DEFAULT_EFFECT_PORTS, MAIN_INPUT, PortDirection, PortKey, PortRole,
@@ -42,7 +42,7 @@ impl Probe {
             ComponentId::new(self.identity).expect("test identity is valid"),
             StateSchemaVersion::new(1),
             self.audio_ports.to_vec(),
-            chassis_core::audio::AudioIoPolicy::any_structurally_valid(),
+            chassis_runtime::audio::AudioIoPolicy::any_structurally_valid(),
             vec![],
             vec![],
         )
@@ -54,7 +54,7 @@ impl Component for Probe {
     type Processor = ProbeProcessor;
     type ActivationError = Infallible;
 
-    fn schema(&self) -> Result<ComponentSchema, chassis_core::schema::ComponentSchemaError> {
+    fn schema(&self) -> Result<ComponentSchema, chassis_runtime::schema::ComponentSchemaError> {
         Ok(self.schema_value())
     }
 
