@@ -788,6 +788,10 @@ where
     /// The runtime validates endpoint identity/direction/channel legality against
     /// the activation-owned dense audio configuration before product DSP. Source-
     /// specific raw-pointer/alias proofs still belong to adapters/embeddings.
+    /// After successful processing, final automation endpoints become durable
+    /// base values for the next block, state export, and reactivation. Validation
+    /// failure or a processor panic retains no endpoints. Control edits require
+    /// exclusive runtime access; a subsequent edit overrides completed automation.
     ///
     /// # Errors
     ///
@@ -837,6 +841,7 @@ where
             .validate_ports(schema.event_ports())
             .map_err(InstanceProcessError::InvalidNoteEvents)?;
         processor.process(&mut block);
+        parameters.retain_automation_endpoints(context.parameter_events());
         Ok(())
     }
 

@@ -2,10 +2,6 @@
 
 This file owns unresolved decisions, not implemented inventories or a second roadmap. [Execution plan](../next-runtime-slice.md) owns next work; [validation](validation.md) owns evidence; [roadmap](../roadmap.md) owns deferred scope. All APIs and CHSS bytes remain pre-alpha.
 
-## Automation endpoint authority
-
-CLAP completes each block by generation-checked endpoint publication, then synchronizes that scalar state into its active runtime. Direct runtime processing does not retain endpoints. Decide which runtime boundary owns carryover and saved base values, including multi-block ramps and control/state edits racing completion. Avoid two independent endpoint publishers. A two-block direct-runtime fixture must establish the intended behavior before changing the contract.
-
 ## Parameter authoring policy
 
 Plain/normalized linear mapping and basic CLAP text conversion already exist. What semantic policy should own nonlinear mapping, units, formatting/parsing, display precision, stepped rounding, and meaningful round trips? DSP, editors, and deployment adapters must not maintain competing mappings. Keep stable choice identity independent of display names and backend indices.

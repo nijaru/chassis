@@ -1,6 +1,6 @@
 use std::{
     hint::spin_loop,
-    sync::atomic::{AtomicBool, AtomicU64, Ordering},
+    sync::atomic::{AtomicU64, Ordering},
     vec::Vec,
 };
 
@@ -16,7 +16,6 @@ pub(super) enum PublicationError {
 pub(super) struct ScalarPublication {
     values: Vec<AtomicU64>,
     generation: AtomicU64,
-    pending: AtomicBool,
 }
 
 impl ScalarPublication {
@@ -27,7 +26,6 @@ impl ScalarPublication {
                 .map(|value| AtomicU64::new(value.to_bits()))
                 .collect(),
             generation: AtomicU64::new(0),
-            pending: AtomicBool::new(false),
         }
     }
 
@@ -42,16 +40,6 @@ impl ScalarPublication {
 
     pub(super) fn value(&self, index: usize) -> f64 {
         f64::from_bits(self.values[index].load(Ordering::Acquire))
-    }
-
-    pub(super) fn request_sync(&self) {
-        self.pending.store(true, Ordering::Release);
-    }
-
-    pub(super) fn take_pending(&self) -> bool {
-        self.pending
-            .compare_exchange(true, false, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
     }
 
     fn try_begin_write(&self, expected: u64) -> Option<u64> {
@@ -69,7 +57,6 @@ impl ScalarPublication {
         debug_assert!(completed.is_multiple_of(2));
         debug_assert!(completed <= LAST_STABLE_GENERATION);
         self.generation.store(completed, Ordering::Release);
-        self.pending.store(true, Ordering::Release);
     }
 
     #[cfg(test)]
@@ -184,190 +171,6 @@ mod tests {
 
     use super::*;
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    enum Writer {
-        First,
-        Second,
-    }
-
-    impl Writer {
-        const fn index(self) -> usize {
-            match self {
-                Self::First => 0,
-                Self::Second => 1,
-            }
-        }
-    }
-
-    #[derive(Clone, Copy)]
-    struct WriterModel {
-        generation: u8,
-        owner: Option<Writer>,
-        acquired: [bool; 2],
-        steps: [usize; 2],
-    }
-
-    impl WriterModel {
-        const fn new() -> Self {
-            Self {
-                generation: 0,
-                owner: None,
-                acquired: [false; 2],
-                steps: [0; 2],
-            }
-        }
-
-        fn step(&mut self, writer: Writer) {
-            let index = writer.index();
-            match self.steps[index] {
-                0 => {
-                    if self.generation == 0 {
-                        assert!(self.owner.is_none());
-                        self.generation = 1;
-                        self.owner = Some(writer);
-                        self.acquired[index] = true;
-                    }
-                }
-                1 => {
-                    if self.acquired[index] {
-                        assert_eq!(self.owner, Some(writer));
-                        self.generation = 2;
-                        self.owner = None;
-                    }
-                }
-                _ => unreachable!("model writer has two steps"),
-            }
-            self.steps[index] += 1;
-        }
-
-        fn assert_serialized(self) {
-            assert_eq!(
-                self.acquired
-                    .into_iter()
-                    .filter(|acquired| *acquired)
-                    .count(),
-                1
-            );
-            assert!(self.owner.is_none());
-            assert_eq!(self.generation, 2);
-        }
-    }
-
-    fn enumerate_writer_interleavings(first_left: usize, second_left: usize, model: WriterModel) {
-        if first_left == 0 && second_left == 0 {
-            model.assert_serialized();
-            return;
-        }
-        if first_left != 0 {
-            let mut next = model;
-            next.step(Writer::First);
-            enumerate_writer_interleavings(first_left - 1, second_left, next);
-        }
-        if second_left != 0 {
-            let mut next = model;
-            next.step(Writer::Second);
-            enumerate_writer_interleavings(first_left, second_left - 1, next);
-        }
-    }
-
-    #[derive(Clone, Copy)]
-    enum Actor {
-        Reader,
-        Writer,
-    }
-
-    #[derive(Clone, Copy)]
-    struct SnapshotModel {
-        generation: u8,
-        values: [u8; 2],
-        reader_start: Option<u8>,
-        reader_values: [u8; 2],
-        reader_end: Option<u8>,
-        reader_step: usize,
-        writer_step: usize,
-    }
-
-    impl SnapshotModel {
-        const fn new() -> Self {
-            Self {
-                generation: 0,
-                values: [0, 0],
-                reader_start: None,
-                reader_values: [0, 0],
-                reader_end: None,
-                reader_step: 0,
-                writer_step: 0,
-            }
-        }
-
-        fn step(&mut self, actor: Actor) {
-            match actor {
-                Actor::Reader => {
-                    match self.reader_step {
-                        0 => self.reader_start = Some(self.generation),
-                        1 => self.reader_values[0] = self.values[0],
-                        2 => self.reader_values[1] = self.values[1],
-                        3 => self.reader_end = Some(self.generation),
-                        _ => unreachable!("model reader has four steps"),
-                    }
-                    self.reader_step += 1;
-                }
-                Actor::Writer => {
-                    match self.writer_step {
-                        0 => {
-                            assert_eq!(self.generation, 0);
-                            self.generation = 1;
-                        }
-                        1 => self.values[0] = 1,
-                        2 => self.values[1] = 1,
-                        3 => self.generation = 2,
-                        _ => unreachable!("model writer has four steps"),
-                    }
-                    self.writer_step += 1;
-                }
-            }
-        }
-
-        fn assert_snapshot_coherent(self) {
-            let start = self.reader_start.expect("reader started");
-            let end = self.reader_end.expect("reader finished");
-            if start == end && end.is_multiple_of(2) {
-                assert!(matches!(self.reader_values, [0, 0] | [1, 1]));
-            }
-        }
-    }
-
-    fn enumerate_snapshot_interleavings(
-        readers_left: usize,
-        writers_left: usize,
-        model: SnapshotModel,
-    ) {
-        if readers_left == 0 && writers_left == 0 {
-            model.assert_snapshot_coherent();
-            return;
-        }
-        if readers_left != 0 {
-            let mut next = model;
-            next.step(Actor::Reader);
-            enumerate_snapshot_interleavings(readers_left - 1, writers_left, next);
-        }
-        if writers_left != 0 {
-            let mut next = model;
-            next.step(Actor::Writer);
-            enumerate_snapshot_interleavings(readers_left, writers_left - 1, next);
-        }
-    }
-
-    #[test]
-    fn abstract_same_generation_writers_are_serialized() {
-        enumerate_writer_interleavings(2, 2, WriterModel::new());
-    }
-
-    #[test]
-    fn abstract_snapshot_interleavings_never_accept_mixed_values() {
-        enumerate_snapshot_interleavings(4, 4, SnapshotModel::new());
-    }
-
     #[test]
     fn stale_generation_cannot_publish_after_control_write() {
         let publication = ScalarPublication::new(&[0.5, 0.0]);
@@ -478,6 +281,36 @@ mod tests {
             Some(LAST_STABLE_GENERATION)
         );
         assert_eq!(snapshot[0].to_bits(), 0.75_f64.to_bits());
+    }
+
+    #[test]
+    fn rejected_terminal_completion_invalidates_the_store_cache() {
+        use super::super::ClapParameterState;
+        use chassis_runtime::parameters::{ParameterDescriptor, ParameterStore, ParameterValue};
+
+        let descriptors = [ParameterDescriptor::float("gain", "Gain", 0.0, 1.0, 0.5).unwrap()];
+        let state = ClapParameterState::new(&descriptors, &[("gain", 1)]).unwrap();
+        state
+            .publication
+            .generation
+            .store(LAST_STABLE_GENERATION, Ordering::Release);
+        let mut store = ParameterStore::new(&descriptors).unwrap();
+        let mut scratch = [0.0];
+        let baseline = state
+            .sync_into(store.values_mut(), &mut scratch, None)
+            .unwrap();
+        assert_eq!(baseline, Some(LAST_STABLE_GENERATION));
+
+        store.set("gain", ParameterValue::Float(0.75)).unwrap();
+        let rejected = state
+            .publish_parameters(&store, baseline, &mut scratch)
+            .unwrap();
+        assert!(rejected.is_none());
+        let restored = state
+            .sync_into(store.values_mut(), &mut scratch, rejected)
+            .unwrap();
+        assert_eq!(restored, baseline);
+        assert_eq!(store.get("gain"), Some(&ParameterValue::Float(0.5)));
     }
 
     #[test]

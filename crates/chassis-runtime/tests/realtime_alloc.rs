@@ -12,13 +12,15 @@ use std::{
 
 use chassis_runtime::{
     audio::{AudioPortIndex, DEFAULT_EFFECT_CONFIGURATION},
-    automation::ParameterEvents,
+    automation::{ParameterEvent, ParameterEventValue, ParameterEvents},
     buffer::{ChannelBuffer, InputEndpoint, OutputEndpoint},
+    parameters::{ChoiceId, ChoiceOption, ParameterDescriptor, ParameterIndex, ParameterValue},
     process::{
         ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessChannel, ProcessConfig,
         ProcessContext, ProcessMode, TransportSnapshot,
     },
     runtime::{Component, InstanceRuntime, Process, Processor},
+    state::{StateDocument, StateLimits},
 };
 
 const MAIN_INPUT_INDEX: AudioPortIndex = AudioPortIndex::new(0);
@@ -95,7 +97,26 @@ impl Component for Effect {
         chassis_runtime::schema::ComponentSchema,
         chassis_runtime::schema::ComponentSchemaError,
     > {
-        chassis_runtime::schema::ComponentSchema::stereo_effect(vec![])
+        chassis_runtime::schema::ComponentSchema::stereo_effect_with_state(
+            chassis_runtime::schema::ComponentId::new("org.nijaru.chassis.allocation-test")
+                .unwrap(),
+            chassis_runtime::schema::StateSchemaVersion::new(1),
+            vec![
+                ParameterDescriptor::float("gain", "Gain", 0.0, 1.0, 0.5).unwrap(),
+                ParameterDescriptor::integer("steps", "Steps", 0, 4, 0).unwrap(),
+                ParameterDescriptor::boolean("bypass", "Bypass", false).unwrap(),
+                ParameterDescriptor::choice(
+                    "mode",
+                    "Mode",
+                    vec![
+                        ChoiceOption::new("clean", "Clean").unwrap(),
+                        ChoiceOption::new("warm", "Warm").unwrap(),
+                    ],
+                    "clean",
+                )
+                .unwrap(),
+            ],
+        )
     }
 
     fn activate(
@@ -133,11 +154,11 @@ fn process_config() -> ProcessConfig {
     .expect("test process configuration is valid")
 }
 
-fn process_context() -> ProcessContext<'static> {
+fn process_context<'a>(events: &'a [ParameterEvent<'a>]) -> ProcessContext<'a> {
     ProcessContext::new(
         ProcessMode::Realtime,
         TransportSnapshot::unknown(),
-        ParameterEvents::empty_for_block(512),
+        ParameterEvents::new(events, 512, 64).expect("bounded events are valid"),
     )
 }
 
@@ -149,14 +170,48 @@ fn repeated_post_activation_process_calls_do_not_allocate_or_deallocate() {
         .activate(&component, process_config(), DEFAULT_EFFECT_CONFIGURATION)
         .expect("activation succeeds");
 
+    // Transfer a separately allocated control ID into the store. Completion
+    // must never drop that allocation's last owner on the callback thread.
+    runtime
+        .parameters_mut()
+        .set(
+            "mode",
+            ParameterValue::Choice(ChoiceId::new("warm").expect("control choice is valid")),
+        )
+        .expect("control edit succeeds");
+
+    let saved_control =
+        StateDocument::decode(&runtime.encode_state(StateLimits::default()).unwrap()).unwrap();
+
     let mut left = [1.0_f32; 512];
     let mut right = [1.0_f32; 512];
+    let event_batches = ["clean", "warm"].map(|mode| {
+        [
+            ParameterEvent::set(0, ParameterIndex::new(1), ParameterEventValue::Integer(3)),
+            ParameterEvent::set(
+                0,
+                ParameterIndex::new(2),
+                ParameterEventValue::Boolean(true),
+            ),
+            ParameterEvent::set(0, ParameterIndex::new(3), ParameterEventValue::Choice(mode)),
+            ParameterEvent::linear(511, ParameterIndex::new(0), 0.75),
+        ]
+    });
 
     ALLOCATIONS.store(0, Ordering::Relaxed);
     DEALLOCATIONS.store(0, Ordering::Relaxed);
     COUNT_THIS_THREAD.with(|counting| counting.set(true));
 
-    for _ in 0..1_000 {
+    for block in 0..1_000 {
+        if block == 500 {
+            // State decoding/publication is non-realtime. The following
+            // callback must also replace its decoded choice without freeing it.
+            COUNT_THIS_THREAD.with(|counting| counting.set(false));
+            runtime
+                .apply_state(&saved_control, |_, _| Ok::<_, Infallible>(()))
+                .unwrap();
+            COUNT_THIS_THREAD.with(|counting| counting.set(true));
+        }
         let mut buffers = [
             ChannelBuffer::in_place(
                 InputEndpoint::new(MAIN_INPUT_INDEX, 0),
@@ -174,7 +229,11 @@ fn repeated_post_activation_process_calls_do_not_allocate_or_deallocate() {
             .expect("right buffer is valid"),
         ];
         runtime
-            .process(512, process_context(), &mut buffers)
+            .process(
+                512,
+                process_context(&event_batches[block % 2]),
+                &mut buffers,
+            )
             .expect("process callback is valid");
     }
 

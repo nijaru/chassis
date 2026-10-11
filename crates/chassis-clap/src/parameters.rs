@@ -1,10 +1,10 @@
 use std::{fmt, string::String, vec::Vec};
 
 use chassis_runtime::{
-    automation::{ParameterEvent, ParameterEventChange, ParameterEventValue},
+    automation::{ParameterEvent, ParameterEventValue},
     parameters::{
-        ChoiceId, ChoiceOption, ParameterDescriptor, ParameterIndex, ParameterKind, ParameterValue,
-        ParameterValuesMut,
+        ChoiceId, ChoiceOption, ParameterDescriptor, ParameterIndex, ParameterKind, ParameterStore,
+        ParameterValue, ParameterValuesMut,
     },
     schema::StateIdentity,
     state::{
@@ -189,20 +189,14 @@ impl ClapParameterBinding {
         }
     }
 
-    fn event_plain_value(&self, value: ParameterEventValue<'_>) -> Option<f64> {
-        let plain = match value {
-            ParameterEventValue::Float(value) => value,
-            ParameterEventValue::Integer(value) => integer_to_plain(value),
-            ParameterEventValue::Boolean(value) => f64::from(u8::from(value)),
-            ParameterEventValue::Choice(value) => self.choice_plain(value)?,
-        };
-        let value = self.parameter_value(plain)?;
-        Some(match value {
-            ParameterValue::Float(value) => value,
-            ParameterValue::Integer(value) => integer_to_plain(value),
-            ParameterValue::Boolean(value) => f64::from(u8::from(value)),
-            ParameterValue::Choice(_) => plain,
-        })
+    fn plain_value(&self, value: &ParameterValue) -> Option<f64> {
+        self.descriptor.validate_value(value).ok()?;
+        match value {
+            ParameterValue::Float(value) => Some(*value),
+            ParameterValue::Integer(value) => Some(integer_to_plain(*value)),
+            ParameterValue::Boolean(value) => Some(f64::from(u8::from(*value))),
+            ParameterValue::Choice(value) => self.choice_plain(value.as_str()),
+        }
     }
 
     fn state_plain_value(&self, value: &StateValue) -> Option<f64> {
@@ -394,10 +388,6 @@ impl ClapParameterState {
         self
     }
 
-    pub(crate) fn begin_block(&self) -> Option<u64> {
-        self.publication.completed_generation()
-    }
-
     pub(crate) fn bindings(&self) -> &[ClapParameterBinding] {
         &self.bindings
     }
@@ -439,10 +429,6 @@ impl ClapParameterState {
         }
     }
 
-    pub(crate) fn request_sync(&self) {
-        self.publication.request_sync();
-    }
-
     #[cfg(test)]
     pub(crate) fn apply_plain_value(&self, id: ClapId, value: f64) -> bool {
         let Some((index, value)) = self.validated_plain_value(id, value) else {
@@ -470,79 +456,73 @@ impl ClapParameterState {
         Some((index, value))
     }
 
+    /// Synchronize one coherent generation, or keep the last values on contention.
+    /// The cache certifies the whole store; callers invalidate it after any local
+    /// mutation that was not successfully published.
     pub(crate) fn sync_into(
         &self,
         mut store: ParameterValuesMut<'_>,
         scratch: &mut [f64],
-    ) -> Result<(), ParameterSyncError> {
+        synchronized_generation: Option<u64>,
+    ) -> Result<Option<u64>, ParameterSyncError> {
         if scratch.len() != self.publication.len() {
             return Err(ParameterSyncError::InvalidPublishedValue);
         }
-        if !self.publication.take_pending() {
-            return Ok(());
+        let current = self.publication.completed_generation();
+        if current.is_some() && current == synchronized_generation {
+            return Ok(current);
         }
-        if self.publication.try_snapshot_into(scratch).is_none() {
-            self.publication.request_sync();
-            return Ok(());
-        }
+        let Some(generation) = self.publication.try_snapshot_into(scratch) else {
+            return Ok(None);
+        };
         if self
             .bindings
             .iter()
             .zip(scratch.iter().copied())
             .any(|(binding, value)| binding.parameter_value(value).is_none())
         {
-            self.publication.request_sync();
             return Err(ParameterSyncError::InvalidPublishedValue);
         }
         for (binding, value) in self.bindings.iter().zip(scratch.iter().copied()) {
-            let Some(parameter) = binding.parameter_value(value) else {
-                self.publication.request_sync();
-                return Err(ParameterSyncError::InvalidPublishedValue);
-            };
+            let parameter = binding
+                .parameter_value(value)
+                .ok_or(ParameterSyncError::InvalidPublishedValue)?;
             store
                 .set_index(binding.index(), parameter)
                 .map_err(|_| ParameterSyncError::StoreRejected)?;
         }
-        Ok(())
+        Ok(Some(generation))
     }
 
-    pub(crate) fn publish_events(
+    /// Project completed runtime values without replaying automation. The token
+    /// must be the baseline actually synchronized before this block's DSP.
+    pub(crate) fn publish_parameters(
         &self,
-        events: &[ParameterEvent<'_>],
+        store: &ParameterStore,
         expected_generation: Option<u64>,
         scratch: &mut [f64],
-    ) -> Result<(), ParameterSyncError> {
-        if events.is_empty() {
-            return Ok(());
-        }
+    ) -> Result<Option<u64>, ParameterSyncError> {
         if scratch.len() != self.publication.len() {
             return Err(ParameterSyncError::InvalidPublishedValue);
         }
-        let Some(generation) = self.publication.try_snapshot_into(scratch) else {
-            return Ok(());
+        let Some(generation) = expected_generation else {
+            return Ok(None);
         };
-        // A state/control write during this block owns the newer generation.
-        if Some(generation) != expected_generation {
-            return Ok(());
+        for (binding, target) in self.bindings.iter().zip(scratch.iter_mut()) {
+            *target = store
+                .get_index(binding.index())
+                .and_then(|value| binding.plain_value(value))
+                .ok_or(ParameterSyncError::StoreRejected)?;
         }
-        for event in events {
-            let index = usize::try_from(event.parameter().get())
-                .map_err(|_| ParameterSyncError::InvalidPublishedValue)?;
-            let Some(binding) = self.bindings.get(index) else {
-                return Err(ParameterSyncError::InvalidPublishedValue);
-            };
-            let ParameterEventChange::Set(value) = event.change() else {
-                return Err(ParameterSyncError::InvalidPublishedValue);
-            };
-            let Some(value) = binding.event_plain_value(value) else {
-                return Err(ParameterSyncError::InvalidPublishedValue);
-            };
-            scratch[index] = value;
-        }
-        let _ = self
+        if self
             .publication
-            .try_publish_values_from(generation, scratch);
-        Ok(())
+            .try_publish_values_from(generation, scratch)
+        {
+            // Successful CAS guarantees that generation arithmetic did not wrap.
+            Ok(Some(generation + 2))
+        } else {
+            Ok(None)
+        }
     }
 
     pub(crate) fn encode_state(
@@ -945,60 +925,66 @@ mod tests {
         let mut store = ParameterStore::new(&descriptors).expect("schema is valid");
         let mut scratch = vec![0.0; 3];
         state
-            .sync_into(store.values_mut(), &mut scratch)
+            .sync_into(store.values_mut(), &mut scratch, None)
             .expect("projection syncs");
         assert_eq!(store.get("gain"), Some(&ParameterValue::Float(0.75)));
         assert_eq!(store.get("steps"), Some(&ParameterValue::Integer(-2)));
 
         store.reset();
-        state.request_sync();
         state
-            .sync_into(store.values_mut(), &mut scratch)
-            .expect("explicit reactivation sync succeeds");
+            .sync_into(store.values_mut(), &mut scratch, None)
+            .expect("new runtime with no cached generation syncs");
         assert_eq!(store.get("gain"), Some(&ParameterValue::Float(0.75)));
         assert_eq!(store.get("steps"), Some(&ParameterValue::Integer(-2)));
     }
 
     #[test]
-    fn automation_publishes_final_scalar_values_for_the_next_block() {
+    fn completed_runtime_projection_preserves_untouched_values_and_restores_newer_control() {
         let descriptors = descriptors();
         let state =
             ClapParameterState::new(&descriptors, &[("gain", 1), ("steps", 2), ("bypass", 3)])
                 .expect("parameter mapping is valid");
-        let events = [
-            ParameterEvent::set(0, ParameterIndex::new(0), ParameterEventValue::Float(0.25)),
-            ParameterEvent::set(2, ParameterIndex::new(0), ParameterEventValue::Float(0.75)),
-            ParameterEvent::set(3, ParameterIndex::new(1), ParameterEventValue::Integer(-2)),
-        ];
+        let mut store = ParameterStore::new(&descriptors).expect("schema is valid");
         let mut scratch = vec![0.0; 3];
-        state
-            .publish_events(&events, state.begin_block(), &mut scratch)
-            .expect("automation publication succeeds");
+        assert!(state.apply_plain_value(ClapId::new(2), -2.0));
+        let baseline = state
+            .sync_into(store.values_mut(), &mut scratch, None)
+            .unwrap();
+        store.set("gain", ParameterValue::Float(0.75)).unwrap();
+        let published = state
+            .publish_parameters(&store, baseline, &mut scratch)
+            .unwrap();
+        assert!(published.is_some());
         assert!((state.value(0) - 0.75).abs() <= f64::EPSILON);
         assert!((state.value(1) + 2.0).abs() <= f64::EPSILON);
-    }
 
-    #[test]
-    fn stale_realtime_snapshot_cannot_overwrite_newer_control_state() {
-        let descriptors = descriptors();
-        let state =
-            ClapParameterState::new(&descriptors, &[("gain", 1), ("steps", 2), ("bypass", 3)])
-                .expect("parameter mapping is valid");
-        let mut scratch = vec![0.0; 3];
-        let generation = state
-            .publication
-            .try_snapshot_into(&mut scratch)
-            .expect("initial snapshot is coherent");
-
+        // A control edit after the block baseline wins over the whole completed
+        // store, including the untouched integer and local automated float.
+        store.set("gain", ParameterValue::Float(0.25)).unwrap();
         assert!(state.apply_plain_value(ClapId::new(2), 4.0));
-        scratch[0] = 0.25;
+        let rejected = state
+            .publish_parameters(&store, published, &mut scratch)
+            .unwrap();
+        assert!(rejected.is_none());
+        let synchronized = state
+            .sync_into(store.values_mut(), &mut scratch, rejected)
+            .unwrap();
+        assert!(synchronized.is_some());
+        assert_eq!(store.get("gain"), Some(&ParameterValue::Float(0.75)));
+        assert_eq!(store.get("steps"), Some(&ParameterValue::Integer(4)));
+
+        // A missing start token cannot be reacquired after DSP.
+        store.set("gain", ParameterValue::Float(0.0)).unwrap();
         assert!(
-            !state
-                .publication
-                .try_publish_values_from(generation, &scratch)
+            state
+                .publish_parameters(&store, None, &mut scratch)
+                .unwrap()
+                .is_none()
         );
-        assert!((state.value(0) - 0.5).abs() <= f64::EPSILON);
-        assert!((state.value(1) - 4.0).abs() <= f64::EPSILON);
+        state
+            .sync_into(store.values_mut(), &mut scratch, None)
+            .unwrap();
+        assert_eq!(store.get("gain"), Some(&ParameterValue::Float(0.75)));
     }
 
     #[test]
@@ -1162,15 +1148,15 @@ mod tests {
     }
 
     #[test]
-    fn choice_control_and_automation_sync_into_the_store() {
+    fn choice_control_and_completed_runtime_values_project_without_changing_identity() {
         let descriptors = choice_descriptors();
         let state = ClapParameterState::new(&descriptors, &[("gain", 1), ("mode", 2)])
             .expect("parameter mapping is valid");
         assert!(state.apply_plain_value(ClapId::new(2), 2.0));
         let mut store = ParameterStore::new(&descriptors).expect("schema is valid");
         let mut scratch = vec![0.0; 2];
-        state
-            .sync_into(store.values_mut(), &mut scratch)
+        let baseline = state
+            .sync_into(store.values_mut(), &mut scratch, None)
             .expect("control choice syncs");
         assert_eq!(
             store.get("mode"),
@@ -1179,25 +1165,19 @@ mod tests {
             ))
         );
 
-        // Automation publishes the final choice event as the next base value.
-        let events = [
-            ParameterEvent::set(
-                0,
-                ParameterIndex::new(1),
-                ParameterEventValue::Choice("clean"),
-            ),
-            ParameterEvent::set(
-                3,
-                ParameterIndex::new(1),
-                ParameterEventValue::Choice("warm"),
-            ),
-        ];
+        store
+            .set(
+                "mode",
+                ParameterValue::Choice(ChoiceId::new("warm").unwrap()),
+            )
+            .unwrap();
         state
-            .publish_events(&events, state.begin_block(), &mut scratch)
-            .expect("automation publication succeeds");
+            .publish_parameters(&store, baseline, &mut scratch)
+            .expect("completed choice publication succeeds");
+        store.reset();
         state
-            .sync_into(store.values_mut(), &mut scratch)
-            .expect("automation choice syncs");
+            .sync_into(store.values_mut(), &mut scratch, None)
+            .expect("completed choice syncs into a fresh store");
         assert_eq!(
             store.get("mode"),
             Some(&ParameterValue::Choice(

@@ -597,6 +597,26 @@ impl ParameterDescriptor {
         Ok(())
     }
 
+    /// Stored choices share the schema's ID allocation. Accepting a semantically
+    /// equal but separately owned ID would let realtime replacement drop its
+    /// last owner and deallocate on the callback thread.
+    fn canonical_value(
+        &self,
+        value: ParameterValue,
+    ) -> Result<ParameterValue, ParameterValueError> {
+        if let (ParameterKind::Choice { options, .. }, ParameterValue::Choice(id)) =
+            (&self.kind, &value)
+        {
+            return options
+                .iter()
+                .find(|option| option.id() == id)
+                .map(|option| ParameterValue::Choice(option.id().clone()))
+                .ok_or(ParameterValueError::UnknownChoice);
+        }
+        self.validate_value(&value)?;
+        Ok(value)
+    }
+
     /// Validate one borrowed process-time event value against this descriptor.
     ///
     /// # Errors
@@ -875,8 +895,8 @@ impl std::error::Error for ParameterStoreError {}
 /// One component instance's validated, mutable base/control values.
 ///
 /// The schema is owned immutably and values are kept aligned with it. This
-/// store is intended for control/non-realtime ownership; normalized process
-/// events are validated against it but remain borrowed process-local data.
+/// store holds durable values. Borrowed automation is validated before DSP;
+/// the instance runtime retains its completed endpoints after successful processing.
 pub struct ParameterStore {
     descriptors: Vec<ParameterDescriptor>,
     values: Vec<ParameterValue>,
@@ -1049,8 +1069,8 @@ impl ParameterStore {
         let index = self
             .position_for_key(key)
             .ok_or_else(|| ParameterStoreError::UnknownParameter(key.to_owned()))?;
-        self.descriptors[index]
-            .validate_value(&value)
+        let value = self.descriptors[index]
+            .canonical_value(value)
             .map_err(|error| ParameterStoreError::InvalidValue {
                 parameter: key.to_owned(),
                 error,
@@ -1080,12 +1100,12 @@ impl ParameterStore {
             .descriptors
             .get(position)
             .ok_or(ParameterStoreError::UnknownParameterIndex(index))?;
-        descriptor
-            .validate_value(&value)
-            .map_err(|error| ParameterStoreError::InvalidValue {
+        let value = descriptor.canonical_value(value).map_err(|error| {
+            ParameterStoreError::InvalidValue {
                 parameter: descriptor.key().as_str().to_owned(),
                 error,
-            })?;
+            }
+        })?;
         self.values[position] = value;
         Ok(())
     }
@@ -1159,6 +1179,42 @@ impl ParameterStore {
         Ok(())
     }
 
+    /// Retain endpoints only after schema validation and successful DSP.
+    ///
+    /// Every point lies inside this block, so source order determines the final
+    /// value. Choice values clone schema-owned IDs: neither replacement nor
+    /// dropping the old value can allocate or destroy the last ID owner.
+    pub(crate) fn retain_automation_endpoints(&mut self, events: ParameterEvents<'_>) {
+        for event in events.iter() {
+            let position = usize::try_from(event.parameter().get())
+                .expect("validated parameter index fits usize");
+            let value = match event.change() {
+                ParameterEventChange::Linear { value }
+                | ParameterEventChange::Set(ParameterEventValue::Float(value)) => {
+                    ParameterValue::Float(value)
+                }
+                ParameterEventChange::Set(ParameterEventValue::Integer(value)) => {
+                    ParameterValue::Integer(value)
+                }
+                ParameterEventChange::Set(ParameterEventValue::Boolean(value)) => {
+                    ParameterValue::Boolean(value)
+                }
+                ParameterEventChange::Set(ParameterEventValue::Choice(id)) => {
+                    let ParameterKind::Choice { options, .. } = self.descriptors[position].kind()
+                    else {
+                        unreachable!("validated choice event has a choice descriptor");
+                    };
+                    let option = options
+                        .iter()
+                        .find(|option| option.id().as_str() == id)
+                        .expect("validated choice belongs to the schema");
+                    ParameterValue::Choice(option.id().clone())
+                }
+            };
+            self.values[position] = value;
+        }
+    }
+
     /// Encode all parameter base values using explicit state bounds.
     ///
     /// # Errors
@@ -1191,8 +1247,8 @@ impl ParameterStore {
                     error,
                 }
             })?;
-            self.descriptors[index]
-                .validate_value(&value)
+            let value = self.descriptors[index]
+                .canonical_value(value)
                 .map_err(|error| ParameterStateError::InvalidValue {
                     parameter: key.to_owned(),
                     error,

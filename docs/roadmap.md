@@ -16,12 +16,13 @@ Core capability is not deployment support. CLAP note/event/custom-state projecti
 
 ## Near-term semantic and deployment work
 
-1. Resolve direct-runtime versus CLAP automation endpoint carryover authority. Extend complete-state projection only with coherent ownership; unsupported CLAP custom fields/event ports are now rejected.
-2. Unify author-defined parameter mapping/formatting/parsing policy and adapter conversion.
-3. Define modulation independently from automation/base state and qualify its projection.
-4. Establish tail and host-bypass contracts without prescribing one DSP algorithm.
-5. Export a non-effect fixture: note ports/input, honest descriptor features, then bounded event output and expression/MIDI families.
-6. Add prepared control-to-DSP publication/reclamation and background-work lifecycle from a resource-backed fixture.
+1. Unify author-defined parameter mapping/formatting/parsing policy and adapter conversion.
+2. Define modulation independently from automation/base state and qualify its projection.
+3. Establish tail and host-bypass contracts without prescribing one DSP algorithm.
+4. Export a non-effect fixture: note ports/input, honest descriptor features, then bounded event output and expression/MIDI families.
+5. Add prepared control-to-DSP publication/reclamation and background-work lifecycle from a resource-backed fixture, then complete coherent custom-state/migration/product-validation projection.
+
+Automation completion now has one runtime owner; CLAP publishes its completed store without replaying events. Unsupported CLAP custom fields/event ports remain explicitly rejected.
 
 These are independently deliverable contracts. Do not turn “core closure” into a blanket freeze or defer all deployment feedback until after a large core redesign.
 

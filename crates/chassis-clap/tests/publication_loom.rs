@@ -1,13 +1,13 @@
 //! Weak-memory qualification model for the CLAP scalar publication protocol.
 //!
 //! This integration test mirrors the production generation/CAS, payload, and
-//! pending synchronization ordering without abstracting the production atomics
+//! cached-generation synchronization without abstracting the production atomics
 //! solely for Loom.
 
 use loom::{
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicU64, Ordering},
     },
     thread,
 };
@@ -23,7 +23,6 @@ const INITIAL_VALUES: [u64; 2] = [10, 20];
 struct PublicationModel {
     values: [AtomicU64; 2],
     generation: AtomicU64,
-    pending: AtomicBool,
 }
 
 impl PublicationModel {
@@ -34,7 +33,6 @@ impl PublicationModel {
                 AtomicU64::new(INITIAL_VALUES[1]),
             ],
             generation: AtomicU64::new(0),
-            pending: AtomicBool::new(false),
         }
     }
 
@@ -52,13 +50,11 @@ impl PublicationModel {
 
     fn finish_write(&self, completed: u64) {
         self.generation.store(completed, Ordering::Release);
-        self.pending.store(true, Ordering::Release);
     }
 
-    fn take_pending(&self) -> bool {
-        self.pending
-            .compare_exchange(true, false, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
+    fn completed_generation(&self) -> Option<u64> {
+        let generation = self.generation.load(Ordering::Acquire);
+        generation.is_multiple_of(2).then_some(generation)
     }
 
     fn try_publish_values_from(&self, expected: u64, values: [u64; 2]) -> bool {
@@ -156,10 +152,9 @@ fn accepted_snapshot_never_mixes_generations() {
 }
 
 #[test]
-fn pending_handoff_observes_completed_publication_without_losing_notification() {
+fn cached_sync_token_certifies_the_whole_block_baseline() {
     loom::model(|| {
         let publication = Arc::new(PublicationModel::new());
-
         let writer = {
             let publication = Arc::clone(&publication);
             thread::spawn(move || {
@@ -169,32 +164,33 @@ fn pending_handoff_observes_completed_publication_without_losing_notification() 
         let sync_worker = {
             let publication = Arc::clone(&publication);
             thread::spawn(move || {
-                if !publication.take_pending() {
-                    return false;
+                if publication.completed_generation() == Some(0) {
+                    Some((0, INITIAL_VALUES))
+                } else {
+                    publication.try_snapshot()
                 }
-
-                let (generation, values) = publication
-                    .try_snapshot()
-                    .expect("consumed pending publication must have a coherent snapshot");
-                assert_eq!(generation, 2);
-                assert_eq!(values, [11, 21]);
-                true
             })
         };
 
         writer.join().expect("model writer must not panic");
-        let handled_pending = sync_worker
+        let baseline = sync_worker
             .join()
             .expect("model sync worker must not panic");
-
-        if !handled_pending {
-            assert!(publication.take_pending());
-            let (generation, values) = publication
-                .try_snapshot()
-                .expect("retained pending publication must have a coherent snapshot");
-            assert_eq!(generation, 2);
-            assert_eq!(values, [11, 21]);
+        if let Some((generation, mut values)) = baseline {
+            match generation {
+                0 => assert_eq!(values, INITIAL_VALUES),
+                2 => assert_eq!(values, [11, 21]),
+                _ => panic!("baseline token does not describe a coherent generation"),
+            }
+            values[0] = 12;
+            let published = publication.try_publish_values_from(generation, values);
+            assert_eq!(published, generation == 2);
+            assert_eq!(publication.values()[1], 21);
         }
+
+        // A skipped/contended start never needs a separate notification: the
+        // next snapshot can observe the completed control generation directly.
+        assert!(publication.try_snapshot().is_some());
     });
 }
 

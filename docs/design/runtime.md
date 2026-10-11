@@ -176,7 +176,9 @@ The current runtime may traverse a buffer source once for endpoint legality and 
 
 Adapters/embeddings prove raw pointer/alias facts before safe channel views enter core. Setup owns stable-to-dense endpoint translation and whole-I/O policy acceptance. Callback code consumes pre-resolved dense identities without callback-owned channel vectors or stable-string lookup.
 
-`crates/chassis-runtime/tests/realtime_alloc.rs` mechanically checks post-activation allocation/deallocation on the callback test thread. Full adapter-path allocation/work and performance evidence remains separate.
+After successful DSP, the runtime retains final automation points as durable parameter values. Event-free blocks, state export, and reactivation use those completed values. Failed validation or a processor panic commits no endpoints. Source ramps remain block-local; sources supply clipped continuation points rather than relying on hidden ramp state.
+
+`crates/chassis-runtime/tests/realtime_alloc.rs` mechanically checks post-activation allocation/deallocation with float/integer/boolean/choice completion, including choice replacement after control edits and state loading. Full adapter-path allocation/work and performance evidence remains separate.
 
 ## Parameter publication
 
@@ -186,7 +188,7 @@ The CLAP host lifetime currently splits durable shared/main-thread scalar state 
 
 The bridge uses even completed generations and odd in-progress writer tokens. Realtime publication is one-shot/nonblocking; realtime snapshots have a fixed retry bound; non-realtime control/state snapshots may wait for an in-progress writer.
 
-A realtime automation endpoint is published only from the generation observed before processing. If a newer control edit or state load has advanced the generation, stale realtime publication is rejected.
+CLAP projects the runtime's completed store rather than replaying automation. Publication uses the generation actually synchronized before processing. A newer control edit or state load defeats the CAS; the adapter invalidates its local generation cache and restores the newer whole store when a bounded snapshot succeeds. Cache validity tracks the whole local store, including untouched values. No separate pending-notification authority is needed.
 
 Schema-owned semantic state identity is already used by CLAP save/load. Future adapter work should continue reducing duplicated projection mechanics without moving mutable semantic authority out of `InstanceRuntime`.
 

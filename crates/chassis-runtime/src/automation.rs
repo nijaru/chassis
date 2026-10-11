@@ -5,6 +5,10 @@
 //! order, and use a point representation for linear ramps: a `Linear` event
 //! reaches its endpoint from the preceding point for that parameter. The
 //! implicit preceding point is the parameter's base value at block offset zero.
+//! After successful processing, [`InstanceRuntime`](crate::runtime::InstanceRuntime)
+//! retains each parameter's last point as its next base value. All points lie
+//! inside the block; a source ramp spanning blocks must supply clipped local
+//! points, including the next block's offset-zero value when its slope continues.
 
 use core::fmt;
 

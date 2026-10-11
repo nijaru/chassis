@@ -10,13 +10,11 @@ The CLAP adapter is narrower: fixed mapped audio configurations, scalar paramete
 
 The package boundary is runtime semantics (`chassis-runtime`) versus format deployment (`chassis-clap`). No other production package is needed yet.
 
-## Next — automation endpoint ownership
+Runtime automation completion now owns durable endpoints for direct and deployed clients. CLAP projects the completed store with the synchronized pre-DSP generation; newer control/state publication wins. The [parameter/state contract](design/parameters-state.md) specifies carryover and block-local ramps.
 
-Direct runtime processing currently leaves durable parameters unchanged after a block's automation; CLAP separately retains completed endpoints. Define the carryover owner, multi-block ramp behavior, saved-state semantics, and newer-control precedence. Prove two-block continuity through direct runtime and adapter clients before moving completion into one authority.
+CLAP rejects event-port schemas at setup and custom state entries on load. Complete state/migration/product-validation projection remains unfinished; these rejections are containment, not implementation of that capability.
 
-CLAP now rejects event-port schemas at setup and custom state entries on load, rather than accepting unsupported semantics silently. Complete state/migration/product-validation projection remains unfinished; these rejections are containment, not implementation of that capability.
-
-## Then — parameter authoring contract
+## Next — parameter authoring contract
 
 Parameter descriptors already validate typed values and map plain/normalized ranges; CLAP already supplies basic numeric and choice text conversion. The missing contract is an author-defined mapping/formatting policy that both DSP and deployments consume, not a second generic normalization layer.
 

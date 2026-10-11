@@ -184,6 +184,7 @@ where
     shared: &'a ChassisShared,
     normalized_events: Vec<chassis_runtime::automation::ParameterEvent<'a>>,
     control_values: Vec<f64>,
+    parameter_generation: Option<u64>,
     process_slots: Vec<ClapProcessSlot>,
     _precision: PhantomData<fn() -> M>,
 }
@@ -391,10 +392,10 @@ where
         shared,
         normalized_events,
         control_values,
+        parameter_generation: None,
         process_slots,
         _precision: PhantomData::<fn() -> M>,
     };
-    processor.shared.parameters.request_sync();
     processor.sync_parameters()?;
     processor
         .runtime
@@ -713,8 +714,8 @@ where
         P: ChassisProcess<S>,
         S: ClapSample,
     {
-        let generation = self.shared.parameters.begin_block();
         self.sync_parameters()?;
+        let generation = self.parameter_generation;
         let transport = map_transport(process.transport)?;
         let mut buffers = ClapBufferSource::<S>::new(audio, &self.process_slots)?;
         let frame_count = buffers.frame_count();
@@ -740,14 +741,20 @@ where
             .process_source(frame_count, context, &mut buffers)
             .map_err(|_| PluginError::Message("Invalid Chassis process block"))?;
 
-        self.shared
-            .parameters
-            .publish_events(
-                &self.normalized_events,
-                generation,
-                &mut self.control_values,
-            )
-            .map_err(sync_error)?;
+        if !self.normalized_events.is_empty() {
+            // Runtime completion changed the whole-store cache invariant. A
+            // failed/aborted publication must not let end sync skip restoration.
+            self.parameter_generation = None;
+            self.parameter_generation = self
+                .shared
+                .parameters
+                .publish_parameters(
+                    self.runtime.parameters(),
+                    generation,
+                    &mut self.control_values,
+                )
+                .map_err(sync_error)?;
+        }
         self.sync_parameters()?;
 
         if !self.restart_sent && self.runtime.restart_requested() {
@@ -759,10 +766,16 @@ where
     }
 
     fn sync_parameters(&mut self) -> Result<(), PluginError> {
-        self.shared
+        self.parameter_generation = self
+            .shared
             .parameters
-            .sync_into(self.runtime.parameters_mut(), &mut self.control_values)
-            .map_err(sync_error)
+            .sync_into(
+                self.runtime.parameters_mut(),
+                &mut self.control_values,
+                self.parameter_generation,
+            )
+            .map_err(sync_error)?;
+        Ok(())
     }
 }
 

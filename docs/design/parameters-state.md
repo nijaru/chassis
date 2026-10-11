@@ -37,16 +37,20 @@ Explicit host ramps are reproduced without automatic extra smoothing. Smoothing 
 
 CLAP host lifetimes split long-lived shared/main-thread objects from the active audio processor. `chassis-clap` therefore keeps an adapter-local synchronized scalar projection and synchronizes it into the active `InstanceRuntime`. This projection exists because of deployment lifetime, not as permission for a second semantic authority.
 
-CLAP publishes completed automation endpoints into that projection for the next block and coherent save. Direct `InstanceRuntime` processing currently leaves its base store unchanged: embeddings must retain trajectory endpoints themselves if they require carryover. This inconsistency is an unresolved ownership contract, not a second implemented runtime authority. Define endpoint completion, multi-block ramp behavior, and newer-control precedence before changing it.
+After a successful process call, `InstanceRuntime` retains each parameter's final automation point in its durable store. Untouched parameters remain unchanged; equal-offset source order determines the last value. Validation failure or a DSP panic commits no endpoints. Direct clients therefore carry values into event-free blocks, state export, and reactivation without replaying events themselves. Subsequent control edits use exclusive runtime access and override that completion.
+
+Linear points are block-local endpoints, not future ramp targets. A ramp spanning blocks must be clipped by its source into local points; provide the next block's offset-zero value when needed to preserve the original slope. No pending ramp or hidden extrapolation is retained.
+
+Choice values in the store share schema-owned IDs, including values accepted from control edits or decoded state. This makes realtime choice replacement/drop safe: an event never owns the last allocation reference.
 
 ## Automation publication
 
 Realtime automation endpoint publication follows:
 
 ```text
-observe completed generation G
- -> process the block
- -> derive final endpoint values
+synchronize the runtime from completed generation G
+ -> process the block and retain endpoints in the runtime
+ -> project its completed values into preallocated scalar scratch
  -> attempt publication from G
  -> succeed only if G is still current
 ```
@@ -55,7 +59,9 @@ A newer control edit or state load advances the generation and causes stale real
 
 The current scalar protocol uses even completed generations and odd in-progress writer tokens. Realtime writer acquisition is one-shot; realtime snapshots use a fixed retry bound. Non-realtime control/state operations may wait for an in-progress writer.
 
-Completion publishes the new even generation before the pending notification. Pending consumption uses compare/exchange so a consumer that did not observe a notification cannot erase a concurrent one. This handoff is Loom-qualified.
+The adapter caches the generation its whole local store represents. Equal completed generations permit skipping an unchanged snapshot. The publication token comes from start-of-block synchronization, never from a new snapshot after DSP. Local completion invalidates that cache; a successful CAS establishes the new generation, while rejection leaves no token. End-of-block synchronization restores the whole newer control generation when readable, or retries next block after contention.
+
+This removes the separate pending-notification flag. Snapshot/CAS payload ordering remains Release/Acquire and is Loom-qualified. Active save still reads the coherent shared projection, not partially completed local values.
 
 `u64::MAX - 1` is the terminal completed generation. New writes fail rather than wrap into ABA ambiguity; coherent reads remain valid.
 
@@ -100,14 +106,7 @@ The CLAP scalar save contract is now locally executable:
 - a newer control edit/state load defeats stale realtime publication;
 - terminal generation exhaustion still permits coherent save of the final generation.
 
-The publication tests cover:
-
-- exhaustive abstract reader/writer interleavings rejecting mixed accepted snapshots;
-- a control snapshot after realtime publication observing the completed new generation;
-- a control snapshot encountering an in-progress multi-value write and returning only the completed coherent values;
-- stale realtime generation rejection after a newer control write;
-- bounded realtime failure while another writer is active;
-- terminal generation behavior and value-count errors.
+The [validation guide](validation.md) records production-helper, Loom, and actual CLAP-entry evidence for this contract.
 
 A dated REAPER active-save/render baseline exists in the [validation guide](validation.md). Refresh it against changed exports; it is not automatic qualification of current head or other hosts.
 
@@ -131,7 +130,6 @@ Realtime-originated host notifications require a narrow bounded capability; prod
 
 Before freezing parameter/state APIs:
 
-- resolve direct-runtime automation endpoint carryover ownership and qualify two-block continuity/state-save behavior;
 - preserve custom state, migration, and product validation through CLAP rather than extending its scalar-only projection implicitly;
 - refresh native automated-render and active-save scenarios against changed exported artifacts;
 - define/qualify product-originated gesture and echo semantics;
