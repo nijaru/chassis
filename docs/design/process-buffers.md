@@ -20,7 +20,7 @@ OutputOnly
   output endpoint + &mut [S]
 ```
 
-Endpoints carry stable semantic port identity plus channel index. Backend dense bus/channel indices are adapter projections, not product identity.
+Endpoints carry schema-local dense `AudioPortIndex` plus channel index. Stable keys remain setup/persistence identity; dense Chassis indices and backend bus/channel indices are separate derived projections.
 
 `InPlace` stores one mutable reference only. `Separate` is legal only after the adapter has proved input/output disjoint for the borrow lifetime. Product DSP never receives raw host pointers.
 
@@ -58,16 +58,9 @@ A materialized slice uses `ChannelBufferSlice`; a format adapter can yield safe 
 
 ## ProcessBlock
 
-`ProcessBlock<S, B>` borrows:
+`ProcessBlock<S, B>` exposes actual frame count, process mode/transport context, borrowed canonical base parameters, bounded ordered parameter and note events, and one borrowed buffer source. Activation configuration is used for validation, not retained as a public block accessor.
 
-- actual frame count;
-- active process configuration;
-- process mode and transport snapshot;
-- canonical base `ParameterStore`;
-- bounded sample-sorted `ParameterEvents`;
-- one `ProcessBufferSource<S>`.
-
-Before product DSP runs, core validates frame bounds, event block association/type/domain, and source dimensions. Stable endpoint/backend mapping belongs to setup and is not rediscovered per callback.
+Before product DSP runs, core validates frame bounds, event block association/type/domain, audio endpoint legality, note-port capabilities, and source dimensions. Stable key/backend mapping belongs to setup and is not rediscovered per callback.
 
 Float automation trajectories are evaluated lazily through cursors rather than expanded into per-sample event storage.
 

@@ -23,10 +23,12 @@ The repository selects the stable Rust toolchain and Edition 2024. CLAP dependen
 
 | Crate | Purpose |
 | --- | --- |
-| [chassis-core](crates/chassis-core) | Format-independent lifecycle, audio/event ports, process buffers, parameters, automation, state, and realtime communication contracts |
-| [chassis-clap](crates/chassis-clap) | CLAP deployment adapter through Clack |
+| [chassis-runtime](crates/chassis-runtime) | Format-independent lifecycle, audio/event ports, process buffers, parameters, automation, state, and realtime communication contracts |
+| [chassis-clap](crates/chassis-clap) | CLAP deployment through Clack; mapped audio and scalar parameter/state projection |
 | [clap-conformance](examples/clap-conformance) | Focused parameter/automation/state conformance component |
 | [clap-delayed-probe](examples/clap-delayed-probe) | Fixed-delay component for latency/PDC qualification |
+
+CLAP note/event and complete custom-state projection are not yet implemented. Unsupported event-port schemas and custom state fields are rejected rather than silently discarded.
 
 Planned framework layers include common DSP utilities, editor integration, VST3/Audio Unit deployment, audio/MIDI devices, standalone deployment, graph/scheduling, plugin hosting, media/offline processing integration, and release/conformance tooling. Package boundaries are created only where dependency, safety, optionality, or release boundaries justify them.
 
@@ -36,7 +38,7 @@ The framework roadmap uses focused conformance fixtures rather than migration of
 
 `Component` defines immutable schema, capabilities, and factories. `InstanceRuntime<P>` owns durable parameter and semantic state and coordinates activation. `Processor` owns active DSP history. The same processor model should remain usable through plugin adapters, directly inside another Rust application, as a graph node, in a standalone application, and during offline rendering.
 
-Product-facing core APIs contain no plugin-format, GUI-toolkit, device-backend, or operating-system types. Realtime callbacks have activation-defined resource and event bounds. The test suite checks callback allocations, lifecycle failures, concurrent state publication, f32/f64 processing, malformed state, and other runtime invariants. `chassis-core::telemetry` provides the first reusable bounded DSP-to-control snapshot primitive without adding locks or callback allocation.
+Product-facing core APIs contain no plugin-format, GUI-toolkit, device-backend, or operating-system types. Realtime callbacks have activation-defined resource and event bounds. The test suite checks callback allocations, lifecycle failures, concurrent state publication, f32/f64 processing, malformed state, and other runtime invariants. `chassis_runtime::telemetry` provides the first reusable bounded DSP-to-control snapshot primitive without adding locks or callback allocation.
 
 Chassis may provide common DSP building blocks where doing so creates a coherent reusable audio foundation, but it should use strong existing Rust libraries where appropriate instead of reimplementing codecs, FFTs, resamplers, device backends, or other mature primitives merely for ownership.
 

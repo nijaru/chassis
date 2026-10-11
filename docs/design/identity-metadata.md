@@ -4,7 +4,9 @@ Status: design direction; manifest syntax/generation algorithm are not frozen.
 
 ## Goal
 
-A product declares one canonical identity. Chassis tooling handles repetitive format metadata without making shipped identity depend forever on a particular derivation algorithm.
+A product declares canonical export metadata. Planned build tooling may generate repetitive format metadata without making shipped identity depend forever on a derivation algorithm.
+
+Semantic persistence identity is already owned by `ComponentSchema` as `ComponentId` + `StateSchemaVersion`. Export identities may share that text, but are not its authority and need not match it. Current fixtures deliberately use distinct semantic and CLAP IDs. A future manifest must preserve this separation rather than overriding runtime state identity.
 
 Changing a Rust type, crate name, directory, wrapper backend, or Chassis version must not make a host believe an existing plugin is a new product.
 
@@ -30,7 +32,7 @@ Preferred workflow:
 ```text
 canonical product metadata
         ↓
-cargo chassis init/identity
+build-tool identity initialization [planned]
         ↓
 generate/validate format IDs once
         ↓
@@ -59,9 +61,9 @@ Audio Unit manufacturer code is explicit because it is a registered four-charact
 
 ## CLAP
 
-CLAP's string plugin ID naturally uses the canonical reverse-domain ID.
+CLAP's string plugin ID naturally uses the canonical export ID. It is separate from semantic persistence identity.
 
-Because the canonical ID itself is already frozen, no separate generated CLAP identity is normally necessary. Capability/category feature strings are derived where semantics match and explicit adapter extensions remain available.
+The current `ClapComponent` trait requires explicit CLAP ID, name, and feature strings. Future metadata generation may reduce repetition only where mappings are faithful; it must preserve shipped IDs and may not infer every component to be a stereo effect.
 
 ## VST3
 
@@ -83,7 +85,7 @@ AU identity contains type, subtype, and manufacturer.
 - manufacturer is explicit registered vendor configuration;
 - subtype is a stable product four-character code.
 
-`cargo-chassis` may suggest/generate a legal subtype for a new product and check collisions within the known workspace, but four characters cannot provide a global collision proof. The generated/supplied subtype is therefore immediately frozen in the identity manifest and remains user-overridable **before release**.
+Future build tooling may suggest/generate a legal subtype for a new product and check collisions within the known workspace, but four characters cannot provide a global collision proof. The generated/supplied subtype is therefore immediately frozen in the identity manifest and remains user-overridable **before release**.
 
 Identity safety matters more than saving four characters of configuration.
 
@@ -105,7 +107,7 @@ Prefer composable capabilities over an ever-growing mutually exclusive product-k
 
 ## Configuration location
 
-Identity/build metadata stays outside realtime DSP code. Likely sources are Cargo workspace/package metadata plus a generated Chassis identity manifest consumed by `cargo-chassis`.
+Identity/build metadata stays outside realtime DSP code. Cargo workspace/package metadata and a resolved identity manifest are candidate inputs; no manifest generator or Cargo subcommand is implemented. Decide the tooling interface from a real export workflow.
 
 Illustrative only:
 
@@ -139,7 +141,7 @@ Exact file syntax is not frozen before the tooling spike.
 
 ## Release protection
 
-Before first public product release, `cargo chassis identity` should:
+Before first public product release, identity tooling should:
 
 - validate canonical/vendor metadata;
 - generate unresolved IDs once;

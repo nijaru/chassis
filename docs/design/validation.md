@@ -45,11 +45,26 @@ On Linux, macOS, and Windows:
 4. run the validator on both artifacts;
 5. run a bounded five-second two-worker fuzz pass on both artifacts.
 
-The current validator suite reports **35 passed, 0 failed, 9 intentional skips** on the supported headless matrix (conformance artifact). The exported delayed probe (`examples/clap-delayed-probe`) validates at **21 passed, 0 failed, 23 intentional skips** — the skips are parameter/state cases the no-parameter latency probe does not declare — and passes the same bounded fuzz after flushing subnormal delay-line output to zero (initially caught by the fuzzer as subnormal pass-through).
+The recorded validator baseline is **35 passed, 0 failed, 9 intentional skips** for the conformance artifact. The matrix is configured in CI; successful revision-scoped runs and local checks below establish actual coverage. The exported delayed probe (`examples/clap-delayed-probe`) validates at **21 passed, 0 failed, 23 intentional skips** — the skips are parameter/state cases the no-parameter latency probe does not declare — and passes the same bounded fuzz after flushing subnormal delay-line output to zero (initially caught by the fuzzer as subnormal pass-through).
 
 These gates do not establish production DAW behavior or representative performance.
 
 Hosted workflows and local results are separate evidence. Before publication, hosted jobs were rejected and local checks supplied the interim record. Consult the actual workflow run for the revision under review before claiming Linux/macOS/Windows coverage. The dated validator, host, and benchmark results below are baselines, not automatic qualification of later commits.
+
+### Refresh validation — 2026-10-11
+
+At code revision `1f7e4ca` on macOS arm64 with stable Rust 1.99.0:
+
+- workspace tests: 168 passed, including the existing Loom/allocation/host cases and regressions for custom-state rejection, integer conversion, and unsupported event-port setup;
+- formatting, strict all-feature/all-target Clippy, all-target check, release workspace build, and warning-denied rustdoc: passed;
+- CI-baseline Rust 1.98.0 workspace tests and strict Clippy: passed locally;
+- `cargo deny check` 0.19.0: passed with unused-license-allowance warnings; `cargo machete` 0.9.1: no unused dependencies. These local versions differ from CI's pinned tools;
+- packaged conformance: 35 passed / 0 failed / 9 skipped; delayed probe: 21 passed / 0 failed / 23 skipped;
+- installed `clap-validator` 0.4.1 from pinned revision `b2f1d9b79b1d264a5747f46707d72b1aa40a02ef` (verified in Cargo's install metadata): both five-second, two-worker fuzz runs passed.
+
+The new state regression tests failed on the original custom-field skip and lossy integer conversion before those fixes. Callback allocation/work evidence remains the specific tested configurations, not every possible client. No REAPER scenario or representative performance benchmark was rerun.
+
+Before this refresh, hosted [Rust CI](https://github.com/nijaru/chassis/actions/runs/34721268720) and [CLAP Conformance](https://github.com/nijaru/chassis/actions/runs/34721268697) both succeeded at `5bb628f`, with all Linux/macOS/Windows jobs successful (verified 2026-10-11). Those runs qualify that revision, not these changes.
 
 ### Local validation — 2026-09-07
 
@@ -72,7 +87,7 @@ Current cases include:
 
 - `host_conformance.rs`: f32/f64 callback dispatch, stereo main + stereo sidechain, configured 64-event bound, full callback allocation/deallocation counting, reactivation, latency callbacks, audio-thread transfer, repeated inactive instances;
 - `host_frame_bounds.rs`: activation frame extremes and over-bound rejection;
-- `host_activation_failure.rs`: product activation failure and same-instance retry;
+- `host_activation_failure.rs`: product activation failure and same-instance retry, explicit descriptor feature preservation, and rejection of schemas whose event ports CLAP cannot yet project;
 - `host_latency_audio.rs`: nonzero reported latency matching actual delayed audio;
 - `host_restart.rs`: one processor restart request per activation, immediate successful-state-load restart notification before processing, rejected state without restart, unchanged active latency, and reactivation using published state;
 - `host_active_state_save.rs`: coherent CLAP state save while processing is active;
@@ -85,19 +100,19 @@ The full adapter allocation test covers 1,000 f32 and 1,000 f64 callbacks with s
 
 The format-independent proof is split by concern while exercising the same public runtime model:
 
-- `crates/chassis-core/tests/conformance.rs`: schema rejection, lifecycle, buffer relationships, process bounds/context, base parameters, sample-accurate automation, invalid events, generic non-flat buffer-source traversal, and rejection of structurally valid but unsupported audio configurations;
-- `crates/chassis-core/tests/component_schema_runtime.rs`: one coherent schema snapshot, dense lookup, and schema-drift rejection;
-- `crates/chassis-core/tests/audio_endpoint_runtime.rs`: active/inactive port, direction, channel-range, and dense endpoint legality before product DSP;
-- `crates/chassis-core/tests/event_schema_runtime.rs` and `note_runtime.rs`: event-schema authority, dense note-port addressing, wildcard handling, and zero-audio note processing;
-- `crates/chassis-core/tests/instrument_runtime.rs`: event-driven instrument with no audio input, output-only stereo process buffers, and sample-positioned note on/off behavior;
-- `crates/chassis-core/tests/multi_output_runtime.rs`: multiple semantically distinct output buses routed by dense `AudioPortIndex` even when callback buffers arrive in a different order;
-- `crates/chassis-core/tests/layout_sidechain_runtime.rs`: one immutable schema reactivated across accepted mono and stereo+sidechain configurations, activation-derived resources, and policy rejection of a structurally valid unsupported combination;
-- `crates/chassis-core/tests/dynamic_metadata_runtime.rs`: audio/event keys, names, and capabilities created from runtime-owned metadata, then resolved to dense callback identities without strings in the process path;
-- `crates/chassis-core/tests/semantic_state.rs`: schema-owned complete semantic state, custom-state validation, transactional publication, and migration;
-- `crates/chassis-core/tests/state_adversarial.rs`: bounded hostile/truncated input, resource limits, failure atomicity, and current schema-owned complete-state loading;
-- `crates/chassis-core/tests/lifecycle_negative.rs`: product activation failure, state preservation, inactive post-failure state, successful reuse;
-- `crates/chassis-core/tests/realtime_alloc.rs`: repeated post-activation process calls with callback-thread allocation/deallocation counting;
-- `crates/chassis-core/tests/latency.rs`: activation-scoped latency snapshot/stability/removal/recomputation.
+- `crates/chassis-runtime/tests/conformance.rs`: schema rejection, lifecycle, buffer relationships, process bounds/context, base parameters, sample-accurate automation, invalid events, generic non-flat buffer-source traversal, and rejection of structurally valid but unsupported audio configurations;
+- `crates/chassis-runtime/tests/component_schema_runtime.rs`: one coherent schema snapshot, dense lookup, and schema-drift rejection;
+- `crates/chassis-runtime/tests/audio_endpoint_runtime.rs`: active/inactive port, direction, channel-range, and dense endpoint legality before product DSP;
+- `crates/chassis-runtime/tests/event_schema_runtime.rs` and `note_runtime.rs`: event-schema authority, dense note-port addressing, wildcard handling, and zero-audio note processing;
+- `crates/chassis-runtime/tests/instrument_runtime.rs`: event-driven instrument with no audio input, output-only stereo process buffers, and sample-positioned note on/off behavior;
+- `crates/chassis-runtime/tests/multi_output_runtime.rs`: multiple semantically distinct output buses routed by dense `AudioPortIndex` even when callback buffers arrive in a different order;
+- `crates/chassis-runtime/tests/layout_sidechain_runtime.rs`: one immutable schema reactivated across accepted mono and stereo+sidechain configurations, activation-derived resources, and policy rejection of a structurally valid unsupported combination;
+- `crates/chassis-runtime/tests/dynamic_metadata_runtime.rs`: audio/event keys, names, and capabilities created from runtime-owned metadata, then resolved to dense callback identities without strings in the process path;
+- `crates/chassis-runtime/tests/semantic_state.rs`: schema-owned complete semantic state, custom-state validation, transactional publication, and migration;
+- `crates/chassis-runtime/tests/state_adversarial.rs`: bounded hostile/truncated input, resource limits, failure atomicity, and current schema-owned complete-state loading;
+- `crates/chassis-runtime/tests/lifecycle_negative.rs`: product activation failure, state preservation, inactive post-failure state, successful reuse;
+- `crates/chassis-runtime/tests/realtime_alloc.rs`: repeated post-activation process calls with callback-thread allocation/deallocation counting;
+- `crates/chassis-runtime/tests/latency.rs`: activation-scoped latency snapshot/stability/removal/recomputation.
 
 Together these fixtures now exercise conventional effects, event-only processors, instruments, multi-output processors, multiple legal layouts/sidechains, dynamic/hosted schema metadata, direct non-plugin runtime use, and CLAP deployment through the same component/runtime ownership model. None required a second lifecycle, richer I/O-policy language, or mandatory helper family.
 
@@ -133,7 +148,7 @@ Evidence exists at three levels:
 2. Loom atomic models;
 3. in-process CLAP host test that pauses an active callback before endpoint publication, saves the old complete generation, releases processing, then saves both new endpoints together.
 
-A production-DAW active-save scenario remains host qualification, not a semantic implementation gap.
+The dated REAPER active-save scenario below is production-host evidence for that baseline. Refresh it against changed artifacts; it is distinct from the current in-process semantic evidence.
 
 ## Realtime allocation and performance
 
@@ -181,7 +196,7 @@ Pinned validator/fuzz additionally exercises lifecycle sequencing.
 
 ## Panic / FFI boundary
 
-`chassis-core` forbids unsafe code. Production Chassis currently relies on Clack for raw CLAP pointer/alias validation, safe channel views, and panic containment at FFI callbacks.
+`chassis-runtime` forbids unsafe code. Production Chassis currently relies on Clack for raw CLAP pointer/alias validation, safe channel views, and panic containment at FFI callbacks.
 
 Pinned Clack wraps plugin FFI handlers in `std::panic::catch_unwind`. Chassis executable evidence establishes:
 
@@ -217,10 +232,9 @@ Implemented semantics:
 
 The deliberate delayed probe reports 64 samples at 48 kHz and its stereo impulse emerges exactly at sample 64.
 
-Still required for production PDC claims:
+The recorded REAPER baseline below establishes sample-exact PDC alignment for its delayed-probe artifact. Remaining current/support claims require:
 
-- a real DAW observing/compensating that latency;
-- alignment/differential evidence with compensation enabled;
+- refreshing that real-host observation/alignment after relevant artifact changes;
 - production product restart/reactivation behavior when configuration changes required latency;
 - cross-format latency parity once VST3/AU exist.
 
@@ -230,14 +244,14 @@ Treat host state as untrusted bytes. Keep coverage for malformed/truncated/overs
 
 `InstanceRuntime` complete-state export/load now derives identity/version from its `ComponentSchema`; runtime explicit-product-ID and parameter-only compatibility APIs are removed. Lower parameter-store serialization helpers do not constitute a second component identity authority.
 
-Retain golden fixtures for every released schema. The current CHSS envelope remains pre-v1 until production-host and cross-format state gates are complete.
+Retain golden fixtures for every released schema. The current CHSS v1 envelope remains provisional until its compatibility policy and deployment/cross-format state gates are complete.
 
 ## Host matrix
 
 | Host / harness | Platform | Status | Evidence |
 | --- | --- | --- | --- |
-| Clack in-process host harness | Linux/macOS/Windows CI | current | adapter process/allocation, f32/f64, lifecycle, active state save, latency, re-entrancy, panic containment |
-| `clap-validator` 0.4.1 | Linux/macOS/Windows CI | current | 35 pass / 0 fail / 9 skip + bounded fuzz |
+| Clack in-process host harness | Linux/macOS/Windows CI | passed at `5bb628f`; refreshed locally at `1f7e4ca` | adapter process/allocation, f32/f64, lifecycle, active state save, latency, re-entrancy, panic containment |
+| `clap-validator` 0.4.1 | Linux/macOS/Windows CI | passed at `5bb628f`; refreshed locally at `1f7e4ca` | 35 pass / 0 fail / 9 skip + bounded fuzz |
 | REAPER 7.79 | macOS arm64 (M3 Max, 48 kHz) | 2026-09-06 baseline | 2026-09-06 headless `-renderproject` qualification: scan + instantiate (FX browser, 5 params enumerated), square `trim` automation render sample-exact against the deterministic reference (value changes land at exact sample offsets 24000/36000), injected-CHSS state load render sample-exact (trim 0.25/0.75; blobs byte-identical to a REAPER-saved blob at 0.5 and validated by the real `StateDocument` decoder), project save while the transport rolled through automation with coherent base state (trim=0.5, not torn) and sample-exact automation replay after reload, no-FX baseline render bit-identical to the source fixture, and PDC alignment: a wet track carrying the exported 64-sample delayed probe (`examples/clap-delayed-probe`) mixes against a dry track as exactly `2*x[i]` for all 48,000 frames — REAPER honored the CLAP latency extension and aligned the delayed DSP sample-exact. Host-quirk recorded: `TrackFX_SetParamNormalized` on an inactive CLAP reports success but delivers no change; the differential shows FabFilter Pro-Q 4 (CLAP) behaving identically while ReaEQ (VST) applies immediately, so this is REAPER's inactive-CLAP delivery behavior, not an adapter defect — the automation path (process events) is sample-exact. |
 | Bitwig | — | not run | production-host re-entrancy confirmation remains useful when available |
 

@@ -158,15 +158,10 @@ main output:  stereo, required
 sidechain:    stereo, optional/inactive
 ```
 
-`ComponentSchema::stereo_effect(...)` and `stereo_effect_with_state(...)` construct this ordinary schema/policy combination. Authors do not build per-format bus tables.
+`ComponentSchema::stereo_effect(...)` and `stereo_effect_with_state(...)` construct this schema/policy combination. The current CLAP adapter still requires a per-format stable-ID/layout mapping; the default covers the conventional stereo configuration.
 
-## Next proof targets
+## Qualification and remaining limits
 
-The current audio-port abstraction should now be exercised rather than generalized speculatively:
+Direct runtime fixtures already exercise an output-only instrument, multiple outputs, sidechain/layout reactivation, and runtime-owned metadata. See the [validation guide](validation.md) for executable evidence.
 
-- instrument: no audio input, stereo output, note input;
-- multi-output component with materially different output buses;
-- sidechain/multi-layout component using more than the conventional fixed stereo policy;
-- dynamic/hosted component whose port keys and names are constructed at runtime.
-
-Those proofs should determine whether Chassis next needs a rule-family policy, speaker layouts, additional convenience constructors, or only documentation/ergonomic improvements.
+The CLAP adapter maps one fixed configuration per export. It does not yet expose host layout negotiation, and these core proofs do not establish format-level instrument or dynamic-layout support. Add speaker layouts, policy forms, or constructors only when a concrete client exposes a gap in the current representation.

@@ -16,13 +16,16 @@ Adapters resolve backend IDs to dense indices during setup. `ParameterIndex` is 
 
 Choice option identities are stable semantic IDs; CLAP projects choices onto dense plain-value option indices with option-name display round trips.
 
-## Three parameter views
+## Four parameter concepts
 
-Processing keeps these distinct:
+Keep these distinct:
 
 1. **base state** — current persistent/control value;
-2. **automation trajectory** — timed host changes for the block;
-3. **effective DSP value** — trajectory after modulation/product policy.
+2. **automation trajectory** — timed host/application changes for the block;
+3. **modulation** — process-time contribution that does not overwrite base state;
+4. **effective DSP value** — the result after combination/product policy.
+
+Base values and automation are implemented. Modulation and its combination contract remain pending.
 
 `ParameterEvents` and trajectory cursors are borrowed block views, not another persistent state store.
 
@@ -33,6 +36,8 @@ Explicit host ramps are reproduced without automatic extra smoothing. Smoothing 
 `InstanceRuntime<P>` owns the canonical format-independent `ParameterStore` for a retained core instance. Base values survive processor deactivate/reactivate cycles.
 
 CLAP host lifetimes split long-lived shared/main-thread objects from the active audio processor. `chassis-clap` therefore keeps an adapter-local synchronized scalar projection and synchronizes it into the active `InstanceRuntime`. This projection exists because of deployment lifetime, not as permission for a second semantic authority.
+
+CLAP publishes completed automation endpoints into that projection for the next block and coherent save. Direct `InstanceRuntime` processing currently leaves its base store unchanged: embeddings must retain trajectory endpoints themselves if they require carryover. This inconsistency is an unresolved ownership contract, not a second implemented runtime authority. Define endpoint completion, multi-block ramp behavior, and newer-control precedence before changing it.
 
 ## Automation publication
 
@@ -104,7 +109,7 @@ The publication tests cover:
 - bounded realtime failure while another writer is active;
 - terminal generation behavior and value-count errors.
 
-Native active-save qualification in a real host remains required before production support is claimed.
+A dated REAPER active-save/render baseline exists in the [validation guide](validation.md). Refresh it against changed exports; it is not automatic qualification of current head or other hosts.
 
 ## Exported automation evidence
 
@@ -126,7 +131,9 @@ Realtime-originated host notifications require a narrow bounded capability; prod
 
 Before freezing parameter/state APIs:
 
-- run native automated-render and active-save scenarios against the updated exported CLAP artifact;
+- resolve direct-runtime automation endpoint carryover ownership and qualify two-block continuity/state-save behavior;
+- preserve custom state, migration, and product validation through CLAP rather than extending its scalar-only projection implicitly;
+- refresh native automated-render and active-save scenarios against changed exported artifacts;
 - define/qualify product-originated gesture and echo semantics;
 - add cross-format state/automation round trips once VST3/AU projections exist;
 - freeze CHSS v1 only after released-product fixtures and cross-format evidence justify compatibility;

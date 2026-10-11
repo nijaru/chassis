@@ -9,7 +9,7 @@ Permissive dependencies normally satisfy both. They retain their own licenses/no
 
 ## Current workspace
 
-`chassis-core` remains std-only with no third-party Rust dependencies.
+`chassis-runtime` remains std-only with no third-party Rust dependencies.
 
 The first CLAP adapter pins Clack to one exact git revision:
 
@@ -22,9 +22,9 @@ The revision identifies Clack's development 0.2.0 workspace after the plugin-sid
 
 ### Why this git exception exists
 
-The latest crates.io release available during this audit is Clack 0.1.1, published 2026-07-29. Clack issue #89 documents undefined behavior in that release line when hosts call plugin APIs re-entrantly because plugin handlers were handed exclusive `&mut` access that real hosts can re-enter. The issue specifically cites Bitwig and `clap-wrapper`, which makes this material to Chassis's intended CLAP and later VST3/AU path.
+The original audit selected the pin when registry 0.1.1 was the available release. On 2026-10-11, the crates.io API reports `clack-plugin` 0.2.0, published 2026-09-12, and the GitHub `v0.2` tag resolves to `27ca28391b57a61bad4bb5099288a7bf9247350d`, not the current Chassis pin. Registry availability has changed; source equivalence has not yet been audited. Clack issue #89 documents undefined behavior in the 0.1.1 release line when hosts call plugin APIs re-entrantly because plugin handlers were handed exclusive `&mut` access that real hosts can re-enter. The issue specifically cites Bitwig and `clap-wrapper`, which makes this material to Chassis's intended CLAP and later VST3/AU path.
 
-The reentrancy fix merged on 2026-07-30, after the 0.1.1 release, and changes affected plugin-side handlers to shared access where reentrancy requires it. Chassis therefore does not use 0.1.1 merely because it is the latest registry release.
+The reentrancy fix changes affected plugin-side handlers to shared access where reentrancy requires it. Chassis must not downgrade to the affected 0.1.1 line. Adoption of registry 0.2.0 requires reviewing the source delta from the audited pin and rerunning adapter conformance; it is not an automatic dependency refresh.
 
 This is a narrow safety exception to the normal crates.io preference, not a general acceptance of floating git dependencies:
 
@@ -83,7 +83,7 @@ Dependencies are acceptable at non-realtime edges much more readily than on the 
 | Component | Role | License | Position |
 | --- | --- | --- | --- |
 | Chassis workspace | framework | AGPL-3.0-or-later + intended separate commercial license | current |
-| Clack pinned revision `c5975f9` | low-level safe CLAP plugin boundary | MIT OR Apache-2.0 | adopted safety-fixed source for initial adapter proof; qualification still required |
+| Clack pinned revision `c5975f9` | low-level safe CLAP plugin boundary | MIT OR Apache-2.0 | adopted audited source; dated headless/host evidence in validation guide |
 | `clack-extensions` from same revision | CLAP extension wrappers | MIT OR Apache-2.0 | audio ports, latency, parameters, render mode, and state |
 | `clap-sys` | raw CLAP ABI used by Clack | MIT OR Apache-2.0 | transitive; inspect exact lockfile resolution |
 | CLAP SDK | CLAP ABI specification | MIT | compatible |
@@ -107,7 +107,9 @@ Keep AAX-specific dependencies/code/tooling isolated from format-independent cra
 
 Prefer crates.io releases for normal Rust dependencies. Git dependencies require an explicit reason and full pinned revision because they weaken ordinary registry reproducibility/supply-chain review.
 
-The current Clack pin is the only approved git-source exception. `deny.toml` allowlists that repository specifically because the latest published release has a known memory-safety/reentrancy problem relevant to our deployment path.
+The current Clack pin is the only approved git-source exception. `deny.toml` allowlists that repository to retain the audited trust boundary until a replacement source passes review and qualification. The historical reason was the registry 0.1.1 reentrancy defect; registry 0.2.0 is now available.
+
+Release availability sources (checked 2026-10-11): [crates.io 0.2.0 metadata](https://crates.io/api/v1/crates/clack-plugin/0.2.0), [GitHub release](https://github.com/prokopyl/clack/releases/tag/v0.2), and [tag reference](https://api.github.com/repos/prokopyl/clack/git/ref/tags/v0.2).
 
 `Cargo.lock` is committed. Chassis artifacts are plugin dylibs and, later, standalone executables where reproducible builds matter, and `cargo deny` audits the dependency graph from the lockfile. Keep it current with dependency changes.
 
@@ -119,8 +121,8 @@ Do not add wildcard dependency versions. Avoid duplicate major/version trees whe
 
 ```text
 cargo fmt --all -- --check
-cargo test --workspace
-cargo clippy --workspace --all-features --all-targets -- -D warnings
+cargo test --workspace --locked
+cargo clippy --workspace --all-features --all-targets --locked -- -D warnings
 cargo deny check
 cargo machete
 ```

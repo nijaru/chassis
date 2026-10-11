@@ -1,6 +1,6 @@
 # Events, Notes, MIDI, and Transport
 
-Status: design direction; public API not frozen.
+Status: bounded semantic note input, event-port schemas/dense indices, and parameter automation are implemented in core. CLAP projects parameter automation, not note ports/events. Expression, MIDI/SysEx/UMP, output sinks, modulation, and span processing remain design direction; public API is not frozen.
 
 ## Goal
 
@@ -40,7 +40,9 @@ Output events are emitted in the order required by the target backend; where the
 
 ## Transport
 
-Expose the best-known block-start transport snapshot, with availability explicit for every field:
+The current `TransportSnapshot` exposes optional playing, recording, tempo, and sample position. CLAP currently maps the first three and leaves sample position unavailable. It does not yet expose beats, bars, time signatures, looping, or pre-roll.
+
+The intended broader block-start snapshot retains explicit availability for every field:
 
 - play/record/pre-roll state where available;
 - tempo;
@@ -182,16 +184,10 @@ Adapters lose semantics only when the target cannot represent them, and any degr
 
 Valid examples may include semantic notes -> MIDI 1 when identity/expression loss is acceptable to the declared product capability. Invalid examples include silent block quantization of sample-accurate automation, discarding required note IDs, inventing cross-family order at equal offsets, or replacing source-defined ramps with an unrelated framework curve.
 
-## Initial implementation
+## Current implementation and remaining projection
 
-The first FX conformance path now has:
+Core has bounded borrowed parameter trajectories and semantic note streams, stable setup event-port identities with dense process-time indices, wildcard-aware note addressing, port direction/dialect validation, and event-only/instrument fixtures. Parameter and note streams preserve their own ordering; no total cross-family order is promised.
 
-- bounded borrowed parameter set/linear-trajectory cursors;
-- block-start transport snapshot with explicit optional availability;
-- validation before product DSP;
-- no promise of one total cross-family event ordering.
+CLAP already translates/publishes scalar parameter events and exposes its limited block-start transport snapshot. It rejects schemas with event ports until faithful note-port/event translation exists.
 
-It still needs host-specific event translation, gesture/base-state publication,
-and deterministic span segmentation before the event contract is promoted.
-
-Design stable event-port/note identities before public API stabilization; prove them with an instrument later.
+Remaining work is note input/output projection, expression/MIDI families, modulation, product gestures, and span processing. Qualify these through actual exported clients; do not repeat the completed core event-identity/instrument proof.

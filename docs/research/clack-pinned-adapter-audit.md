@@ -11,9 +11,9 @@ repository: https://github.com/prokopyl/clack
 revision:   c5975f9f89f0953b00768680357985d46178078a
 ```
 
-The revision is also the exact commit referenced by Clack's `v0.2` GitHub prerelease tag. That release was published on 2026-08-05 and explicitly centers plugin/host main-thread re-entrancy support plus the adjacent safety/lifetime changes. The relevant Clack crates use Edition 2024, declare Rust 1.85 MSRV, and are `MIT OR Apache-2.0`.
+The pinned source includes plugin/host main-thread reentrancy and adjacent safety/lifetime work. Its relevant crates use Edition 2024, declare Rust 1.85 MSRV, and are `MIT OR Apache-2.0`.
 
-As of 2026-09-04, crates.io/docs.rs still expose 0.1.1 as the latest published registry release for the Clack crates. Chassis therefore keeps the exact git `rev`; using the tag instead would not improve reproducibility, and downgrading to registry 0.1.1 would reintroduce the known re-entrancy defect.
+Release metadata refreshed 2026-10-11: registry `clack-plugin` 0.2.0 was published 2026-09-12, and GitHub `v0.2` now resolves to `27ca28391b57a61bad4bb5099288a7bf9247350d`. The old assertion that this tag identifies Chassis's pin is not current. See [dependency policy](../dependencies.md) for primary release metadata. Review the source delta and rerun adapter conformance before changing source/revision. Downgrading to the affected registry 0.1.1 line remains unacceptable.
 
 The workspace manifest uses a full revision rather than a branch, and `deny.toml` allowlists only the Clack repository as the current git-source exception.
 
@@ -25,7 +25,7 @@ PR #90 / commit `e8c956ae5c2ebabfee4abf28200fc66b484c47b3` corrected the plugin-
 
 This matters directly to Chassis because:
 
-- Bitwig remains an intended CLAP qualification host;
+- real hosts can synchronously re-enter CLAP callbacks;
 - `clap-wrapper` remains the preferred first VST3/AU projection path;
 - Chassis state load can synchronously call host parameter-rescan hooks;
 - Chassis activation can synchronously call the host latency-change hook;
@@ -41,7 +41,7 @@ The selected revision includes:
 - host-side main-thread re-entrancy support;
 - cookie setter/SysEx APIs marked unsafe where required;
 - GUI/window-handle lifetime tightening;
-- the development version bump represented by the `v0.2` prerelease tag.
+- the development 0.2.0 API/version changes.
 
 Inclusion by revision is not proof by itself. Chassis tests the adapter paths it relies on and still treats a Clack revision/release change as an audit + conformance event.
 
@@ -55,7 +55,7 @@ The pinned Clack API models:
 
 This maps to Chassis as follows:
 
-- `chassis-core::Processor` is not globally `Send`, because same-thread embedded runtimes remain valid;
+- `chassis_runtime::runtime::Processor` is not globally `Send`, because same-thread embedded runtimes remain valid;
 - `chassis-clap` requires concrete processors to be `Send`, because CLAP may transfer the processor between host audio threads;
 - processing remains exclusive and does not require `Sync` DSP state;
 - `ChassisMainThread<C>` uses shared references for CLAP extension callbacks; mutable cross-domain projections use atomics/interior synchronization rather than exclusive main-thread borrows;
@@ -115,26 +115,18 @@ Current mechanical evidence includes:
 - nonzero latency metadata matches an actual delayed impulse;
 - state-rescan and latency host callbacks tolerate immediate plugin extension re-entry.
 
-Chassis still relies on Clack for the raw C ABI and pointer/alias validation. `chassis-core` remains `#![forbid(unsafe_code)]`; current adapter production code adds no Chassis-owned unsafe block.
+Chassis still relies on Clack for the raw C ABI and pointer/alias validation. `chassis-runtime` remains `#![forbid(unsafe_code)]`; current adapter production code adds no Chassis-owned unsafe block.
 
 ## Current qualification boundary
 
-Current Linux CI packages the conformance `.clap` and runs the pinned `clap-validator` 0.4.1 source plus bounded two-worker fuzz. The current result is 35 passed, 0 failed, 9 intentional skips, with the bounded fuzz run clean.
+The configured Linux/macOS/Windows workflows package both CLAP fixtures and run pinned `clap-validator` 0.4.1 plus bounded fuzz. The [validation guide](../design/validation.md) owns exact revision-scoped results; configured gates are not proof that an arbitrary later revision passed.
 
 The REAPER baseline (2026-09-06) records macOS-arm64 coverage of scan/instantiate, deterministic automation render, state round-trip, active save, and PDC alignment; see `docs/design/validation.md` for the recorded matrix.
 
 A manual adapter-overhead benchmark harness exists for representative local hardware; CI may compile it, but hosted-runner timing is not promoted as performance evidence.
 
-## Remaining promotion gates
+## Refresh triggers
 
-Before describing Chassis CLAP as production-qualified:
+Re-audit when Clack changes revision/source form or a new extension path relies on previously unreviewed lifetime/unsafe behavior. Registry 0.2.0 is now a candidate, not an already-audited replacement.
 
-1. keep Rust fmt/test/Clippy/Loom and current CLAP validator/fuzz gates green;
-2. retain portable macOS/Windows compilation/test coverage alongside Linux;
-3. ~~run the adapter-overhead benchmark on stable representative hardware~~ complete (2026-09-03, Apple M3 Max/rustc 1.98.0; recorded in `docs/design/validation.md`);
-4. ~~requalify current head in real DAWs: scan/instantiate, save/reopen, deterministic automation render, active save, and PDC alignment~~ complete (2026-09-06, REAPER 7.79/macOS-arm64, sample-exact evidence recorded in `docs/design/validation.md`);
-5. f64 wire precision: headlessly qualified (validator + in-process host cover both double-precision process cases); whether a client advertises `PREFERS_64BITS` is a first-client product decision, not a promotion gate;
-6. add Bitwig or equivalent real-world re-entrancy coverage when available;
-7. qualify the first real Chassis product before freezing higher-level authoring conveniences;
-8. re-audit and requalify if Clack changes revision/source form;
-9. migrate to crates.io only when a suitable safety-fixed registry release exists and passes the same evidence gates.
+Keep Rust, portable-host, validator, and fuzz gates green for the revision under review. Refresh the dated real-host/performance evidence when making corresponding current claims; neither the old REAPER run nor its benchmark automatically qualifies later changes. Additional real-host reentrancy evidence remains useful when available. Headless f64 semantics and host wire-precision preference are separate questions.

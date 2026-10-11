@@ -176,7 +176,7 @@ The current runtime may traverse a buffer source once for endpoint legality and 
 
 Adapters/embeddings prove raw pointer/alias facts before safe channel views enter core. Setup owns stable-to-dense endpoint translation and whole-I/O policy acceptance. Callback code consumes pre-resolved dense identities without callback-owned channel vectors or stable-string lookup.
 
-`crates/chassis-core/tests/realtime_alloc.rs` mechanically checks post-activation allocation/deallocation on the callback test thread. Full adapter-path allocation/work and performance evidence remains separate.
+`crates/chassis-runtime/tests/realtime_alloc.rs` mechanically checks post-activation allocation/deallocation on the callback test thread. Full adapter-path allocation/work and performance evidence remains separate.
 
 ## Parameter publication
 

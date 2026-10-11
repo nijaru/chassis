@@ -1,249 +1,51 @@
-# Crate and Package Boundaries
+# Package Boundaries
 
-Status: design direction; `chassis-core` and the first `chassis-clap` adapter exist.
+## Current packages
 
-## Goal
+| Package | Responsibility | Boundary reason |
+| --- | --- | --- |
+| `chassis-runtime` | Format-independent component schema, instance lifecycle, processing, parameters, state, audio/events, and bounded telemetry | Usable without a plugin ABI or platform dependency; safe Rust, currently std-only |
+| `chassis-clap` | CLAP metadata, host lifecycle, buffer/event translation, and cross-thread state projection | Clack/CLAP dependency and deployment-specific lifetimes, failure handling, and qualification |
+| `chassis-clap-conformance` | Exported automation/state qualification fixture | Test artifact, not an authoring library |
+| `chassis-clap-delayed-probe` | Exported latency/PDC qualification fixture | Test artifact, not an authoring library |
 
-Use crate boundaries where they isolate unsafe/FFI code, large optional dependencies, platform integrations, tooling, or test-only machinery. Do not turn every domain noun into a crate or force normal authors to understand the implementation graph.
+`chassis-runtime` replaces the unpublished `chassis-core` package. The old name described its place in a dependency graph; the new name describes what callers use. The rename adds no layer, facade, or compatibility alias.
 
-Chassis is one audio framework, not a collection of unrelated microcrates.
+The runtime owns both immutable semantic definitions and the durable instance that executes them. Keeping these together avoids splitting tightly coupled schema, state, and lifecycle guarantees across packages. Domain modules remain explicit; root exports should be curated only when an actual authoring workflow benefits.
 
-## Public authoring surface
+## Rules for new boundaries
 
-The intended ordinary surface should remain small even as the internal framework grows:
+Create a package when it isolates an actual concern:
 
-```text
-chassis-audio     curated author-facing package/facade
-chassis-test      author/conformance testing helpers
-cargo-chassis     build/validate/package tooling
-```
+- unsafe/FFI code or deployment-specific lifetimes;
+- a substantial optional dependency or platform backend;
+- independently usable functionality with a coherent release contract;
+- tooling or test machinery that should not enter production runtime dependencies.
 
-Optional GUI, hosting, device, media, and other integrations may be exposed through features or companion packages where dependency boundaries justify that split.
+A domain noun, long source file, roadmap item, or possible future feature is not by itself a package boundary. Refactor cohesive modules before adding crates. Do not make normal authors understand the implementation graph, but do not hide useful boundaries behind an empty umbrella package either.
 
-The bare crates.io package `chassis` is already occupied. `chassis-audio` can be documented with a dependency rename so source code still uses the natural path:
-
-```toml
-[dependencies]
-chassis = { package = "chassis-audio", version = "..." }
-```
-
-Do not publish placeholders merely to reserve names. Publish only when a useful package exists.
-
-## Facade versus internal graph
-
-`chassis-core` should keep deliberate domain modules and avoid glob-exporting every implementation detail at its root.
-
-The umbrella package should intentionally curate the concepts ordinary authors need. A plugin tutorial, standalone processor, or embedded DSP component should not begin with an explanation of the internal crate graph.
-
-Likewise, an application using graph/device/host layers should opt into those facilities without forcing plugin-only users to build unrelated dependencies.
-
-## Durable boundary principles
-
-### `chassis-core`
-
-Format-independent semantic/runtime contracts:
-
-- component/processor lifecycle;
-- audio/event ports and layouts;
-- process buffers/context;
-- parameters/automation/modulation;
-- semantic events/transport views;
-- state/migrations;
-- latency/tail/bypass semantics;
-- narrow realtime communication primitives;
-- stable identities required by the runtime.
-
-Properties:
-
-- std-first;
-- no plugin SDK, GUI toolkit, device backend, codec, or OS API dependency;
-- unsafe denied;
-- usable directly by embedded/application processors without plugin deployment.
-
-### Deployment adapters
-
-Examples:
+The only current production edge is:
 
 ```text
-chassis-clap       [exists]
-chassis-vst3       [only if Chassis owns a native adapter]
-chassis-au         [only if Chassis owns a native adapter]
+export/application -> chassis-runtime
+CLAP export        -> chassis-clap -> chassis-runtime
+                                  -> Clack
 ```
 
-FFI/format glue has a different risk profile: external bindings, host lifecycle quirks, platform builds, native validators, and potential unsafe boundaries. Isolate it from core.
+## Future integrations
 
-CLAP is the first native adapter. VST3/AU through a reviewed wrapper initially belong primarily to deployment/build integration; create native adapter crates only when Chassis actually owns those adapters.
+Editor toolkit, device, hosted-plugin, codec, and heavy DSP dependencies must remain optional and must not flow into the format-independent runtime. Graph/scheduling belongs above ordinary component/runtime semantics; it must not introduce a second processor model or DAW document concepts.
 
-### Editor/UI integration
+VST3/AU projection may use a reviewed wrapper. A native adapter package is justified only when Chassis owns its implementation. A wrapper build target is not a Rust package simply because it exports another format.
 
-Potential boundaries:
+Common DSP utilities may start as modules. Split them when independent use or optional FFT/resampling/convolution dependencies provide a real boundary. Use mature dependencies rather than duplicating their algorithms merely to fill a package.
 
-```text
-chassis-editor     toolkit-independent editor/host-window/binding contract if large enough
-chassis-iced       optional Iced integration
-<other adapters>   only with real supported clients
-```
+Standalone bootstrap composes runtime, device, and optional editor/graph capabilities; it does not justify a parallel DSP runtime. Media/offline processing similarly composes existing semantics until a concrete random-access or multi-pass requirement demands another contract.
 
-A GUI toolkit brings substantial rendering/window dependencies. Headless users must not inherit them.
+Test helpers and build/validation/packaging tools should be shared only once repeated clients demonstrate a maintained interface. No test-support crate or Cargo subcommand is required by the current workspace.
 
-Chassis owns editor lifecycle/integration, not a widget library or product visual design.
+## Author-facing packaging
 
-### DSP utilities
+There is no umbrella package today. Its need, exports, package name, and feature model are unresolved, not an accepted future architecture. Choose them from executable authoring examples before publication, checking registry availability at that time. Do not publish placeholders or lock in dependency aliases to work around a hypothetical name conflict.
 
-Common DSP utilities are planned framework scope, but **do not create `chassis-dsp` merely because the domain exists**.
-
-Start with modules/integrations where practical. Split a DSP package only when it provides a coherent optional dependency/release boundary—for example if FFT/resampling/convolution integrations would otherwise pull significant dependencies into all core users.
-
-Broad candidates include units, ramps/smoothing, delays, metering, filters, oscillators/envelopes, FFT/STFT/window integration, oversampling/resampling, convolution helpers, and buffer/channel operations.
-
-Strong existing FFT/resampling/etc. crates should normally remain dependencies behind Chassis semantics rather than being copied into the repository.
-
-### Device/runtime layer
-
-Likely boundary:
-
-```text
-chassis-device
-```
-
-Own Chassis semantics for audio/MIDI enumeration, open/close/reconfiguration, sample-rate/block-size negotiation, xruns/errors, timestamps, and device/application integration. Platform/device backend crates remain implementation dependencies.
-
-This layer is optional for plugin-only/embedded users.
-
-### Graph/scheduling layer
-
-Likely boundary:
-
-```text
-chassis-graph
-```
-
-Own generic audio/event routing, validated execution plans, latency propagation/compensation, and realtime scheduling over ordinary Chassis processors.
-
-The graph must not own DAW concepts such as tracks, clips, arrangements, project workflows, or mixer UX.
-
-### Plugin hosting layer
-
-Likely boundary:
-
-```text
-chassis-host
-```
-
-Own discovery/scanning, loading, lifecycle, hosted state/parameters/editors, failure policy, and graph integration for third-party plugin formats.
-
-Hosting dependencies and FFI must not flow into `chassis-core` or ordinary plugin-authoring builds.
-
-### Media/offline layer
-
-A package split such as `chassis-media` or `chassis-offline` is possible only if concrete dependency/ownership boundaries justify it.
-
-This logical area covers audio source/sink metadata, stream/read/write/seek integration, codec adapters, resampling/channel adaptation, deterministic rendering, and future random-access/multi-pass processing.
-
-Chassis should not implement or own project media libraries, clip editing, or codec algorithms merely to create a package.
-
-### Standalone layer
-
-Potential boundary:
-
-```text
-chassis-standalone
-```
-
-Application bootstrap over core + device + optional editor/graph facilities. It must run the same component/runtime implementation rather than introduce a second DSP architecture.
-
-### Test support
-
-```text
-chassis-test
-```
-
-Synthetic hosts/devices, allocation guards, property/fuzz helpers, lifecycle torture machinery, graph fixtures, and conformance utilities should not ship through every production dependency merely because products need them in tests.
-
-### Tooling
-
-```text
-cargo-chassis
-```
-
-Workspace discovery, identity manifests, export builds, validators, packaging, signing/notarization hooks, compatibility checks, and templates. Tooling is not part of the runtime DSP dependency graph.
-
-## What stays as modules initially
-
-Inside `chassis-core`, prefer modules for tightly coupled semantic contracts:
-
-- audio ports/layouts/I/O policy;
-- activation/process context/buffer interfaces;
-- parameters/automation/modulation;
-- events/transport;
-- persistent state/migrations;
-- component/runtime ownership traits;
-- latency/tail/bypass metadata;
-- realtime communication primitives;
-- stable runtime identity primitives.
-
-Do not split state/parameters/events into separate crates merely because they are substantial concepts.
-
-Likewise, do not create crates for `meter`, `filter`, `transport`, `offline`, etc. until there is a meaningful dependency/release boundary.
-
-## Current / likely dependency direction
-
-A plausible end-state graph is:
-
-```text
-product/application
-        |
-        v
-chassis-audio              curated facade
-   |        |       |       |       |
-   |        |       |       |       `-> optional tooling metadata helpers
-   |        |       |       `----------> optional host/media integrations
-   |        |       `------------------> optional graph/device/standalone
-   |        `--------------------------> optional deployment/editor integration
-   `-----------------------------------> chassis-core + lightweight utilities
-
-chassis-clap       -> chassis-core + Clack
-chassis-device     -> chassis-core + reviewed device/MIDI backends
-chassis-graph      -> chassis-core (+ utility modules)
-chassis-host       -> chassis-core/graph + plugin-host adapters
-chassis-standalone -> core + device (+ graph/editor as selected)
-chassis-test       -> core (+ adapters/layers behind test features)
-cargo-chassis      -> build/tooling dependencies only
-```
-
-Exact package names and edges are not frozen. Keep the graph acyclic and keep large optional/platform dependencies from flowing downward.
-
-## Dependency integration rule
-
-A dependency should be wrapped behind Chassis semantics when:
-
-- its API exposes backend/platform concepts that should not become framework compatibility identity;
-- Chassis needs stronger realtime/lifecycle guarantees than the dependency alone expresses;
-- multiple backends should present one semantic capability;
-- Chassis needs to constrain configuration, ownership, or failure behavior.
-
-Do not wrap dependencies merely to hide their names when direct use is already the best stable abstraction.
-
-## Features
-
-Use Cargo features for genuinely optional integration, not to create a combinatorial semantic matrix.
-
-Rules before publication:
-
-- default features should give the most common author experience without pulling unrelated GUI/device/host/media stacks;
-- disabling defaults must not silently change compatibility identity/state semantics;
-- release feature combinations are validated explicitly;
-- avoid target-dependent public APIs where a runtime/adapter capability query is more honest;
-- graph/host/device/media functionality should normally be opt-in for plugin-only users.
-
-## Versioning
-
-Pre-alpha internal crates can version together. Once external users exist, closely coupled framework crates should normally keep synchronized compatible releases so authors are not solving an internal dependency puzzle.
-
-`cargo-chassis` can eventually detect incompatible mixed framework versions in a product workspace.
-
-## User-experience rule
-
-Internal modularity serves safety, optionality, build times, and maintenance. It is not the user model.
-
-If an ordinary plugin author must understand graph/device/media crates to write an effect, the facade is wrong. If a DAW/audio-application author must bypass Chassis core and invent another processor model to use graph/devices/hosting, the architecture is wrong.
+Features should select optional integrations, not change persistence identity or silently alter semantic guarantees. Validate supported combinations explicitly. Closely coupled packages may release together without requiring every future tool or integration to share a version.

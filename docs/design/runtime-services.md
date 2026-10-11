@@ -1,6 +1,6 @@
 # Common Runtime Services
 
-Status: design direction; public API not frozen.
+Status: activation-scoped latency/restart and fixed-width coherent `f32` telemetry are implemented. Tail/bypass, prepared publication/reclamation, and task lifecycle remain design direction; public API is not frozen.
 
 ## Goal
 
@@ -54,7 +54,9 @@ Initially, a processor can conservatively remain active. If real products and ad
 
 Meters, gain reduction, scopes, analyzers, and diagnostics commonly need audio -> UI/control communication.
 
-Two reusable classes are likely:
+`telemetry::F32Telemetry` implements fixed-width latest snapshots with single-attempt nonblocking publication and bounded coherent readers. Concurrency and callback allocation/deallocation tests plus a meter fixture cover it.
+
+Larger ordered streams remain conditional on an analyzer/trace client:
 
 ### Latest-value publication
 
@@ -86,7 +88,7 @@ Avoid an untyped `Box<dyn Any>` queue as the primary mechanism.
 
 ## Background preparation
 
-Background work is useful for some products—IR/sample decoding, expensive kernel construction, analysis, resource indexing—but it is **not required by most simple effects**, so it is not a v0.1 core prerequisite.
+Background work supports IR/sample decoding, expensive kernel construction, analysis, and resource indexing. Its lifecycle is planned framework scope, but components that do not use it must incur no hidden task/executor cost. A release prerequisite is a supported-scope decision, not a consequence of simple-effect examples.
 
 When Chassis adds a task abstraction, its lifetime must be designed before its executor implementation.
 
@@ -133,12 +135,6 @@ Denormal handling may become an optional process guard after cross-platform meas
 
 Likewise, do not use new algebraic/fast-math-style floating point operations merely because current Rust exposes them. Audio DSP that depends on numerical reproducibility or exact transfer behavior needs explicit evidence before allowing reassociation.
 
-## Initial implementation boundary
+## Implementation boundary
 
-The first conformance processing path needs only:
-
-- fixed latency/tail metadata if required by the adapter proof;
-- one minimal latest-value telemetry primitive if a test needs audio -> control observation;
-- one bounded typed control/publication primitive if a test needs control -> audio transfer.
-
-Background executors, dynamic host notifications, bypass DSP helpers, richer diagnostics, denormal guards, analyzer streams, and generalized reclamation should be added when a concrete client exercises their lifecycle.
+Latency/restart and scalar telemetry are current capabilities; tail and prepared control-to-DSP publication are not. A resource-backed fixture must establish replacement, reclamation, stale-result rejection, cancellation/unload, and offline behavior before a task API or executor is chosen. Analyzer streams, richer diagnostics, denormal guards, and bypass DSP helpers likewise need concrete requirements rather than an expanded service catalog.

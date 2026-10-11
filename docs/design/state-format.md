@@ -150,7 +150,7 @@ No live state is touched until all steps succeed. Product validation can inspect
 
 `Component::activate_with_state()` may inspect the accepted complete semantic state during non-realtime processor preparation. Persistence authority remains in `InstanceRuntime`, not in the active processor.
 
-Parameter-only state methods remain compatibility helpers for adapter paths that have not yet adopted complete product state; they intentionally do not replace custom state.
+Runtime parameter-only and explicit-ID compatibility methods have been removed. Lower-level `ParameterStore` serialization helpers are not a second component identity authority.
 
 ## Parameter state
 
@@ -173,7 +173,9 @@ The complete runtime state owner retains them in canonical order and publishes t
 
 CLAP/VST3 stream boundaries can carry canonical Chassis bytes directly through bounded readers/writers. AU may embed the same canonical payload in its required container while keeping format-specific metadata separate.
 
-Adapters must not create a second persistence authority for the same product semantics.
+Adapters must not create a second persistence authority for the same component semantics.
+
+The current CLAP adapter persists scalar parameters only. It rejects non-parameter entries instead of accepting a load that loses custom fields. It requires the current schema version and does not yet project adjacent migrations or product validation. Activation synchronizes scalar parameters into a fresh runtime; complete custom-state preservation/activation is remaining deployment work. The complete-state core contract above does not establish equivalent CLAP support.
 
 Short/partial stream reads/writes and backend errors are real boundary cases and require adapter tests rather than an assumption that state arrives in one complete call.
 
