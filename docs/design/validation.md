@@ -53,18 +53,19 @@ Hosted workflows and local results are separate evidence. Before publication, ho
 
 ### Refresh validation — 2026-10-11
 
-At code revision `1f7e4ca` on macOS arm64 with stable Rust 1.99.0:
+At code revision `e5be210` on macOS arm64 with stable Rust 1.99.0:
 
-- workspace tests: 168 passed, including the existing Loom/allocation/host cases and regressions for custom-state rejection, integer conversion, and unsupported event-port setup;
-- formatting, strict all-feature/all-target Clippy, all-target check, release workspace build, and warning-denied rustdoc: passed;
+- workspace tests: 168 passed, including direct-runtime automation carryover/state/reactivation, invalid-batch atomicity, generation-cache/terminal rejection, and existing Loom/allocation/host cases;
+- the core allocation probe now exercises float/integer/boolean/choice completion over 1,000 callbacks, including replacement after a separately allocated control choice and a decoded state load, with zero callback-thread allocations/deallocations;
+- formatting, strict all-feature/all-target Clippy, release workspace build, and warning-denied rustdoc: passed;
 - CI-baseline Rust 1.98.0 workspace tests and strict Clippy: passed locally;
 - `cargo deny check` 0.19.0: passed with unused-license-allowance warnings; `cargo machete` 0.9.1: no unused dependencies. These local versions differ from CI's pinned tools;
 - packaged conformance: 35 passed / 0 failed / 9 skipped; delayed probe: 21 passed / 0 failed / 23 skipped;
 - installed `clap-validator` 0.4.1 from pinned revision `b2f1d9b79b1d264a5747f46707d72b1aa40a02ef` (verified in Cargo's install metadata): both five-second, two-worker fuzz runs passed.
 
-The new state regression tests failed on the original custom-field skip and lossy integer conversion before those fixes. Callback allocation/work evidence remains the specific tested configurations, not every possible client. No REAPER scenario or representative performance benchmark was rerun.
+The direct-runtime carryover test failed before runtime endpoint retention. While implementing retention, the allocation probe caught one last-owner choice deallocation; canonicalizing control/state values to schema-owned IDs fixed it. Earlier custom-field-loss and lossy-integer regressions remain protected. Duplicate serial interleaving models were removed: their writer-serialization/coherent-snapshot protection remains in the stronger Loom weak-memory cases, alongside actual production-helper tests. Callback allocation/work evidence remains the tested configurations, not every possible client. No REAPER scenario or representative performance benchmark was rerun.
 
-Hosted [Rust CI](https://github.com/nijaru/chassis/actions/runs/38118713085) and [CLAP Conformance](https://github.com/nijaru/chassis/actions/runs/38118713152) both succeeded at `05062c2` on 2026-10-11, qualifying the refreshed code with all Linux/macOS/Windows jobs successful, including CI's pinned dependency tools and packaged validator/fuzz matrix. Earlier successful runs at `5bb628f` remain historical evidence.
+Hosted [Rust CI](https://github.com/nijaru/chassis/actions/runs/38122940824) and [CLAP Conformance](https://github.com/nijaru/chassis/actions/runs/38122940822) both succeeded at `e5be210` on 2026-10-11, with all Linux/macOS/Windows jobs successful, including CI's pinned dependency tools and packaged validator/fuzz matrix. Earlier successful runs at `05062c2` and `5bb628f` remain historical evidence.
 
 ### Local validation — 2026-09-07
 
@@ -101,6 +102,7 @@ The full adapter allocation test covers 1,000 f32 and 1,000 f64 callbacks with s
 The format-independent proof is split by concern while exercising the same public runtime model:
 
 - `crates/chassis-runtime/tests/conformance.rs`: schema rejection, lifecycle, buffer relationships, process bounds/context, base parameters, sample-accurate automation, invalid events, generic non-flat buffer-source traversal, and rejection of structurally valid but unsupported audio configurations;
+- `crates/chassis-runtime/tests/automation_runtime.rs`: final typed endpoints retained after successful DSP, equal-offset last-value order, event-free carryover, block-local ramp continuation, canonical encoded state, subsequent control precedence, reactivation, and invalid-batch failure atomicity;
 - `crates/chassis-runtime/tests/component_schema_runtime.rs`: one coherent schema snapshot, dense lookup, and schema-drift rejection;
 - `crates/chassis-runtime/tests/audio_endpoint_runtime.rs`: active/inactive port, direction, channel-range, and dense endpoint legality before product DSP;
 - `crates/chassis-runtime/tests/event_schema_runtime.rs` and `note_runtime.rs`: event-schema authority, dense note-port addressing, wildcard handling, and zero-audio note processing;
@@ -111,7 +113,7 @@ The format-independent proof is split by concern while exercising the same publi
 - `crates/chassis-runtime/tests/semantic_state.rs`: schema-owned complete semantic state, custom-state validation, transactional publication, and migration;
 - `crates/chassis-runtime/tests/state_adversarial.rs`: bounded hostile/truncated input, resource limits, failure atomicity, and current schema-owned complete-state loading;
 - `crates/chassis-runtime/tests/lifecycle_negative.rs`: product activation failure, state preservation, inactive post-failure state, successful reuse;
-- `crates/chassis-runtime/tests/realtime_alloc.rs`: repeated post-activation process calls with callback-thread allocation/deallocation counting;
+- `crates/chassis-runtime/tests/realtime_alloc.rs`: repeated typed automation completion with callback-thread allocation/deallocation counting, including choice replacement after control edits and decoded state loading;
 - `crates/chassis-runtime/tests/latency.rs`: activation-scoped latency snapshot/stability/removal/recomputation.
 
 Together these fixtures now exercise conventional effects, event-only processors, instruments, multi-output processors, multiple legal layouts/sidechains, dynamic/hosted schema metadata, direct non-plugin runtime use, and CLAP deployment through the same component/runtime ownership model. None required a second lifecycle, richer I/O-policy language, or mandatory helper family.
@@ -139,7 +141,9 @@ Implemented CLAP contract:
 - save obtains one coherent completed scalar generation;
 - a save racing a process block may linearize immediately before or after final automation-endpoint publication;
 - save never emits a mixed cross-parameter generation;
+- the publication token describes the whole store synchronized before DSP, not a generation reacquired afterward;
 - newer control/state publication prevents stale realtime completion from overwriting it;
+- failed publication invalidates the local generation cache, including at terminal exhaustion; coherent end sync restores the authoritative store or retries next block after contention;
 - state load is transactional and requests host value rescan after publication.
 
 Evidence exists at three levels:
