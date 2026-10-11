@@ -64,7 +64,7 @@ At code revision `1f7e4ca` on macOS arm64 with stable Rust 1.99.0:
 
 The new state regression tests failed on the original custom-field skip and lossy integer conversion before those fixes. Callback allocation/work evidence remains the specific tested configurations, not every possible client. No REAPER scenario or representative performance benchmark was rerun.
 
-Before this refresh, hosted [Rust CI](https://github.com/nijaru/chassis/actions/runs/34721268720) and [CLAP Conformance](https://github.com/nijaru/chassis/actions/runs/34721268697) both succeeded at `5bb628f`, with all Linux/macOS/Windows jobs successful (verified 2026-10-11). Those runs qualify that revision, not these changes.
+Hosted [Rust CI](https://github.com/nijaru/chassis/actions/runs/38118713085) and [CLAP Conformance](https://github.com/nijaru/chassis/actions/runs/38118713152) both succeeded at `05062c2` on 2026-10-11, qualifying the refreshed code with all Linux/macOS/Windows jobs successful, including CI's pinned dependency tools and packaged validator/fuzz matrix. Earlier successful runs at `5bb628f` remain historical evidence.
 
 ### Local validation — 2026-09-07
 
@@ -250,8 +250,8 @@ Retain golden fixtures for every released schema. The current CHSS v1 envelope r
 
 | Host / harness | Platform | Status | Evidence |
 | --- | --- | --- | --- |
-| Clack in-process host harness | Linux/macOS/Windows CI | passed at `5bb628f`; refreshed locally at `1f7e4ca` | adapter process/allocation, f32/f64, lifecycle, active state save, latency, re-entrancy, panic containment |
-| `clap-validator` 0.4.1 | Linux/macOS/Windows CI | passed at `5bb628f`; refreshed locally at `1f7e4ca` | 35 pass / 0 fail / 9 skip + bounded fuzz |
+| Clack in-process host harness | Linux/macOS/Windows CI | passed at `05062c2`; local code check at `1f7e4ca` | adapter process/allocation, f32/f64, lifecycle, active state save, latency, re-entrancy, panic containment |
+| `clap-validator` 0.4.1 | Linux/macOS/Windows CI | passed at `05062c2`; local code check at `1f7e4ca` | 35 pass / 0 fail / 9 skip + bounded fuzz |
 | REAPER 7.79 | macOS arm64 (M3 Max, 48 kHz) | 2026-09-06 baseline | 2026-09-06 headless `-renderproject` qualification: scan + instantiate (FX browser, 5 params enumerated), square `trim` automation render sample-exact against the deterministic reference (value changes land at exact sample offsets 24000/36000), injected-CHSS state load render sample-exact (trim 0.25/0.75; blobs byte-identical to a REAPER-saved blob at 0.5 and validated by the real `StateDocument` decoder), project save while the transport rolled through automation with coherent base state (trim=0.5, not torn) and sample-exact automation replay after reload, no-FX baseline render bit-identical to the source fixture, and PDC alignment: a wet track carrying the exported 64-sample delayed probe (`examples/clap-delayed-probe`) mixes against a dry track as exactly `2*x[i]` for all 48,000 frames — REAPER honored the CLAP latency extension and aligned the delayed DSP sample-exact. Host-quirk recorded: `TrackFX_SetParamNormalized` on an inactive CLAP reports success but delivers no change; the differential shows FabFilter Pro-Q 4 (CLAP) behaving identically while ReaEQ (VST) applies immediately, so this is REAPER's inactive-CLAP delivery behavior, not an adapter defect — the automation path (process events) is sample-exact. |
 | Bitwig | — | not run | production-host re-entrancy confirmation remains useful when available |
 
