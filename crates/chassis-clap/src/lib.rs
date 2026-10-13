@@ -9,6 +9,7 @@
 mod audio;
 mod parameters;
 mod process_audio;
+mod raw_audio;
 
 use core::{fmt::Write as _, marker::PhantomData, num::NonZeroU32};
 use std::{
@@ -186,6 +187,7 @@ where
     control_values: Vec<f64>,
     parameter_generation: Option<u64>,
     process_slots: Vec<ClapProcessSlot>,
+    audio_scratch: raw_audio::AudioScratch,
     _precision: PhantomData<fn() -> M>,
 }
 
@@ -385,6 +387,7 @@ where
         .map_err(PluginError::from)?;
     process_slots.extend_from_slice(main_thread.audio.process_slots());
 
+    let audio_scratch = raw_audio::AudioScratch::new(&process_slots)?;
     let mut processor = ChassisAudioProcessor {
         runtime,
         host,
@@ -394,6 +397,7 @@ where
         control_values,
         parameter_generation: None,
         process_slots,
+        audio_scratch,
         _precision: PhantomData::<fn() -> M>,
     };
     processor.sync_parameters()?;
@@ -720,7 +724,8 @@ where
         self.sync_parameters()?;
         let generation = self.parameter_generation;
         let transport = map_transport(process.transport)?;
-        let mut buffers = ClapBufferSource::<S>::new(audio, &self.process_slots)?;
+        let mut buffers =
+            ClapBufferSource::<S>::new(audio, &self.process_slots, &mut self.audio_scratch)?;
         let frame_count = buffers.frame_count();
 
         normalized_events(

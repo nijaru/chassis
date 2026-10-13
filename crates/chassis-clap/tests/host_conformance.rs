@@ -43,7 +43,7 @@ fn counting_this_thread() -> bool {
     COUNT_THIS_THREAD.try_with(Cell::get).unwrap_or(false)
 }
 
-// Test instrumentation only. Production Chassis crates remain safe Rust.
+// Test allocator instrumentation, separate from the adapter's raw audio boundary.
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         if counting_this_thread() {
@@ -461,6 +461,71 @@ fn measure_f64_adapter_path(
     }
 }
 
+fn exercise_raw_aliases(processor: &mut StartedPluginAudioProcessor<TestHostHandlers>) {
+    let mut main = [[1.0f32; 65]; 2];
+    let mut sidechain = [[0.0f32; 64]; 2];
+    let mut main_table = main.each_mut().map(|samples| samples.as_mut_ptr());
+    let mut sidechain_table = sidechain.each_mut().map(|samples| samples.as_mut_ptr());
+    let mut output_table = main_table;
+    let mut dummy = [0.0f32; 64];
+    let mut ports = AudioPorts::with_capacity(1, 1);
+    let prototype = ports
+        .with_input_buffers([AudioPortBuffer {
+            channels: AudioPortBufferType::f32_input_only([InputChannel::variable(&mut dummy)]),
+            latency: 0,
+        }])
+        .as_raw_buffers()[0];
+    let mut inputs = [prototype; 2];
+    let mut outputs = [prototype];
+    inputs[0].channel_count = 2;
+    inputs[0].data32 = main_table.as_mut_ptr();
+    inputs[1].channel_count = 2;
+    inputs[1].data32 = sidechain_table.as_mut_ptr();
+    outputs[0].channel_count = 2;
+    outputs[0].data32 = output_table.as_mut_ptr();
+    let events = EventBuffer::with_capacity(0);
+    let mut output_events = EventBuffer::with_capacity(0);
+    for partial in [false, true] {
+        if partial {
+            output_table[0] = main_table[0].wrapping_add(1);
+        }
+        // SAFETY: descriptors, tables, and initialized sample allocations remain
+        // live and cover 64 frames. The first callback is legal declared in-place;
+        // the second deliberately probes rejection of partial sample overlap.
+        // Neither host helper creates sample references from these pointers.
+        let input_audio = unsafe { InputAudioBuffers::from_raw_buffers(&inputs, 64) };
+        let mut output_audio = unsafe { OutputAudioBuffers::from_raw_buffers(&mut outputs, 64) };
+        ALLOCATIONS.store(0, Ordering::Relaxed);
+        DEALLOCATIONS.store(0, Ordering::Relaxed);
+        // Clack's fixed-pin error reporter formats/logs rejected callbacks;
+        // its failure path is not realtime allocation-free. Measure acceptance
+        // here, and separately check that partial overlap terminates processing.
+        COUNT_THIS_THREAD.with(|counting| counting.set(!partial));
+        let result = processor.process(
+            &input_audio,
+            &mut output_audio,
+            &events.as_input(),
+            &mut output_events.as_output(),
+            None,
+            None,
+        );
+        COUNT_THIS_THREAD.with(|counting| counting.set(false));
+        assert_eq!(result.is_ok(), !partial);
+        if !partial {
+            assert_eq!(ALLOCATIONS.load(Ordering::Relaxed), 0);
+            assert_eq!(DEALLOCATIONS.load(Ordering::Relaxed), 0);
+        }
+    }
+    for channel in main {
+        assert!(
+            channel[..64]
+                .iter()
+                .all(|sample| (*sample - 0.5).abs() <= f32::EPSILON)
+        );
+        assert!((channel[64] - 1.0).abs() <= f32::EPSILON);
+    }
+}
+
 #[test]
 fn full_adapter_process_path_is_allocation_free_at_event_bound_for_f32_and_f64() {
     let entry =
@@ -556,6 +621,8 @@ fn full_adapter_process_path_is_allocation_free_at_event_bound_for_f32_and_f64()
             Some(expected)
         );
     }
+    // Rejection terminates the run, so perform this probe last.
+    exercise_raw_aliases(&mut processor);
     plugin.deactivate(processor.stop_processing());
 }
 
