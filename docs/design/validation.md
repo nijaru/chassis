@@ -51,6 +51,24 @@ These gates do not establish production DAW behavior or representative performan
 
 Hosted workflows and local results are separate evidence. Before publication, hosted jobs were rejected and local checks supplied the interim record. Consult the actual workflow run for the revision under review before claiming Linux/macOS/Windows coverage. The dated validator, host, and benchmark results below are baselines, not automatic qualification of later commits.
 
+### Boundary redesign qualification — 2026-10-13
+
+At code revision `b0dce56` on macOS arm64 with stable Rust 1.99.0:
+
+- workspace tests: 181 passed, including whole callback topology, dense-choice atomic rejection/canonical persistence, active custom-state restart/reversion, typed/migrated invalid-state rejection, stepped CLAP conversion, output masks, and exported delay reset;
+- formatting, strict all-feature/all-target Clippy, release workspace build, and warning-denied rustdoc: passed;
+- `cargo deny check` 0.19.0: passed with unused-license-allowance warnings; `cargo machete` 0.9.1: no unused dependencies. Local tooling differs from CI's pins;
+- three focused `raw_audio::tests` passed Miri under default Stacked Borrows and `-Zmiri-tree-borrows`, using nightly 1.101.0 (`080cc2714`, 2026-10-11); a fresh independent source review found no new code-safety blocker;
+- accepted actual-entry callbacks, including legal exact-in-place audio, remain allocation/deallocation-free in the measured configurations;
+- packaged conformance: 35 passed / 0 failed / 9 skipped; delayed probe: 21 passed / 0 failed / 23 skipped;
+- installed pinned `clap-validator` 0.4.1, revision `b2f1d9b79b1d264a5747f46707d72b1aa40a02ef`: both five-second, two-worker fuzz runs passed.
+
+Whole-topology and policy-order regression tests failed at original revision `c936496`; state/adapter regressions also failed before their fixes. The schema-immutability doctest now supplies a valid component definition, with a positive compile probe confirming that forbidden schema replacement is its failure reason. Obsolete callback choice-text validation was removed: dense choice indices now carry that contract, while stable IDs remain validated at setup/persistence boundaries.
+
+**Unclosed qualification gap:** pinned Clack's process-error reporter allocates/formats for host logging or writes stderr. A temporary warmed actual-entry rejection probe observed one allocation before returning. Valid-callback evidence does not qualify rejected callbacks or arbitrary DSP panics; see the [source audit](../research/clack-pinned-adapter-audit.md). Host pointer provenance/extent, initialization, metadata separation, and concurrency remain obligations.
+
+No production DAW scenario or representative performance benchmark was rerun. The previous safe-pair benchmark does not measure the new O(C²) raw alias boundary. Linux/Windows qualification is hosted evidence, not a claim from these local checks.
+
 ### Refresh validation — 2026-10-11
 
 At code revision `e5be210` on macOS arm64 with stable Rust 1.99.0:
@@ -86,7 +104,8 @@ Tests under `crates/chassis-clap/tests/` exercise the actual exported Chassis CL
 
 Current cases include:
 
-- `host_conformance.rs`: f32/f64 callback dispatch, stereo main + stereo sidechain, configured 64-event bound, full callback allocation/deallocation counting, reactivation, latency callbacks, audio-thread transfer, repeated inactive instances;
+- `host_conformance.rs`: f32/f64 callback dispatch, stereo main + stereo sidechain, configured 64-event bound, accepted-callback allocation/deallocation counting, stepped conversion through display/flush/process, output constant masks, legal raw in-place audio, illegal partial-alias rejection, reactivation, latency callbacks, audio-thread transfer, repeated inactive instances;
+- `exported_probe_reset.rs`: actual exported delay fixture reset clears history/positions without allocation and retains the activation delay;
 - `host_frame_bounds.rs`: activation frame extremes and over-bound rejection;
 - `host_activation_failure.rs`: product activation failure and same-instance retry, explicit descriptor feature preservation, and rejection of schemas whose event ports CLAP cannot yet project;
 - `host_latency_audio.rs`: nonzero reported latency matching actual delayed audio;
@@ -200,7 +219,7 @@ Pinned validator/fuzz additionally exercises lifecycle sequencing.
 
 ## Panic / FFI boundary
 
-`chassis-runtime` forbids unsafe code. Production Chassis currently relies on Clack for raw CLAP pointer/alias validation, safe channel views, and panic containment at FFI callbacks.
+`chassis-runtime` forbids unsafe code. Clack owns raw CLAP ABI lifecycle/descriptor borrowing and panic containment. Chassis owns sample-pointer/alias classification and reference construction in the narrow `chassis-clap/src/raw_audio.rs` boundary; host allocation/concurrency obligations remain explicit. The [audit](../research/clack-pinned-adapter-audit.md) records those invariants and the unclosed allocating/logging process-error path.
 
 Pinned Clack wraps plugin FFI handlers in `std::panic::catch_unwind`. Chassis executable evidence establishes:
 
@@ -212,7 +231,7 @@ Do not infer that arbitrary DSP state is valid for continued processing after a 
 
 Test-only allocator instrumentation uses `GlobalAlloc` forwarding with explicit safety comments and does not alter the production unsafe boundary.
 
-If Chassis later owns unsafe adapter code, isolate it, document discharged invariants, keep `unsafe_op_in_unsafe_fn` denied, and add matching Miri/sanitizer/native evidence where modelable.
+Chassis-owned unsafe code is isolated in the adapter's raw audio module, with explicit discharged/host invariants and `unsafe_op_in_unsafe_fn` denied. Focused Miri tests cover f32/f64 exact pairs, disjoint/shared-input topology, partial/cross-channel/cross-port writable rejection, and empty views; native actual-entry tests cover acceptance and rejection. These checks are not a proof for arbitrary invalid C pointers.
 
 ## Re-entrancy evidence
 
@@ -254,8 +273,8 @@ Retain golden fixtures for every released schema. The current CHSS v1 envelope r
 
 | Host / harness | Platform | Status | Evidence |
 | --- | --- | --- | --- |
-| Clack in-process host harness | Linux/macOS/Windows CI | passed at `05062c2`; local code check at `1f7e4ca` | adapter process/allocation, f32/f64, lifecycle, active state save, latency, re-entrancy, panic containment |
-| `clap-validator` 0.4.1 | Linux/macOS/Windows CI | passed at `05062c2`; local code check at `1f7e4ca` | 35 pass / 0 fail / 9 skip + bounded fuzz |
+| Clack in-process host harness | Linux/macOS/Windows CI | passed at `c936496`; macOS local at `b0dce56` | adapter process/allocation, f32/f64, lifecycle, active state save, latency, re-entrancy, panic containment |
+| `clap-validator` 0.4.1 | Linux/macOS/Windows CI | passed at `c936496`; macOS local at `b0dce56` | 35 pass / 0 fail / 9 skip + bounded fuzz |
 | REAPER 7.79 | macOS arm64 (M3 Max, 48 kHz) | 2026-09-06 baseline | 2026-09-06 headless `-renderproject` qualification: scan + instantiate (FX browser, 5 params enumerated), square `trim` automation render sample-exact against the deterministic reference (value changes land at exact sample offsets 24000/36000), injected-CHSS state load render sample-exact (trim 0.25/0.75; blobs byte-identical to a REAPER-saved blob at 0.5 and validated by the real `StateDocument` decoder), project save while the transport rolled through automation with coherent base state (trim=0.5, not torn) and sample-exact automation replay after reload, no-FX baseline render bit-identical to the source fixture, and PDC alignment: a wet track carrying the exported 64-sample delayed probe (`examples/clap-delayed-probe`) mixes against a dry track as exactly `2*x[i]` for all 48,000 frames — REAPER honored the CLAP latency extension and aligned the delayed DSP sample-exact. Host-quirk recorded: `TrackFX_SetParamNormalized` on an inactive CLAP reports success but delivers no change; the differential shows FabFilter Pro-Q 4 (CLAP) behaving identically while ReaEQ (VST) applies immediately, so this is REAPER's inactive-CLAP delivery behavior, not an adapter defect — the automation path (process events) is sample-exact. |
 | Bitwig | — | not run | production-host re-entrancy confirmation remains useful when available |
 

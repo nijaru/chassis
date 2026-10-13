@@ -28,7 +28,7 @@ The repository selects the stable Rust toolchain and Edition 2024. CLAP dependen
 | [clap-conformance](examples/clap-conformance) | Focused parameter/automation/state conformance component |
 | [clap-delayed-probe](examples/clap-delayed-probe) | Fixed-delay component for latency/PDC qualification |
 
-CLAP note/event and complete custom-state projection are not yet implemented. Unsupported event-port schemas and custom state fields are rejected rather than silently discarded.
+CLAP note/event and complete custom-state projection are not yet implemented. Unsupported event-port schemas and custom state fields are rejected rather than silently discarded. Accepted callbacks pass allocation checks, but pinned Clack's rejected-callback error reporting can allocate or perform logging; strict realtime failure handling remains a qualification blocker.
 
 Planned framework layers include common DSP utilities, editor integration, VST3/Audio Unit deployment, audio/MIDI devices, standalone deployment, graph/scheduling, plugin hosting, media/offline processing integration, and release/conformance tooling. Package boundaries are created only where dependency, safety, optionality, or release boundaries justify them.
 

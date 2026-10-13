@@ -68,7 +68,9 @@ Float automation trajectories are evaluated lazily through cursors rather than e
 
 ## CLAP mapping
 
-`ClapAudioConfiguration` validates explicit stable `ClapAudioPort` metadata and builds setup-owned `ClapProcessSlot` mappings. `ClapBufferSource` then traverses Clack's safe `ChannelPair` relationships directly.
+`ClapAudioConfiguration` validates explicit stable `ClapAudioPort` metadata and builds setup-owned `ClapProcessSlot` mappings. `raw_audio` reads Clack-borrowed descriptors and raw pointer tables, validates the complete mapped sample alias topology, then creates channel references lazily for `ClapBufferSource`. It bypasses pinned Clack's reference-first sample pairing; the `ChannelPair` enum is only the resulting safe representation.
+
+The host must supply live descriptor/table/sample allocations, sufficient initialized sample extent, metadata separate from sample memory, and exclusive writable access for the callback. Chassis checks nullness, alignment, address arithmetic, representation, and aliases, not arbitrary pointer provenance or actual allocation length.
 
 The adapter handles:
 
@@ -78,7 +80,9 @@ The adapter handles:
 - mapped auxiliary/sidechain ports;
 - f32 or f64 callbacks selected consistently across the mapped configuration.
 
-An exact alias supplied for unrelated semantic ports is rejected before DSP because the same mutable region cannot safely represent two independent outputs/owners.
+All overlap involving writable samples is rejected before any sample reference exists, except an exact declared reciprocal input/output pair at the same channel, represented by one mutable slice. Shared input/input overlap is allowed. Partial pair, cross-channel/cross-port, and duplicate writable overlap are rejected. Empty views use aligned dangling pointers.
+
+Scratch storage is O(C) and whole alias validation is O(C²), bounded by activation-mapped channels rather than callback-supplied counts. This is a correctness-first boundary, not a claim that large topologies have constant overhead. Output constant masks are conservatively cleared because the current processor contract makes no constant-output promise.
 
 Mapped port count, channel count, sample representation, relationship shape, and callback frame count are checked before product traversal.
 

@@ -50,7 +50,7 @@ Accept and resolve one whole I/O configuration before creating active resources.
 
 Latency is established and snapshotted for one activation. A resource/latency change requests restart/reactivation; it does not make new latency authoritative mid-run. The current resources remain valid until the environment completes the lifecycle transition.
 
-Safe buffers preserve exact in-place, disjoint, input-only, and output-only relationships. Adapters prove alias/lifetime validity before constructing references. Illegal partial overlap is a boundary failure. Bounded copies are acceptable where they simplify ownership; zero-copy is not a goal by itself.
+Safe buffers preserve exact in-place, disjoint, input-only, and output-only relationships. Every callback covers the accepted endpoint set uniquely and completely. Adapters classify whole-topology aliases before constructing sample references, while host allocation/provenance/concurrency obligations remain explicit. Illegal partial or cross-channel writable overlap is a boundary failure. Bounded copies are acceptable where they simplify ownership; zero-copy is not a goal by itself.
 
 Process modes distinguish realtime, buffered realtime, and offline work. Offline can choose a more expensive deterministic algorithm, but must not depend on wall-clock task races. Random-access or multi-pass workflows may need a separate contract rather than distorting block processing.
 
@@ -60,7 +60,7 @@ Detailed owners: [runtime](design/runtime.md), [component schema](design/compone
 
 Keep durable/base values, automation trajectories, modulation, and effective DSP values distinct. Explicit host ramps are not automatically smoothed. Timed streams preserve offsets and the ordering the source actually supplies; independent streams do not acquire a causal total order merely from equal timestamps.
 
-State load decodes, migrates, and validates a temporary complete candidate before publication. Active save captures one completed semantic generation. Newer control/state publication defeats stale realtime completion. Processor history is not persisted merely because it is serializable.
+State load decodes, migrates, and validates a temporary complete candidate before publication. Typed documents are valid at construction, including migration output. Accepted active custom-state changes explicitly request reactivation; existing resources stay valid until that transition. Active save captures one completed semantic generation. Newer control/state publication defeats stale realtime completion. Processor history is not persisted merely because it is serializable.
 
 Core complete-state/note capabilities are broader than current CLAP projection. Each deployment must map them faithfully or reject unsupported use. Do not silently discard custom state, note identity, modulation, or labeled layout semantics. CHSS bytes and public APIs remain provisional.
 

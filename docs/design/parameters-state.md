@@ -14,7 +14,7 @@ ParameterKey (persistent) -> ParameterIndex (runtime only)
 
 Adapters resolve backend IDs to dense indices during setup. `ParameterIndex` is never serialized.
 
-Choice option identities are stable semantic IDs; CLAP projects choices onto dense plain-value option indices with option-name display round trips.
+Choice option identities are stable semantic IDs for control/persistence. Setup resolves them to parameter-local `ChoiceIndex` values for events; callbacks validate/index options without scanning strings. These indices are never serialized. CLAP uses stepped plain option indices, advertises enum metadata, and rejects labels that cannot round-trip unambiguously. Per [CLAP's stepped contract](https://github.com/free-audio/clap/blob/main/include/clap/ext/params.h), in-range host doubles truncate toward zero consistently in process/flush/display conversion. Typed semantic stores and decoded state remain strict; host quantization does not weaken them.
 
 ## Four parameter concepts
 
@@ -27,7 +27,7 @@ Keep these distinct:
 
 Base values and automation are implemented. Modulation and its combination contract remain pending.
 
-`ParameterEvents` and trajectory cursors are borrowed block views, not another persistent state store.
+`ParameterEvents` and trajectory cursors borrow fixed-width event slices, not choice text or another persistent state store. The accepted event count therefore bounds shape-validation work independently of identifier length.
 
 Explicit host ramps are reproduced without automatic extra smoothing. Smoothing remains product DSP policy unless real clients prove a common helper.
 

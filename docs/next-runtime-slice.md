@@ -1,53 +1,66 @@
 # Current Execution Plan
 
-This file owns the immediate implementation sequence. [Roadmap](roadmap.md) owns deferred framework work; [validation](design/validation.md) owns executed evidence. Neither a plan nor passing historical tests is a compatibility promise.
+This file owns immediate sequencing. [Roadmap](roadmap.md) owns deferred framework scope; [validation](design/validation.md) owns executed evidence. All APIs and CHSS bytes remain pre-alpha.
 
-## Current foundation
+## Design decision after the boundary audit
 
-The format-independent runtime has one schema/state/lifecycle model exercised by effects, event-only components, a note-driven instrument, multiple outputs, layout/sidechain reactivation, and runtime-owned metadata. It supports f32/f64, sample-accurate parameter automation, transactional semantic state, activation-scoped latency/restart, and bounded `f32` telemetry.
+Retain the format-independent `ComponentSchema` / `InstanceRuntime<P>` / `Processor` ownership split and the runtime-versus-CLAP package boundary. The heterogeneous clients and publication tests support those choices. The audit exposed weak admission and transition contracts, not a need for another lifecycle, facade, graph model, or I/O-policy language.
 
-The CLAP adapter is narrower: fixed mapped audio configurations, scalar parameters/automation/state, render mode, and latency. `ClapComponent` now supplies explicit feature metadata rather than inferring stereo-effect semantics. It does not project note ports, event output, modulation, or complete custom semantic state. Core proof does not establish those deployment capabilities.
+The implemented corrections are:
 
-The package boundary is runtime semantics (`chassis-runtime`) versus format deployment (`chassis-clap`). No other production package is needed yet.
+- complete, unique, activation-bounded callback audio topology rather than independent endpoint checks;
+- adapter-owned raw alias classification before sample references, with host allocation/concurrency obligations explicit;
+- dense parameter-local choice events rather than callback string validation;
+- valid semantic documents at construction, including migration output;
+- explicit reactivation requests for accepted active custom-state changes;
+- faithful CLAP stepped values, discrete layouts, output metadata, choice labels, and exported reset behavior;
+- explicit destructive input-to-output initialization rather than a misleading mutable accessor.
 
-Runtime automation completion now owns durable endpoints for direct and deployed clients. CLAP projects the completed store with the synchronized pre-DSP generation; newer control/state publication wins. The [parameter/state contract](design/parameters-state.md) specifies carryover and block-local ramps.
+Their contracts live in [buffers](design/process-buffers.md), [parameters/state](design/parameters-state.md), [runtime](design/runtime.md), and the [Clack audit](research/clack-pinned-adapter-audit.md). They do not make the broader framework production-ready.
 
-CLAP rejects event-port schemas at setup and custom state entries on load. Complete state/migration/product-validation projection remains unfinished; these rejections are containment, not implementation of that capability.
+## Next — close the realtime failure boundary
 
-## Next — parameter authoring contract
+Pinned Clack reports rejected process callbacks through formatting/allocation or logging. Accepted-callback zero-allocation evidence does not qualify that failure path. Its safe process-status API currently represents `CLAP_PROCESS_ERROR` only through the reporting error path.
 
-Parameter descriptors already validate typed values and map plain/normalized ranges; CLAP already supplies basic numeric and choice text conversion. The missing contract is an author-defined mapping/formatting policy that both DSP and deployments consume, not a second generic normalization layer.
+1. Establish a nonlogging, nonallocating process-error return path at the ABI boundary. Do not disguise rejection as successful processing or rely on panic to suppress reporting.
+2. Review the relevant source delta before changing the audited dependency pin or owning another FFI callback.
+3. Measure valid and rejected actual-entry callbacks separately, then rerun lifecycle/panic, packaged validator/fuzz, and platform gates.
 
-1. Specify domains, units, display precision, parsing, and stepped/choice round-trip rules.
-2. Implement the policy at its semantic owner and migrate CLAP conversion to it.
-3. Prove nonlinear mapping, invalid input, endpoints, and supported round trips through the public API and actual adapter entry point.
+Registry Clack 0.2.0 is a source-review candidate, not an assumed fix. Keep the current pin until the replacement passes review and conformance.
 
-Do not add macros or a new crate to make these declarations shorter before the ordinary API is coherent.
+## Then — component-owned complete state
 
-## Following core contracts
+The runtime can now publish valid complete state and request custom-state reactivation, but product defaults, validation, and migration are still supplied by callers rather than one component-owned contract. CLAP still projects scalar state only and rejects custom fields/event-port schemas.
 
-Implement one contract at a time with its deployment projection and focused fixture:
+1. Give the component one complete-state defaults/validation/migration contract and one activation preparation hook. Remove the historical activation-hook chain when migrating callers; do not preserve it as a compatibility family.
+2. Exercise a resource-backed component whose custom state prepares activation-scoped DSP resources. Prove default construction, rejected candidates, active-load restart, state save/reopen, and deterministic reactivation before extending deployment state.
+3. Project one coherent parameter/custom semantic generation across inactive and active CLAP lifetimes. Complete migration and product validation at that boundary; never combine independently sampled scalar/custom snapshots.
 
-- sample-accurate modulation, separate from base state and automation, with explicit combination policy;
-- tail reporting distinct from latency;
-- host bypass identity/timing and product DSP policy, without treating bypass as dry/wet;
-- note-port/input CLAP projection and a real non-effect export using `ClapComponent` with explicit descriptor features;
+Start with reactivation-based resource replacement. Bounded prepared adoption, coalescing, stale-result rejection, deferred reclamation, cancellation, and unload fencing need a concrete client before choosing a queue or executor. No hidden global executor or last-owner `Arc` destruction on the callback.
+
+## Parameter authoring policy
+
+Descriptors validate typed plain-unit domains. CLAP supplies scalar plain-value conversion and basic numeric/choice text; a shared normalized-control mapping and author-defined formatting/parsing policy are not implemented.
+
+Specify domain mapping, units, precision, parsing, and stepped/choice round trips at the semantic owner. Migrate deployments to that policy and prove nonlinear mapping, endpoints, invalid input, and supported round trips through the actual adapter. Dense callback values remain separate from display/control mapping. Do not add macros or a crate before the ordinary API is coherent.
+
+## Following audio contracts
+
+Deliver each contract with its deployment projection and focused fixture:
+
+- modulation separate from base state/automation, with explicit timing and combination policy;
+- tail separate from latency;
+- host bypass identity/timing and product DSP policy, not a generic dry/wet control;
+- note-port/input CLAP projection and a non-effect export with honest descriptor features;
 - bounded output events, expression, MIDI 1/SysEx, and MIDI 2/UMP with explicit rejection rather than destructive translation.
 
-Resolve cross-format semantic questions at each boundary rather than declaring all core APIs closed before an adapter exercises them. Speaker layouts and richer I/O policies remain demand-driven; current heterogeneous fixtures do not show a need for a policy language.
-
-## Communication and background work
-
-Fixed-width coherent DSP-to-control telemetry exists. Prepared control-to-DSP objects, deferred reclamation, and background tasks do not.
-
-A resource-backed fixture must establish ownership, replacement/coalescing, generation/stale-result rejection, cancellation, shutdown/unload, and offline determinism before choosing an executor or queue. No hidden global executor or general lock-free container library.
+Speaker layouts and richer I/O policies remain demand-driven. Core proof is not format support, and additional formats/editors/devices/graphs do not justify freezing incomplete semantic surfaces.
 
 ## Qualification maintenance
 
-- Run current Rust/dependency gates; keep local and hosted compiler/tool evidence distinct.
-- Review the published Clack 0.2.0 source against the audited pin before deciding whether to adopt its registry release. A source change requires renewed adapter conformance.
-- Rebuild/package both CLAP fixtures and run the pinned validator plus bounded fuzz after adapter changes.
-- Refresh real-host automation, state/save-reopen, active-save, and PDC evidence when a production DAW is available. The September REAPER record remains a historical baseline.
-- Refresh representative performance only when making a comparison or renewing a performance claim.
+- Keep current Rust/dependency gates and revision-scoped platform evidence distinct.
+- After adapter changes, rebuild/package both fixtures and run the pinned validator plus bounded fuzz.
+- Refresh real-host automation, save/reopen, active save, restart, and PDC when a production DAW is available; the September REAPER record is historical.
+- Refresh representative performance when making a comparison or renewing a claim. The old safe-pair benchmark does not measure the new raw alias boundary.
 
-Existing products remain optional integration evidence. Tonal EQ parity or redesign is not a Chassis prerequisite, and no product repository is migrated implicitly.
+Existing products remain optional integration evidence. No product migration, version milestone, publication, or deployment is implied by this plan.

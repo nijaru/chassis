@@ -2,9 +2,13 @@
 
 This file owns unresolved decisions, not implemented inventories or a second roadmap. [Execution plan](../next-runtime-slice.md) owns next work; [validation](validation.md) owns evidence; [roadmap](../roadmap.md) owns deferred scope. All APIs and CHSS bytes remain pre-alpha.
 
+## Realtime failure reporting
+
+Accepted CLAP callbacks are allocation-qualified, but pinned Clack formats/allocates or logs when reporting a rejected callback. Which reviewed ABI path can return processing failure without that work? Keep actual rejection and panic containment; successful status or panic-based suppression is not a substitute. The [Clack audit](../research/clack-pinned-adapter-audit.md) owns the source finding.
+
 ## Parameter authoring policy
 
-Plain/normalized linear mapping and basic CLAP text conversion already exist. What semantic policy should own nonlinear mapping, units, formatting/parsing, display precision, stepped rounding, and meaningful round trips? DSP, editors, and deployment adapters must not maintain competing mappings. Keep stable choice identity independent of display names and backend indices.
+Typed plain-unit domains and basic CLAP scalar/text conversion exist; a shared normalized-control mapping does not. What semantic policy should own nonlinear mapping, units, formatting/parsing, display precision, stepped rounding, and meaningful round trips? DSP, editors, and deployment adapters must not maintain competing mappings. Keep stable choice identity independent of display names and backend indices.
 
 ## Modulation and event ordering
 
@@ -14,7 +18,7 @@ See [events/transport](events-transport.md) for the accepted ordering constraint
 
 ## Complete deployment state
 
-Core owns complete transactional parameter/custom state and adjacent migrations. CLAP currently persists parameters only and rejects custom fields; it has no complete-state migration/product-validation projection. Define durable inactive/active ownership across adapter lifetimes before extending publication to prepared objects. State save must capture one coherent completed semantic generation, not merely independent scalar and custom snapshots.
+Core owns valid complete transactional parameter/custom state and adjacent migrations. Accepted active custom changes explicitly request reactivation while old DSP resources remain valid. Product defaults, validation, and migration still need one component-owned contract rather than caller-by-caller wiring. CLAP currently persists parameters only and rejects custom fields; it has no complete-state migration/product-validation projection. Define durable inactive/active ownership across adapter lifetimes before extending publication to prepared objects. State save must capture one coherent completed semantic generation, not merely independent scalar and custom snapshots.
 
 When should the provisional CHSS envelope become a compatibility promise? Released-schema fixtures, cross-format round trips, resource limits, and an explicit compatibility policy must justify that decision; the existing binary fixture alone does not.
 

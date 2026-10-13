@@ -63,16 +63,21 @@ This maps to Chassis as follows:
 
 The in-process host suite now exercises plugin -> host -> plugin re-entry through parameter-rescan and latency-change callbacks in addition to the pinned dependency's own re-entrancy tests.
 
-## Buffer boundary
+## Buffer boundary — reviewed 2026-10-13
 
-The pinned Clack safe audio API distinguishes:
+Pinned Clack's `plugin/src/process/audio/pair.rs` constructs shared/mutable sample references before comparing their pointers. Exact-in-place behavior failed a default Miri probe while Tree Borrows passed; this is model-dependent evidence, not a demonstrated native crash. That API also does not establish whole callback partial/cross-channel/cross-port alias legality. The earlier attribution of complete pointer/alias validation to Clack was too strong.
+
+Chassis now bypasses that sample-pair constructor. Clack's `Audio::raw_buffers()` supplies descriptor borrows; `chassis-clap/src/raw_audio.rs` reads pointer tables without constructing table/sample slices, validates complete mapped aliases, then constructs:
+
 
 - `ChannelPair::InputOnly`;
 - `ChannelPair::OutputOnly`;
 - `ChannelPair::InputOutput` for disjoint input/output;
 - `ChannelPair::InPlace` for exact aliasing represented by one mutable slice.
 
-Chassis preserves those safe relationships through setup-built mapped process slots and a lazy generic `ProcessBufferSource`. It does not construct a callback-owned channel `Vec` or erase lifetimes with Chassis-owned unsafe code.
+The adapter permits shared inputs and exact declared reciprocal in-place pairs; all other overlap involving writable samples is rejected before sample references. Chassis-owned unsafe code is isolated in `raw_audio`, with activation-owned scratch, O(C) storage, O(C²) alias validation, and lazy views borrowing the live source. Its scratch `Send` transfers no sample ownership. `chassis-runtime` still forbids unsafe code.
+
+The host must supply valid live descriptor arrays and readable pointer tables, correctly initialized sample allocations of sufficient extent, metadata separate from samples, and exclusive writable access. Null/alignment/address/alias checks cannot prove pointer provenance, allocation length, initialization, or concurrency. Miri and native tests support the modeled paths, not arbitrary invalid C pointers.
 
 Current in-process tests cover mapped main + sidechain topology, f32/f64 paths, minimum/maximum frame bounds, configured maximum parameter-event load, and allocation/deallocation across the complete adapter callback path.
 
@@ -87,7 +92,7 @@ CLAP start/process/stop        -> Clack lifecycle + Chassis process callback
 CLAP reset                     -> InstanceRuntime::reset
 CLAP deactivate                -> InstanceRuntime::deactivate
 CLAP audio ports               -> setup-built stable mapped ports/process slots
-CLAP process f32/f64           -> safe ChannelPair views -> ProcessBufferSource -> InstanceRuntime
+CLAP process f32/f64           -> raw alias qualification -> safe views -> InstanceRuntime
 CLAP params                    -> typed metadata + bounded value-event normalization/publication
 CLAP state                     -> bounded CHSS save/load + transactional parameter publication
 CLAP render                    -> ProcessMode::Realtime / ProcessMode::Offline
@@ -115,7 +120,13 @@ Current mechanical evidence includes:
 - nonzero latency metadata matches an actual delayed impulse;
 - state-rescan and latency host callbacks tolerate immediate plugin extension re-entry.
 
-Chassis still relies on Clack for the raw C ABI and pointer/alias validation. `chassis-runtime` remains `#![forbid(unsafe_code)]`; current adapter production code adds no Chassis-owned unsafe block.
+Clack remains the ABI/lifecycle/panic-containment owner, not the sample alias-validation owner. The reviewed Chassis adapter supplies that sample boundary.
+
+### Unclosed realtime failure path
+
+Pinned `plugin/src/plugin/logging.rs` formats/allocates for host logging or writes stderr on error; `extensions/wrapper.rs` reaches it when process returns a `PluginError`. A temporary rejected actual-entry alias probe observed one allocation with the warmed in-process harness at `b0dce56`; exact counts depend on logging/warm-up conditions. The safe `ProcessStatus` API has no nonreporting error variant. Valid-callback allocation tests do not qualify rejection paths, and arbitrary DSP panics are not realtime-safe recovery.
+
+A reviewed nonlogging/nonallocating process-error ABI path remains a qualification blocker. Do not report success for an invalid callback, suppress reporting through panic, or alter the dependency pin without source review and renewed adapter conformance.
 
 ## Current qualification boundary
 

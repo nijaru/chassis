@@ -95,7 +95,7 @@ Dependencies are acceptable at non-realtime edges much more readily than on the 
 | CPAL | standalone audio device I/O candidate | Apache-2.0 | compatible; standalone/device layer only |
 | midir | standalone MIDI I/O candidate | MIT | compatible; standalone/device layer only |
 
-The CLAP adapter currently uses only Clack's safe plugin/process/audio APIs. Chassis owns no raw CLAP pointer dereference in this slice. That reduces our initial unsafe surface, but does not remove the obligation to review Clack's unsafe/lifetime implementation before production qualification.
+Clack still owns CLAP ABI lifecycle, descriptor borrowing, and panic containment. Chassis now owns a narrow unsafe sample-pointer boundary in `chassis-clap/src/raw_audio.rs`: it classifies the entire mapped alias topology before creating sample references rather than using pinned Clack's reference-first channel pairing. The pin is unchanged. Host pointer provenance/extent, initialization, metadata separation, and concurrency remain obligations; see the [audit](research/clack-pinned-adapter-audit.md). Its allocating/logging rejection path remains a realtime qualification blocker.
 
 ## AAX exception
 

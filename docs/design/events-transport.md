@@ -164,6 +164,8 @@ If a backend requires normalization/merge scratch, allocate it before processing
 - where loss would violate product correctness, fail/contain according to the adapter contract rather than produce knowingly wrong output;
 - display-only telemetry has different drop semantics and belongs to the telemetry contract, not this input-event path.
 
+Choice events carry setup-resolved parameter-local `ChoiceIndex`, not stable identifier text. Stable IDs remain control/persistence metadata; event validation does not scan host-controlled strings.
+
 The processor never triggers unbounded allocation merely because a host delivered many events. Where the host API permits querying event count, validate/bound work against the current process call and implementation limits with an explicit failure path.
 
 ## Output events
