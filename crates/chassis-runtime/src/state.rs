@@ -52,23 +52,19 @@ impl StateValue {
         }
     }
 
-    fn validate(&self, limits: StateLimits) -> Result<(), StateEncodeError> {
-        let payload_len = self.payload_len();
-        if payload_len > limits.max_payload_bytes {
-            return Err(StateEncodeError::PayloadTooLarge {
-                actual: payload_len,
-                maximum: limits.max_payload_bytes,
-            });
-        }
+    // Shared by typed insertion and wire decoding. Every admitted document,
+    // including migration output, has valid semantic values before publication.
+    // Encoding owns resource/wire bounds, not semantic validation.
+    fn validate(&self) -> Result<(), StateDocumentError> {
         if let Self::Float(value) = self
             && !value.is_finite()
         {
-            return Err(StateEncodeError::NonFiniteFloat);
+            return Err(StateDocumentError::NonFiniteFloat);
         }
         if let Self::Choice(value) = self
             && !valid_choice_identifier(value)
         {
-            return Err(StateEncodeError::InvalidChoice);
+            return Err(StateDocumentError::InvalidChoice);
         }
         Ok(())
     }
@@ -88,7 +84,7 @@ pub struct StateEntry {
 }
 
 impl StateEntry {
-    /// Construct an entry. Empty keys are rejected when inserted into a document.
+    /// Construct an entry. Its key and value are validated on document insertion.
     #[must_use]
     pub fn new(key: impl Into<String>, value: StateValue) -> Self {
         Self {
@@ -137,7 +133,10 @@ impl Default for StateLimits {
     }
 }
 
-/// Deterministic semantic state document.
+/// Deterministic semantic state document with valid keys and typed values.
+///
+/// Insertion and decoding enforce semantic validity; entries have no mutable
+/// access path. Migrations therefore cannot return invalid semantic values.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StateDocument {
     product_id: String,
@@ -189,16 +188,12 @@ impl StateDocument {
     /// # Errors
     ///
     /// Returns an error without changing the document when the key is empty or
-    /// already present.
+    /// already present, a float is non-finite, or a choice identity is invalid.
     pub fn insert(&mut self, entry: StateEntry) -> Result<(), StateDocumentError> {
         if entry.key.is_empty() {
             return Err(StateDocumentError::EmptyKey);
         }
-        if let StateValue::Choice(value) = &entry.value
-            && !valid_choice_identifier(value)
-        {
-            return Err(StateDocumentError::InvalidChoice);
-        }
+        entry.value.validate()?;
         if self
             .entries
             .iter()
@@ -215,7 +210,7 @@ impl StateDocument {
     /// # Errors
     ///
     /// Returns an error when a value, key, or the complete document violates
-    /// the conventional bounds or contains a non-finite float.
+    /// the conventional bounds.
     pub fn encode(&self) -> Result<Vec<u8>, StateEncodeError> {
         self.encode_with_limits(StateLimits::default())
     }
@@ -224,7 +219,7 @@ impl StateDocument {
     ///
     /// # Errors
     ///
-    /// Returns an error when limits are not representable, an entry is invalid,
+    /// Returns an error when limits or wire lengths are not representable,
     /// or checked size calculations exceed a configured bound.
     pub fn encode_with_limits(&self, limits: StateLimits) -> Result<Vec<u8>, StateEncodeError> {
         validate_limits(limits)?;
@@ -252,8 +247,13 @@ impl StateDocument {
             if entry.key.len() > u16::MAX as usize {
                 return Err(StateEncodeError::KeyLengthUnrepresentable(entry.key.len()));
             }
-            entry.value.validate(limits)?;
             let payload_len = entry.value.payload_len();
+            if payload_len > limits.max_payload_bytes {
+                return Err(StateEncodeError::PayloadTooLarge {
+                    actual: payload_len,
+                    maximum: limits.max_payload_bytes,
+                });
+            }
             if payload_len > u32::MAX as usize {
                 return Err(StateEncodeError::PayloadLengthUnrepresentable(payload_len));
             }
@@ -658,7 +658,7 @@ fn encode_payload(encoded: &mut Vec<u8>, value: &StateValue) {
 }
 
 fn decode_value(value_type: u8, payload: &[u8]) -> Result<StateValue, StateDecodeError> {
-    match value_type {
+    let value = match value_type {
         0 => {
             if payload.len() != 1 {
                 return Err(StateDecodeError::InvalidPayloadLength {
@@ -678,9 +678,6 @@ fn decode_value(value_type: u8, payload: &[u8]) -> Result<StateValue, StateDecod
         3 => {
             let bits = read_u64(payload, value_type)?;
             let value = f64::from_bits(bits);
-            if !value.is_finite() {
-                return Err(StateDecodeError::NonFiniteFloat);
-            }
             Ok(StateValue::Float(if bits == (-0.0_f64).to_bits() {
                 0.0
             } else {
@@ -691,9 +688,6 @@ fn decode_value(value_type: u8, payload: &[u8]) -> Result<StateValue, StateDecod
             let value = decode_utf8(payload)
                 .map_err(StateDecodeError::InvalidValueUtf8)?
                 .to_owned();
-            if value_type == 5 && !valid_choice_identifier(&value) {
-                return Err(StateDecodeError::InvalidChoice);
-            }
             if value_type == 4 {
                 Ok(StateValue::Text(value))
             } else {
@@ -702,7 +696,11 @@ fn decode_value(value_type: u8, payload: &[u8]) -> Result<StateValue, StateDecod
         }
         6 => Ok(StateValue::Bytes(payload.to_vec())),
         value_type => Err(StateDecodeError::UnknownValueType(value_type)),
-    }
+    }?;
+    value
+        .validate()
+        .map_err(StateDecodeError::InvalidDocument)?;
+    Ok(value)
 }
 
 fn read_i64(payload: &[u8], value_type: u8) -> Result<i64, StateDecodeError> {
@@ -818,13 +816,15 @@ impl<'a> Reader<'a> {
     }
 }
 
-/// Structural error while constructing a semantic document.
+/// Semantic error while constructing a state document.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StateDocumentError {
     /// Product identity was empty.
     EmptyProductId,
     /// Entry key was empty.
     EmptyKey,
+    /// Float value was not finite.
+    NonFiniteFloat,
     /// Choice identity was empty or contained whitespace/control characters.
     InvalidChoice,
     /// Entry key already existed.
@@ -836,6 +836,7 @@ impl fmt::Display for StateDocumentError {
         match self {
             Self::EmptyProductId => formatter.write_str("state product identity must not be empty"),
             Self::EmptyKey => formatter.write_str("state entry key must not be empty"),
+            Self::NonFiniteFloat => formatter.write_str("state float must be finite"),
             Self::InvalidChoice => formatter.write_str("state choice identity is invalid"),
             Self::DuplicateKey(key) => write!(formatter, "state entry key {key:?} is duplicated"),
         }
@@ -901,10 +902,6 @@ pub enum StateEncodeError {
     },
     /// Value payload length exceeded its u32 wire field.
     PayloadLengthUnrepresentable(usize),
-    /// Float value was not finite.
-    NonFiniteFloat,
-    /// Choice identity was empty or contained whitespace/control characters.
-    InvalidChoice,
     /// Encoded size arithmetic overflowed.
     SizeOverflow,
 }
@@ -975,8 +972,6 @@ impl fmt::Display for StateEncodeError {
                     "state payload length {length} cannot fit the wire field"
                 )
             }
-            Self::NonFiniteFloat => formatter.write_str("state float must be finite"),
-            Self::InvalidChoice => formatter.write_str("state choice identity is invalid"),
             Self::SizeOverflow => formatter.write_str("state encoded size overflowed"),
         }
     }
@@ -1063,11 +1058,7 @@ pub enum StateDecodeError {
     },
     /// Boolean payload was not zero or one.
     InvalidBoolean(u8),
-    /// Float value was not finite.
-    NonFiniteFloat,
-    /// Choice identity was empty or contained whitespace/control characters.
-    InvalidChoice,
-    /// An entry was structurally invalid.
+    /// The document's identity, keys, or typed values were invalid.
     InvalidDocument(StateDocumentError),
     /// Bytes remained after the declared entries.
     TrailingBytes(usize),
@@ -1148,8 +1139,6 @@ impl fmt::Display for StateDecodeError {
             Self::InvalidBoolean(value) => {
                 write!(formatter, "state boolean encoding {value} is invalid")
             }
-            Self::NonFiniteFloat => formatter.write_str("state float must be finite"),
-            Self::InvalidChoice => formatter.write_str("state choice identity is invalid"),
             Self::InvalidDocument(error) => write!(formatter, "invalid state document: {error}"),
             Self::TrailingBytes(count) => write!(formatter, "state has {count} trailing bytes"),
             Self::LengthUnrepresentable => formatter.write_str("state length is not representable"),
@@ -1383,7 +1372,9 @@ mod tests {
             .copy_from_slice(&f64::INFINITY.to_bits().to_le_bytes());
         assert_eq!(
             StateDocument::decode(&invalid_float_bytes),
-            Err(StateDecodeError::NonFiniteFloat)
+            Err(StateDecodeError::InvalidDocument(
+                StateDocumentError::NonFiniteFloat
+            ))
         );
 
         let mut invalid_choice =
@@ -1407,17 +1398,9 @@ mod tests {
         invalid_choice_bytes[choice_payload..choice_payload + 5].copy_from_slice(b"bad x");
         assert_eq!(
             StateDocument::decode(&invalid_choice_bytes),
-            Err(StateDecodeError::InvalidChoice)
-        );
-
-        let mut invalid_float =
-            StateDocument::new("com.example.test", 1).expect("identity is valid");
-        invalid_float
-            .insert(StateEntry::new("value", StateValue::Float(f64::NAN)))
-            .expect("key is unique");
-        assert_eq!(
-            invalid_float.encode(),
-            Err(StateEncodeError::NonFiniteFloat)
+            Err(StateDecodeError::InvalidDocument(
+                StateDocumentError::InvalidChoice
+            ))
         );
     }
 

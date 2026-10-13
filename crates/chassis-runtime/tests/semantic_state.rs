@@ -11,20 +11,29 @@ use std::{
 };
 
 use chassis_runtime::{
-    audio::{DEFAULT_EFFECT_CONFIGURATION, DEFAULT_EFFECT_PORTS},
+    audio::{DEFAULT_EFFECT_CONFIGURATION, DEFAULT_EFFECT_PORTS, MAIN_OUTPUT},
+    automation::ParameterEvents,
+    buffer::{ChannelBuffer, OutputEndpoint},
     parameters::{ParameterDescriptor, ParameterStore, ParameterValue},
-    process::{ActivationConfig, ProcessConfig},
+    process::{
+        ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessChannel, ProcessConfig,
+        ProcessContext, ProcessMode, TransportSnapshot,
+    },
     runtime::{
         Component, InstanceRuntime, InstanceSemanticStateError, InstanceSemanticStateLoadError,
-        Processor,
+        Process, Processor,
     },
     schema::{ComponentId, ComponentSchema, StateSchemaVersion},
-    state::{StateDocument, StateEntry, StateLimits, StateMigration, StateValue},
+    state::{
+        StateDocument, StateDocumentError, StateEntry, StateLimits, StateMigration,
+        StateMigrationError, StateValue,
+    },
 };
 
 struct StateAwareEffect {
     parameters: Vec<ParameterDescriptor>,
     activation_quality: Arc<AtomicBool>,
+    processor_restart: Arc<AtomicBool>,
 }
 
 impl StateAwareEffect {
@@ -35,13 +44,35 @@ impl StateAwareEffect {
                     .expect("test parameter is valid"),
             ],
             activation_quality,
+            processor_restart: Arc::new(AtomicBool::new(false)),
         }
     }
 }
 
-struct StateProcessor;
+struct StateProcessor {
+    amount: f64,
+    restart: Arc<AtomicBool>,
+}
 
-impl Processor for StateProcessor {}
+impl Processor for StateProcessor {
+    fn restart_requested(&self) -> bool {
+        self.restart.load(Ordering::Relaxed)
+    }
+}
+
+impl Process<f64> for StateProcessor {
+    fn process<B>(&mut self, block: &mut ProcessBlock<'_, '_, '_, f64, B>)
+    where
+        B: ProcessBufferSource<f64> + ?Sized,
+    {
+        for mut channel in block.channels() {
+            channel
+                .output_mut()
+                .expect("output channel")
+                .fill(self.amount);
+        }
+    }
+}
 
 impl Component for StateAwareEffect {
     type Processor = StateProcessor;
@@ -62,7 +93,10 @@ impl Component for StateAwareEffect {
         &self,
         _config: &ActivationConfig<'_>,
     ) -> Result<Self::Processor, Self::ActivationError> {
-        Ok(StateProcessor)
+        Ok(StateProcessor {
+            amount: 1.0,
+            restart: Arc::clone(&self.processor_restart),
+        })
     }
 
     fn activate_with_state(
@@ -80,7 +114,16 @@ impl Component for StateAwareEffect {
             })
             .unwrap_or(false);
         self.activation_quality.store(quality, Ordering::Relaxed);
-        self.activate(config)
+        let mut processor = self.activate(config)?;
+        processor.amount = custom_state
+            .iter()
+            .find(|entry| entry.key() == "state/amount")
+            .and_then(|entry| match entry.value() {
+                StateValue::Float(value) => Some(*value),
+                _ => None,
+            })
+            .unwrap_or(1.0);
+        Ok(processor)
     }
 }
 
@@ -189,6 +232,10 @@ fn product_validation_failure_is_atomic_across_parameters_and_custom_state() {
         )
         .expect("initial complete state applies");
 
+    runtime
+        .activate(&component, process_config(), DEFAULT_EFFECT_CONFIGURATION)
+        .expect("activation succeeds");
+    assert!(!runtime.restart_requested());
     let result = runtime.apply_state(
         &complete_document(2, 0.25, true),
         |parameters, custom_state| {
@@ -206,6 +253,222 @@ fn product_validation_failure_is_atomic_across_parameters_and_custom_state() {
         Some(&ParameterValue::Float(1.5))
     );
     assert_eq!(quality(runtime.custom_state()), Some(false));
+    assert!(
+        !runtime.restart_requested(),
+        "rejection does not request restart"
+    );
+}
+
+fn amount_document(gain: f64, amount: f64) -> StateDocument {
+    let mut document = complete_document(2, gain, false);
+    document
+        .insert(StateEntry::new("state/amount", StateValue::Float(amount)))
+        .expect("finite custom amount");
+    document
+}
+
+fn render_amount(runtime: &mut InstanceRuntime<StateProcessor>) -> f64 {
+    let output = runtime.audio_port_index(&MAIN_OUTPUT).expect("output port");
+    let mut samples = [0.0];
+    let mut buffers = [
+        ChannelBuffer::output_only(OutputEndpoint::new(output, 0), &mut samples, 1)
+            .expect("valid output buffer"),
+    ];
+    runtime
+        .process(
+            1,
+            ProcessContext::new(
+                ProcessMode::Realtime,
+                TransportSnapshot::unknown(),
+                ParameterEvents::empty_for_block(1),
+            ),
+            &mut buffers,
+        )
+        .expect("old resources remain usable");
+    samples[0]
+}
+
+#[test]
+fn active_custom_replacement_requests_restart_until_reactivation() {
+    let component = StateAwareEffect::new(Arc::new(AtomicBool::new(false)));
+    let mut runtime = InstanceRuntime::for_component(&component).expect("valid runtime");
+    let accept = |_: &ParameterStore, _: &[StateEntry]| Ok::<(), Infallible>(());
+    runtime
+        .apply_state(&amount_document(1.0, 1.0), accept)
+        .unwrap();
+    assert!(!runtime.restart_requested());
+    runtime
+        .activate(&component, process_config(), DEFAULT_EFFECT_CONFIGURATION)
+        .unwrap();
+    assert_eq!(render_amount(&mut runtime), 1.0);
+
+    component.processor_restart.store(true, Ordering::Relaxed);
+    assert!(runtime.restart_requested(), "processor signal is retained");
+    component.processor_restart.store(false, Ordering::Relaxed);
+    runtime
+        .apply_state(&amount_document(0.75, 1.0), accept)
+        .unwrap();
+    assert!(
+        !runtime.restart_requested(),
+        "parameter-only changes do not restart"
+    );
+
+    runtime
+        .apply_state(&amount_document(0.25, 2.0), accept)
+        .unwrap();
+    assert!(runtime.restart_requested());
+    assert_eq!(render_amount(&mut runtime), 1.0);
+    let saved = runtime.state_document().unwrap();
+    assert_eq!(
+        saved.encode().unwrap(),
+        amount_document(0.25, 2.0).encode().unwrap()
+    );
+
+    for amount in [2.0, 1.0, 2.0] {
+        runtime
+            .apply_state(&amount_document(0.25, amount), accept)
+            .unwrap();
+        assert!(
+            runtime.restart_requested(),
+            "request is sticky even if state reverts"
+        );
+    }
+    let before_rejection = runtime.state_document().unwrap();
+    assert!(
+        runtime
+            .apply_state(&amount_document(1.5, 3.0), |_, _| Err(RejectState))
+            .is_err()
+    );
+    assert_eq!(runtime.state_document().unwrap(), before_rejection);
+    assert!(runtime.restart_requested());
+    runtime.reset().unwrap();
+    assert!(
+        runtime.restart_requested(),
+        "reset does not adopt custom resources"
+    );
+    assert_eq!(render_amount(&mut runtime), 1.0);
+
+    runtime.deactivate().unwrap();
+    assert!(!runtime.restart_requested());
+    runtime
+        .activate(&component, process_config(), DEFAULT_EFFECT_CONFIGURATION)
+        .unwrap();
+    assert!(!runtime.restart_requested());
+    assert_eq!(render_amount(&mut runtime), 2.0);
+}
+
+#[test]
+fn typed_documents_reject_invalid_custom_values_without_mutation() {
+    for (value, expected_error) in invalid_custom_values() {
+        let mut document = amount_document(0.5, 1.0);
+        let before = document.clone();
+        assert_eq!(
+            document.insert(StateEntry::new("state/invalid", value)),
+            Err(expected_error)
+        );
+        assert_eq!(document, before);
+        assert!(document.encode().is_ok());
+    }
+}
+
+fn invalid_custom_values() -> [(StateValue, StateDocumentError); 4] {
+    [
+        (
+            StateValue::Float(f64::NAN),
+            StateDocumentError::NonFiniteFloat,
+        ),
+        (
+            StateValue::Float(f64::INFINITY),
+            StateDocumentError::NonFiniteFloat,
+        ),
+        (
+            StateValue::Float(f64::NEG_INFINITY),
+            StateDocumentError::NonFiniteFloat,
+        ),
+        (
+            StateValue::Choice("not valid".into()),
+            StateDocumentError::InvalidChoice,
+        ),
+    ]
+}
+
+struct InvalidCustomMigration(StateValue);
+
+impl StateMigration for InvalidCustomMigration {
+    type Error = StateDocumentError;
+
+    fn source_schema(&self) -> u32 {
+        1
+    }
+    fn to_schema(&self) -> u32 {
+        2
+    }
+
+    fn migrate(&self, document: StateDocument) -> Result<StateDocument, Self::Error> {
+        let mut migrated = complete_document(2, 0.25, true);
+        assert_eq!(document.product_schema(), 1);
+        migrated.insert(StateEntry::new("state/invalid", self.0.clone()))?;
+        Ok(migrated)
+    }
+}
+
+#[test]
+fn migration_generated_invalid_custom_values_fail_before_live_publication() {
+    let component = StateAwareEffect::new(Arc::new(AtomicBool::new(false)));
+    let mut runtime = InstanceRuntime::for_component(&component).unwrap();
+    runtime
+        .apply_state(&amount_document(1.5, 1.0), |_, _| Ok::<(), Infallible>(()))
+        .unwrap();
+    runtime
+        .activate(&component, process_config(), DEFAULT_EFFECT_CONFIGURATION)
+        .unwrap();
+    let before = runtime.state_document().unwrap();
+    let bytes = complete_document(1, 0.5, false).encode().unwrap();
+    for (value, expected_error) in invalid_custom_values() {
+        let mut product_validation_called = false;
+        let result = runtime.apply_state_bytes(
+            &bytes,
+            StateLimits::default(),
+            &[&InvalidCustomMigration(value)],
+            |_, _| {
+                product_validation_called = true;
+                Ok::<(), Infallible>(())
+            },
+        );
+        assert!(matches!(
+            result,
+            Err(InstanceSemanticStateLoadError::Migration(
+                StateMigrationError::Failed(error)
+            )) if error == expected_error
+        ));
+        assert!(!product_validation_called);
+        assert_eq!(runtime.state_document().unwrap(), before);
+        assert!(!runtime.restart_requested());
+        assert!(runtime.encode_state(StateLimits::default()).is_ok());
+    }
+}
+
+#[test]
+fn finite_custom_floats_preserve_the_full_f64_domain() {
+    for value in [
+        f64::MIN,
+        f64::MAX,
+        f64::MIN_POSITIVE,
+        f64::from(f32::MAX),
+        -0.0,
+    ] {
+        let document = amount_document(0.5, value);
+        let decoded = StateDocument::decode(&document.encode().unwrap()).unwrap();
+        assert_eq!(
+            decoded
+                .entries()
+                .iter()
+                .find(|entry| entry.key() == "state/amount")
+                .unwrap()
+                .value(),
+            &StateValue::Float(value)
+        );
+    }
 }
 
 struct RenameGain;
@@ -258,6 +521,10 @@ fn migrated_byte_load_publishes_parameters_and_custom_state_together() {
         .expect("legacy custom key is unique");
     let bytes = legacy.encode().expect("legacy state encodes");
     let migration = RenameGain;
+    runtime
+        .activate(&component, process_config(), DEFAULT_EFFECT_CONFIGURATION)
+        .expect("activation succeeds");
+    assert!(!runtime.restart_requested());
 
     runtime
         .apply_state_bytes(
@@ -279,6 +546,10 @@ fn migrated_byte_load_publishes_parameters_and_custom_state_together() {
         Some(&ParameterValue::Float(0.75))
     );
     assert_eq!(quality(runtime.custom_state()), Some(true));
+    assert!(
+        runtime.restart_requested(),
+        "migrated custom changes require restart"
+    );
 
     let invalid = runtime.apply_state_bytes(
         &bytes,
@@ -297,4 +568,8 @@ fn migrated_byte_load_publishes_parameters_and_custom_state_together() {
         Some(&ParameterValue::Float(0.75))
     );
     assert_eq!(quality(runtime.custom_state()), Some(true));
+    assert!(
+        runtime.restart_requested(),
+        "rejection retains the pending restart"
+    );
 }

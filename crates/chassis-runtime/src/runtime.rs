@@ -519,6 +519,7 @@ struct ActiveRuntime<P> {
     resolved_audio: ResolvedAudioIoConfiguration,
     audio_buffers: AudioBufferValidation,
     latency: LatencySamples,
+    custom_state_restart_required: bool,
     processor: P,
 }
 
@@ -681,12 +682,17 @@ where
         self.active.as_ref().map(|active| active.latency)
     }
 
-    /// Whether the active processor requests replacement through a new activation.
+    /// Whether active resources require replacement through a new activation.
+    ///
+    /// Accepted custom-state changes request restart immediately. This runtime
+    /// request remains set until deactivation, even if later loads restore the
+    /// previous state. The processor may independently request restart; current
+    /// resources remain valid until the caller completes the lifecycle transition.
     #[must_use]
     pub fn restart_requested(&self) -> bool {
-        self.active
-            .as_ref()
-            .is_some_and(|active| active.processor.restart_requested())
+        self.active.as_ref().is_some_and(|active| {
+            active.custom_state_restart_required || active.processor.restart_requested()
+        })
     }
 
     /// Activate this instance after validating the component generation and accepted I/O layout.
@@ -760,6 +766,7 @@ where
             resolved_audio,
             audio_buffers,
             latency,
+            custom_state_restart_required: false,
             processor,
         });
         Ok(())
@@ -842,6 +849,7 @@ where
             resolved_audio,
             audio_buffers,
             latency: _,
+            custom_state_restart_required: _,
             processor,
         } = active;
 
@@ -967,7 +975,9 @@ where
     ///
     /// Framework parameters and custom entries are validated into temporary
     /// candidates. Product validation sees both candidates, and neither is
-    /// published until every check succeeds.
+    /// published until every check succeeds. Changed custom state requires a
+    /// new activation to reach DSP: an active instance requests restart while
+    /// retaining its current valid resources until deactivation/reactivation.
     ///
     /// # Errors
     ///
@@ -1001,6 +1011,9 @@ where
         validate_product_state(&candidate_parameters, &candidate_custom)
             .map_err(InstanceSemanticStateError::Product)?;
 
+        if let Some(active) = &mut self.active {
+            active.custom_state_restart_required |= self.custom_state != candidate_custom;
+        }
         self.parameters = candidate_parameters;
         self.custom_state = candidate_custom;
         Ok(())
