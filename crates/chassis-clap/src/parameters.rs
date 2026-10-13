@@ -31,6 +31,7 @@ pub(crate) enum ParameterMappingError {
     ParameterIndexUnrepresentable(usize),
     IntegerRangeNotRepresentable(String),
     ChoiceCountNotRepresentable(String),
+    ChoiceLabelsNotRepresentable(String),
 }
 
 impl fmt::Display for ParameterMappingError {
@@ -60,6 +61,10 @@ impl fmt::Display for ParameterMappingError {
             Self::ChoiceCountNotRepresentable(parameter) => write!(
                 formatter,
                 "choice parameter {parameter} has more options than CLAP plain values represent"
+            ),
+            Self::ChoiceLabelsNotRepresentable(parameter) => write!(
+                formatter,
+                "choice parameter {parameter} requires distinct CLAP labels without surrounding whitespace or NUL"
             ),
         }
     }
@@ -109,15 +114,16 @@ impl ClapParameterBinding {
         }
     }
 
-    /// Quantize display-only positions without weakening semantic value validation.
-    pub(crate) fn display_plain(&self, value: f64) -> Option<f64> {
+    /// Validate host plain values before CLAP's cast-equivalent stepped conversion.
+    /// Semantic values and decoded state do not pass through this normalization.
+    pub(crate) fn normalize_host_plain(&self, value: f64) -> Option<f64> {
         let (minimum, maximum) = self.plain_range();
         if !value.is_finite() || !(minimum..=maximum).contains(&value) {
             return None;
         }
         Some(match self.descriptor.kind() {
             ParameterKind::Float { .. } => value,
-            _ => value.round(),
+            _ => value.trunc(),
         })
     }
 
@@ -133,10 +139,14 @@ impl ClapParameterBinding {
         ) {
             flags |= ParamInfoFlags::IS_STEPPED;
         }
+        if matches!(self.descriptor.kind(), ParameterKind::Choice { .. }) {
+            flags |= ParamInfoFlags::IS_ENUM;
+        }
         flags
     }
 
     pub(crate) fn event_value(&self, value: f64) -> Option<ParameterEventValue<'_>> {
+        let value = self.normalize_host_plain(value)?;
         match self.descriptor.kind() {
             ParameterKind::Float { .. } => Some(ParameterEventValue::Float(value)),
             ParameterKind::Integer { .. } => {
@@ -322,7 +332,19 @@ impl ClapParameterState {
                         descriptor.key().as_str().to_owned(),
                     ));
                 }
-                ParameterKind::Choice { options, .. } if u32::try_from(options.len()).is_ok() => {}
+                ParameterKind::Choice { options, .. } if u32::try_from(options.len()).is_ok() => {
+                    if options.iter().enumerate().any(|(index, option)| {
+                        option.name().trim() != option.name()
+                            || option.name().contains('\0')
+                            || options[..index]
+                                .iter()
+                                .any(|previous| previous.name() == option.name())
+                    }) {
+                        return Err(ParameterMappingError::ChoiceLabelsNotRepresentable(
+                            descriptor.key().as_str().to_owned(),
+                        ));
+                    }
+                }
                 ParameterKind::Choice { .. } => {
                     return Err(ParameterMappingError::ChoiceCountNotRepresentable(
                         descriptor.key().as_str().to_owned(),
@@ -446,6 +468,7 @@ impl ClapParameterState {
 
     fn validated_plain_value(&self, id: ClapId, value: f64) -> Option<(usize, f64)> {
         let index = self.index_for_id(id)?;
+        let value = self.bindings[index].normalize_host_plain(value)?;
         let value = self.bindings[index].parameter_value(value)?;
         let value = match value {
             ParameterValue::Float(value) => value,
@@ -758,7 +781,7 @@ mod tests {
     }
 
     #[test]
-    fn display_quantizes_fractional_positions_without_accepting_semantic_values() {
+    fn stepped_host_values_truncate_but_semantic_projection_stays_strict() {
         let state =
             ClapParameterState::new(&descriptors(), &[("gain", 1), ("steps", 2), ("bypass", 3)])
                 .unwrap();
@@ -768,20 +791,44 @@ mod tests {
             (0.0, 0.0),
             (0.0101, 0.0),
             (0.49, 0.0),
-            (0.5, 1.0),
-            (0.99, 1.0),
+            (0.5, 0.0),
+            (0.99, 0.0),
             (1.0, 1.0),
         ] {
-            assert_eq!(boolean.display_plain(plain), Some(expected));
+            // CLAP params.h: stepped doubles convert using a cast (trunc).
+            assert_eq!(boolean.normalize_host_plain(plain), Some(expected));
+            assert_eq!(
+                boolean.event_value(plain),
+                Some(ParameterEventValue::Boolean(expected > 0.0))
+            );
+            assert!(state.apply_plain_value(ClapId::new(3), plain));
+            assert_eq!(state.value(2), expected);
         }
-        assert_eq!(integer.display_plain(-2.7), Some(-3.0));
+        for (plain, expected) in [(-2.7, -2), (2.7, 2)] {
+            assert_eq!(
+                integer.normalize_host_plain(plain),
+                Some(integer_to_plain(expected))
+            );
+            assert_eq!(
+                integer.event_value(plain),
+                Some(ParameterEventValue::Integer(expected))
+            );
+            assert!(state.apply_plain_value(ClapId::new(2), plain));
+            assert_eq!(state.value(1), integer_to_plain(expected));
+        }
         for invalid in [f64::NAN, f64::INFINITY, -0.1, 1.1] {
-            assert_eq!(boolean.display_plain(invalid), None);
+            assert_eq!(boolean.normalize_host_plain(invalid), None);
+            assert_eq!(boolean.event_value(invalid), None);
+            assert!(!state.apply_plain_value(ClapId::new(3), invalid));
         }
         for binding in [integer, boolean] {
             assert!(binding.parameter_value(0.25).is_none());
-            assert!(binding.event_value(0.25).is_none());
             assert!(binding.state_value(0.25).is_none());
+            assert!(
+                binding
+                    .state_plain_value(&StateValue::Float(0.25))
+                    .is_none()
+            );
         }
     }
 
@@ -802,6 +849,18 @@ mod tests {
         let binding = &state.bindings()[0];
         assert_eq!(binding.plain_range(), (0.0, 1.0));
         assert!((binding.default_plain() - 1.0).abs() <= f64::EPSILON);
+        assert!(
+            binding
+                .flags()
+                .contains(clack_extensions::params::ParamInfoFlags::IS_ENUM)
+        );
+        assert_eq!(binding.normalize_host_plain(0.99), Some(0.0));
+        assert_eq!(
+            binding.event_value(0.99),
+            Some(ParameterEventValue::Choice("clean"))
+        );
+        assert!(state.apply_plain_value(ClapId::new(1), 0.99));
+        assert_eq!(state.value(0), 0.0);
 
         let descriptors = descriptors();
         assert!(matches!(
@@ -815,6 +874,28 @@ mod tests {
             ClapParameterState::new(&descriptors, &[("gain", 1), ("steps", 2), ("bypass", 3)])
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn choice_mapping_rejects_labels_that_cannot_text_round_trip() {
+        for labels in [
+            ["Same", "Same"],
+            [" Clean", "Warm"],
+            ["Clean", "Warm "],
+            ["Clean", "Warm\0"],
+        ] {
+            let descriptor = ParameterDescriptor::choice(
+                "mode",
+                "Mode",
+                vec![
+                    ChoiceOption::new("clean", labels[0]).unwrap(),
+                    ChoiceOption::new("warm", labels[1]).unwrap(),
+                ],
+                "clean",
+            )
+            .unwrap();
+            assert!(ClapParameterState::new(&[descriptor], &[("mode", 1)]).is_err());
+        }
     }
 
     #[test]

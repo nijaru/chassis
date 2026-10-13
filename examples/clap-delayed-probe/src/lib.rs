@@ -80,6 +80,13 @@ impl Processor for DelayedProcessor {
     fn latency(&self) -> LatencySamples {
         self.latency
     }
+
+    fn reset(&mut self) {
+        for line in &mut self.delay {
+            line.fill(0.0);
+        }
+        self.positions.fill(0);
+    }
 }
 
 impl Process<f32> for DelayedProcessor {

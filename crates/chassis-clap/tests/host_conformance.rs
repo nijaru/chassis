@@ -15,11 +15,14 @@ use std::{
 use chassis_clap::{ClapComponent, F32AndF64, SingleComponentEntry};
 use chassis_runtime::{
     audio::{AudioPortIndex, MAIN_INPUT, MAIN_OUTPUT},
-    parameters::{ParameterDescriptor, ParameterValue},
+    parameters::{ChoiceOption, ParameterDescriptor, ParameterValue},
     process::{ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessChannel},
     runtime::{Component, LatencySamples, Process, Processor},
 };
-use clack_extensions::latency::{HostLatency, HostLatencyImpl, PluginLatency};
+use clack_extensions::{
+    latency::{HostLatency, HostLatencyImpl, PluginLatency},
+    params::PluginParams,
+};
 use clack_host::{
     events::event_types::ParamValueEvent, factory::plugin::PluginFactory, prelude::*,
 };
@@ -89,6 +92,19 @@ impl Default for ProbeComponent {
             parameters: vec![
                 ParameterDescriptor::float("trim", "Trim", 0.0, 1.0, 1.0)
                     .expect("probe parameter is valid"),
+                ParameterDescriptor::integer("steps", "Steps", -4, 4, 0).unwrap(),
+                ParameterDescriptor::boolean("bypass", "Bypass", true).unwrap(),
+                ParameterDescriptor::choice(
+                    "mode",
+                    "Mode",
+                    vec![
+                        ChoiceOption::new("clean-id", "Clean").unwrap(),
+                        ChoiceOption::new("warm-id", "Warm").unwrap(),
+                        ChoiceOption::new("driven-id", "Driven").unwrap(),
+                    ],
+                    "clean-id",
+                )
+                .unwrap(),
             ],
         }
     }
@@ -226,7 +242,12 @@ impl ClapComponent for ProbeComponent {
     const CLAP_ID: &'static str = "org.nijaru.chassis.host-probe";
     const CLAP_NAME: &'static str = "Chassis Host Probe";
     const CLAP_FEATURES: &'static [&'static std::ffi::CStr] = &[c"audio-effect", c"stereo"];
-    const CLAP_PARAMETER_IDS: &'static [(&'static str, u32)] = &[("trim", TRIM_CLAP_ID)];
+    const CLAP_PARAMETER_IDS: &'static [(&'static str, u32)] = &[
+        ("trim", TRIM_CLAP_ID),
+        ("steps", 8),
+        ("bypass", 9),
+        ("mode", 10),
+    ];
     const CLAP_MAX_PARAMETER_EVENTS: u32 = MAX_PARAMETER_EVENTS;
 }
 
@@ -272,11 +293,17 @@ fn input_events() -> EventBuffer {
         usize::try_from(MAX_PARAMETER_EVENTS).expect("event bound fits usize"),
     );
     for offset in 0..MAX_PARAMETER_EVENTS {
+        let (id, plain) = match offset {
+            61 => (8, -2.7),
+            62 => (9, 0.99),
+            63 => (10, 1.99),
+            _ => (TRIM_CLAP_ID, 0.5),
+        };
         events.push(&ParamValueEvent::new(
             offset,
-            ClapId::new(TRIM_CLAP_ID),
+            ClapId::new(id),
             Pckn::match_all(),
-            0.5,
+            plain,
         ));
     }
     events
@@ -288,6 +315,11 @@ fn measure_f32_adapter_path(
     output_events: &mut EventBuffer,
 ) {
     let mut main_inputs = [vec![1.0_f32; 64], vec![1.0_f32; 64]];
+    for channel in &mut main_inputs {
+        for sample in channel.iter_mut().step_by(2) {
+            *sample = 2.0;
+        }
+    }
     let mut sidechain_inputs = [vec![0.0_f32; 64], vec![0.0_f32; 64]];
     let mut outputs = [vec![0.0_f32; 64], vec![0.0_f32; 64]];
     let mut input_ports = AudioPorts::with_capacity(4, 2);
@@ -313,6 +345,7 @@ fn measure_f32_adapter_path(
             ),
             latency: 0,
         }]);
+        output_audio.as_raw_buffers()[0].constant_mask = u64::MAX;
         processor
             .process(
                 &input_audio,
@@ -323,6 +356,7 @@ fn measure_f32_adapter_path(
                 None,
             )
             .expect("warmup f32 callback succeeds");
+        assert_eq!(output_audio.as_raw_buffers()[0].constant_mask, 0);
 
         ALLOCATIONS.store(0, Ordering::Relaxed);
         DEALLOCATIONS.store(0, Ordering::Relaxed);
@@ -345,11 +379,9 @@ fn measure_f32_adapter_path(
     assert_eq!(ALLOCATIONS.load(Ordering::Relaxed), 0);
     assert_eq!(DEALLOCATIONS.load(Ordering::Relaxed), 0);
     for channel in &outputs {
-        assert!(
-            channel
-                .iter()
-                .all(|sample| (*sample - 0.5).abs() <= f32::EPSILON)
-        );
+        assert!(channel.iter().enumerate().all(|(index, sample)| {
+            (*sample - if index % 2 == 0 { 1.0 } else { 0.5 }).abs() <= f32::EPSILON
+        }));
     }
 }
 
@@ -359,6 +391,11 @@ fn measure_f64_adapter_path(
     output_events: &mut EventBuffer,
 ) {
     let mut main_inputs = [vec![1.0_f64; 64], vec![1.0_f64; 64]];
+    for channel in &mut main_inputs {
+        for sample in channel.iter_mut().step_by(2) {
+            *sample = 2.0;
+        }
+    }
     let mut sidechain_inputs = [vec![0.0_f64; 64], vec![0.0_f64; 64]];
     let mut outputs = [vec![0.0_f64; 64], vec![0.0_f64; 64]];
     let mut input_ports = AudioPorts::with_capacity(4, 2);
@@ -384,6 +421,7 @@ fn measure_f64_adapter_path(
             ),
             latency: 0,
         }]);
+        output_audio.as_raw_buffers()[0].constant_mask = u64::MAX;
         processor
             .process(
                 &input_audio,
@@ -394,6 +432,7 @@ fn measure_f64_adapter_path(
                 None,
             )
             .expect("warmup f64 callback succeeds");
+        assert_eq!(output_audio.as_raw_buffers()[0].constant_mask, 0);
 
         ALLOCATIONS.store(0, Ordering::Relaxed);
         DEALLOCATIONS.store(0, Ordering::Relaxed);
@@ -416,11 +455,9 @@ fn measure_f64_adapter_path(
     assert_eq!(ALLOCATIONS.load(Ordering::Relaxed), 0);
     assert_eq!(DEALLOCATIONS.load(Ordering::Relaxed), 0);
     for channel in &outputs {
-        assert!(
-            channel
-                .iter()
-                .all(|sample| (*sample - 0.5).abs() <= f64::EPSILON)
-        );
+        assert!(channel.iter().enumerate().all(|(index, sample)| {
+            (*sample - if index % 2 == 0 { 1.0 } else { 0.5 }).abs() <= f64::EPSILON
+        }));
     }
 }
 
@@ -450,6 +487,52 @@ fn full_adapter_process_path_is_allocation_free_at_event_bound_for_f32_and_f64()
     )
     .expect("probe plugin instantiates");
 
+    let handle = plugin.plugin_handle();
+    let params = handle.get_extension::<PluginParams>().unwrap();
+    for (id, plain, text, normalized) in [
+        (8, -2.7, c"-2", -2.0),
+        (9, 0.99, c"0", 0.0),
+        (10, 0.99, c"Clean", 0.0),
+        (10, 1.99, c"Warm", 1.0),
+        (10, 2.0, c"Driven", 2.0),
+    ] {
+        let mut buffer = [0; 32];
+        assert_eq!(
+            params
+                .value_to_text(&handle, ClapId::new(id), plain, &mut buffer)
+                .unwrap(),
+            text.to_bytes()
+        );
+        assert_eq!(
+            params.text_to_value(&handle, ClapId::new(id), text),
+            Some(normalized)
+        );
+    }
+    assert_eq!(
+        params.text_to_value(&handle, ClapId::new(8), c"-2.7"),
+        Some(-2.0)
+    );
+    assert_eq!(
+        params.text_to_value(&handle, ClapId::new(9), c"0.99"),
+        Some(0.0)
+    );
+    let flush_events = [
+        ParamValueEvent::new(0, ClapId::new(8), Pckn::match_all(), -1.7),
+        ParamValueEvent::new(0, ClapId::new(9), Pckn::match_all(), 1.0),
+        ParamValueEvent::new(0, ClapId::new(10), Pckn::match_all(), 2.0),
+    ];
+    params.flush(
+        &mut plugin.inactive_plugin_handle().unwrap(),
+        &InputEvents::from_buffer(&flush_events),
+        &mut OutputEvents::void(),
+    );
+    for (id, expected) in [(8, -1.0), (9, 1.0), (10, 2.0)] {
+        assert_eq!(
+            params.get_value(&plugin.plugin_handle(), ClapId::new(id)),
+            Some(expected)
+        );
+    }
+
     let processor = plugin
         .activate(
             |_, _| TestHostAudioProcessor,
@@ -467,6 +550,12 @@ fn full_adapter_process_path_is_allocation_free_at_event_bound_for_f32_and_f64()
     let mut output_events = EventBuffer::with_capacity(1);
     measure_f32_adapter_path(&mut processor, &events, &mut output_events);
     measure_f64_adapter_path(&mut processor, &events, &mut output_events);
+    for (id, expected) in [(8, -2.0), (9, 0.0), (10, 1.0)] {
+        assert_eq!(
+            params.get_value(&plugin.plugin_handle(), ClapId::new(id)),
+            Some(expected)
+        );
+    }
     plugin.deactivate(processor.stop_processing());
 }
 

@@ -24,7 +24,7 @@ use audio::{AudioMappingError, ClapAudioConfiguration, ClapProcessSlot};
 use chassis_runtime::{
     audio::PortDirection,
     automation::ParameterEvents,
-    parameters::{ChoiceOption, ParameterKind},
+    parameters::ParameterKind,
     process::{ProcessConfig, ProcessContext, ProcessMode, TransportSnapshot},
     runtime::{Component, InstanceRuntime, Process as ChassisProcess, Processor},
     schema::ComponentSchema,
@@ -513,11 +513,14 @@ where
         else {
             return Err(core::fmt::Error);
         };
-        let value = binding.display_plain(value).ok_or(core::fmt::Error)?;
+        let value = binding
+            .normalize_host_plain(value)
+            .ok_or(core::fmt::Error)?;
         if let ParameterKind::Choice { options, .. } = binding.descriptor().kind() {
-            // Stepped parameters must convert any in-range plain value; hosts
-            // legitimately present fractional positions between options.
-            let Some(option) = options.get(nearest_option_index(options, value)) else {
+            // normalize_host_plain validated the range and applied CLAP's truncation.
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let index = value as usize;
+            let Some(option) = options.get(index) else {
                 return Err(core::fmt::Error);
             };
             return write!(writer, "{}", option.name());
@@ -542,7 +545,7 @@ where
             let plain = f64::from(u32::try_from(plain).ok()?);
             return binding.parameter_value(plain).map(|_| plain);
         }
-        let value = text.parse().ok()?;
+        let value = binding.normalize_host_plain(text.parse().ok()?)?;
         binding.parameter_value(value).map(|_| value)
     }
 
@@ -781,17 +784,6 @@ where
 
 fn audio_mapping_error(_error: &AudioMappingError) -> PluginError {
     PluginError::Message("Invalid CLAP audio-port mapping")
-}
-
-/// Index of the option nearest a possibly fractional plain position.
-fn nearest_option_index(options: &[ChoiceOption], value: f64) -> usize {
-    if !value.is_finite() || value <= 0.0 {
-        return 0;
-    }
-    let last = options.len().saturating_sub(1);
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let rounded = (value + 0.5) as usize;
-    rounded.min(last)
 }
 
 fn parameter_mapping_error(_error: &ParameterMappingError) -> PluginError {

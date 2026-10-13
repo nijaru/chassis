@@ -84,7 +84,11 @@ impl PortBinding {
             name: self.descriptor.name.as_bytes(),
             channel_count: self.mapping.layout.channel_count(),
             flags,
-            port_type: AudioPortType::from_channel_count(self.mapping.layout.channel_count()),
+            port_type: match self.mapping.layout {
+                ChannelLayout::Mono => Some(AudioPortType::MONO),
+                ChannelLayout::Stereo => Some(AudioPortType::STEREO),
+                _ => None,
+            },
             in_place_pair: self.in_place_pair_id.map(ClapId::new),
         }
     }
@@ -581,6 +585,32 @@ mod tests {
             AudioPortIndex::new(2)
         );
         assert!(configuration.process_slots()[1].output.is_none());
+    }
+
+    #[test]
+    fn port_type_preserves_layout_semantics_not_just_channel_count() {
+        use chassis_runtime::audio::ChannelCount;
+        for (layout, expected) in [
+            (ChannelLayout::Mono, Some(AudioPortType::MONO)),
+            (ChannelLayout::Stereo, Some(AudioPortType::STEREO)),
+            (ChannelLayout::Discrete(ChannelCount::new(1).unwrap()), None),
+            (ChannelLayout::Discrete(ChannelCount::new(2).unwrap()), None),
+        ] {
+            let mapping = [
+                ClapAudioPort::new(MAIN_INPUT, 0, layout, Some(MAIN_OUTPUT)),
+                ClapAudioPort::new(MAIN_OUTPUT, 0, layout, Some(MAIN_INPUT)),
+            ];
+            let configuration = ClapAudioConfiguration::new(
+                &chassis_runtime::audio::DEFAULT_EFFECT_PORTS,
+                &mapping,
+            )
+            .unwrap();
+            for direction in [PortDirection::Input, PortDirection::Output] {
+                let info = configuration.info(0, direction).unwrap();
+                assert_eq!(info.port_type, expected);
+                assert_eq!(info.channel_count, layout.channel_count());
+            }
+        }
     }
 
     #[test]

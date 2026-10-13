@@ -43,6 +43,11 @@ where
         slots: &'plan [ClapProcessSlot],
     ) -> Result<Self, PluginError> {
         validate_audio::<S>(&mut audio, slots)?;
+        // Product DSP has no constant-output contract. Clear stale descriptors
+        // every callback, after validating the activation-bounded port count.
+        for mut output in audio.output_ports() {
+            output.set_constant_mask(clack_plugin::process::ConstantMask::from_bits(0));
+        }
         let frame_count = usize::try_from(audio.frames_count())
             .map_err(|_| PluginError::Message("CLAP frame count is not representable"))?;
         Ok(Self {
