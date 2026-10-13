@@ -6,12 +6,15 @@ use chassis_runtime::{
     audio::{AudioPortIndex, DEFAULT_EFFECT_CONFIGURATION},
     automation::{ParameterEvent, ParameterEventValue, ParameterEvents},
     buffer::{ChannelBuffer, InputEndpoint, OutputEndpoint},
-    parameters::{ChoiceOption, ParameterDescriptor, ParameterIndex, ParameterValue},
-    process::{
-        ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessChannel, ProcessConfig,
-        ProcessContext, ProcessMode, TransportSnapshot,
+    parameters::{
+        ChoiceIndex, ChoiceOption, ParameterAutomationError, ParameterDescriptor, ParameterIndex,
+        ParameterKind, ParameterValue, ParameterValueError,
     },
-    runtime::{Component, InstanceRuntime, Process, Processor},
+    process::{
+        ActivationConfig, ProcessBlock, ProcessBlockError, ProcessBufferSource, ProcessChannel,
+        ProcessConfig, ProcessContext, ProcessMode, TransportSnapshot,
+    },
+    runtime::{Component, InstanceProcessError, InstanceRuntime, Process, Processor},
     schema::{ComponentId, ComponentSchema, ComponentSchemaError, StateSchemaVersion},
     state::{StateDocument, StateLimits, StateValue},
 };
@@ -77,7 +80,7 @@ impl Process<f64> for Gain {
     }
 }
 
-fn render(runtime: &mut InstanceRuntime<Gain>, events: &[ParameterEvent<'_>]) -> [f64; 4] {
+fn render(runtime: &mut InstanceRuntime<Gain>, events: &[ParameterEvent]) -> [f64; 4] {
     let mut samples = [1.0; 4];
     let mut right = [1.0; 4];
     let mut channels = [
@@ -115,38 +118,67 @@ fn invalid_batch_cannot_partially_retain_valid_endpoints() {
         .activate(&component, config, DEFAULT_EFFECT_CONFIGURATION)
         .unwrap();
     let before = runtime.encode_state(StateLimits::default()).unwrap();
-    let events = [
-        ParameterEvent::set(0, ParameterIndex::new(0), ParameterEventValue::Float(0.25)),
-        ParameterEvent::set(1, ParameterIndex::new(1), ParameterEventValue::Integer(9)),
-    ];
-    let mut samples = [1.0_f64; 4];
-    let mut right = [1.0_f64; 4];
-    let mut channels = [
-        ChannelBuffer::in_place(
-            InputEndpoint::new(AudioPortIndex::new(0), 0),
-            OutputEndpoint::new(AudioPortIndex::new(1), 0),
-            &mut samples,
-            4,
-        )
-        .unwrap(),
-        ChannelBuffer::in_place(
-            InputEndpoint::new(AudioPortIndex::new(0), 1),
-            OutputEndpoint::new(AudioPortIndex::new(1), 1),
-            &mut right,
-            4,
-        )
-        .unwrap(),
-    ];
-    let context = ProcessContext::new(
-        ProcessMode::Realtime,
-        TransportSnapshot::unknown(),
-        ParameterEvents::new(&events, 4, 8).unwrap(),
-    );
-    assert!(runtime.process(4, context, &mut channels).is_err());
-    assert_eq!(
-        runtime.encode_state(StateLimits::default()).unwrap(),
-        before
-    );
+    // One valid endpoint must not publish when a later integer or dense
+    // choice index is invalid. Reject the first out-of-range index and u32::MAX.
+    for (parameter, value, error) in [
+        (
+            ParameterIndex::new(1),
+            ParameterEventValue::Integer(9),
+            ParameterValueError::IntegerOutOfRange,
+        ),
+        (
+            ParameterIndex::new(3),
+            ParameterEventValue::Choice(ChoiceIndex::new(2)),
+            ParameterValueError::UnknownChoice,
+        ),
+        (
+            ParameterIndex::new(3),
+            ParameterEventValue::Choice(ChoiceIndex::new(u32::MAX)),
+            ParameterValueError::UnknownChoice,
+        ),
+    ] {
+        let events = [
+            ParameterEvent::set(0, ParameterIndex::new(0), ParameterEventValue::Float(0.25)),
+            ParameterEvent::set(1, parameter, value),
+        ];
+        let mut samples = [1.0_f64; 4];
+        let mut right = [1.0_f64; 4];
+        let mut channels = [
+            ChannelBuffer::in_place(
+                InputEndpoint::new(AudioPortIndex::new(0), 0),
+                OutputEndpoint::new(AudioPortIndex::new(1), 0),
+                &mut samples,
+                4,
+            )
+            .unwrap(),
+            ChannelBuffer::in_place(
+                InputEndpoint::new(AudioPortIndex::new(0), 1),
+                OutputEndpoint::new(AudioPortIndex::new(1), 1),
+                &mut right,
+                4,
+            )
+            .unwrap(),
+        ];
+        let context = ProcessContext::new(
+            ProcessMode::Realtime,
+            TransportSnapshot::unknown(),
+            ParameterEvents::new(&events, 4, 8).unwrap(),
+        );
+        assert_eq!(
+            runtime.process(4, context, &mut channels),
+            Err(InstanceProcessError::InvalidBlock(
+                ProcessBlockError::InvalidParameterEvents(ParameterAutomationError::InvalidValue {
+                    index: 1,
+                    error
+                },),
+            )),
+        );
+        assert_eq!(samples, [1.0; 4], "invalid events must prevent DSP");
+        assert_eq!(
+            runtime.encode_state(StateLimits::default()).unwrap(),
+            before
+        );
+    }
 }
 
 #[test]
@@ -159,6 +191,13 @@ fn completed_automation_carries_into_next_block_state_and_reactivation() {
         .activate(&component, config, DEFAULT_EFFECT_CONFIGURATION)
         .unwrap();
 
+    let mode = ParameterIndex::new(3);
+    let warm = runtime
+        .parameters()
+        .descriptor(mode)
+        .unwrap()
+        .choice_index("warm")
+        .unwrap();
     let events = [
         ParameterEvent::set(1, ParameterIndex::new(1), ParameterEventValue::Integer(2)),
         ParameterEvent::set(1, ParameterIndex::new(1), ParameterEventValue::Integer(7)),
@@ -167,11 +206,7 @@ fn completed_automation_carries_into_next_block_state_and_reactivation() {
             ParameterIndex::new(2),
             ParameterEventValue::Boolean(true),
         ),
-        ParameterEvent::set(
-            1,
-            ParameterIndex::new(3),
-            ParameterEventValue::Choice("warm"),
-        ),
+        ParameterEvent::set(1, ParameterIndex::new(3), ParameterEventValue::Choice(warm)),
         ParameterEvent::linear(3, ParameterIndex::new(0), 0.25),
     ];
     assert_eq!(
@@ -181,6 +216,18 @@ fn completed_automation_carries_into_next_block_state_and_reactivation() {
     assert_eq!(
         render(&mut runtime, &[]).map(f64::to_bits),
         [0.25_f64; 4].map(f64::to_bits)
+    );
+    let ParameterKind::Choice { options, .. } =
+        runtime.parameters().descriptor(mode).unwrap().kind()
+    else {
+        unreachable!("mode is a choice");
+    };
+    let ParameterValue::Choice(retained) = runtime.parameters().get_index(mode).unwrap() else {
+        unreachable!("mode retains a choice");
+    };
+    assert!(
+        std::ptr::eq(retained.as_str(), options[1].id().as_str()),
+        "completion must retain the schema-owned ID, not allocate a copy",
     );
     let state =
         StateDocument::decode(&runtime.encode_state(StateLimits::default()).unwrap()).unwrap();

@@ -12,26 +12,26 @@
 
 use core::fmt;
 
-use crate::parameters::ParameterIndex;
+use crate::parameters::{ChoiceIndex, ParameterIndex};
 
-/// A process-time parameter value borrowed from backend/event storage.
+/// A process-time parameter value using setup-resolved dense identity.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ParameterEventValue<'a> {
+pub enum ParameterEventValue {
     /// Finite plain-unit floating-point value.
     Float(f64),
     /// Signed integer value.
     Integer(i64),
     /// Boolean value.
     Boolean(bool),
-    /// Stable choice identity borrowed from event storage.
-    Choice(&'a str),
+    /// Parameter-local dense choice identity resolved before processing.
+    Choice(ChoiceIndex),
 }
 
 /// The change represented by one parameter event.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ParameterEventChange<'a> {
+pub enum ParameterEventChange {
     /// Set the value at the event's sample offset.
-    Set(ParameterEventValue<'a>),
+    Set(ParameterEventValue),
     /// Linearly reach the floating-point endpoint at the event's offset.
     ///
     /// The segment starts at the preceding point for this parameter. If no
@@ -43,26 +43,22 @@ pub enum ParameterEventChange<'a> {
     },
 }
 
-/// One borrowed, sample-positioned parameter change.
+/// One sample-positioned parameter change.
 ///
 /// Realtime events use a schema-local [`ParameterIndex`] rather than a stable
 /// string key. Adapters/runtime setup resolve persistent [`ParameterKey`](crate::parameters::ParameterKey)
 /// identities to dense indices before entering the process path.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ParameterEvent<'a> {
+pub struct ParameterEvent {
     offset: u32,
     parameter: ParameterIndex,
-    change: ParameterEventChange<'a>,
+    change: ParameterEventChange,
 }
 
-impl<'a> ParameterEvent<'a> {
+impl ParameterEvent {
     /// Construct an instantaneous parameter set.
     #[must_use]
-    pub const fn set(
-        offset: u32,
-        parameter: ParameterIndex,
-        value: ParameterEventValue<'a>,
-    ) -> Self {
+    pub const fn set(offset: u32, parameter: ParameterIndex, value: ParameterEventValue) -> Self {
         Self {
             offset,
             parameter,
@@ -94,7 +90,7 @@ impl<'a> ParameterEvent<'a> {
 
     /// Return the event change.
     #[must_use]
-    pub const fn change(self) -> ParameterEventChange<'a> {
+    pub const fn change(self) -> ParameterEventChange {
         self.change
     }
 }
@@ -108,7 +104,7 @@ impl<'a> ParameterEvent<'a> {
 /// boundary check before product DSP runs.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ParameterEvents<'a> {
-    events: &'a [ParameterEvent<'a>],
+    events: &'a [ParameterEvent],
     frame_count: u32,
 }
 
@@ -123,7 +119,7 @@ impl<'a> ParameterEvents<'a> {
     /// Returns [`ParameterEventsError`] when the event slice exceeds its bound,
     /// contains malformed values, or is not sample-sorted.
     pub fn new(
-        events: &'a [ParameterEvent<'a>],
+        events: &'a [ParameterEvent],
         frame_count: u32,
         max_events: u32,
     ) -> Result<Self, ParameterEventsError> {
@@ -163,13 +159,10 @@ impl<'a> ParameterEvents<'a> {
                         return Err(ParameterEventsError::NonFiniteValue { index });
                     }
                 }
-                ParameterEventChange::Set(ParameterEventValue::Choice(value)) => {
-                    if !valid_choice_identifier(value) {
-                        return Err(ParameterEventsError::InvalidChoice { index });
-                    }
-                }
                 ParameterEventChange::Set(
-                    ParameterEventValue::Integer(_) | ParameterEventValue::Boolean(_),
+                    ParameterEventValue::Integer(_)
+                    | ParameterEventValue::Boolean(_)
+                    | ParameterEventValue::Choice(_),
                 ) => {}
             }
         }
@@ -208,7 +201,7 @@ impl<'a> ParameterEvents<'a> {
     }
 
     /// Iterate events in the source-provided order.
-    pub fn iter(self) -> impl Iterator<Item = &'a ParameterEvent<'a>> {
+    pub fn iter(self) -> impl Iterator<Item = &'a ParameterEvent> {
         self.events.iter()
     }
 
@@ -216,7 +209,7 @@ impl<'a> ParameterEvents<'a> {
     pub fn for_parameter(
         self,
         parameter: ParameterIndex,
-    ) -> impl Iterator<Item = &'a ParameterEvent<'a>> {
+    ) -> impl Iterator<Item = &'a ParameterEvent> {
         self.events
             .iter()
             .filter(move |event| event.parameter == parameter)
@@ -256,7 +249,7 @@ impl<'a> ParameterEvents<'a> {
 /// The cursor performs no allocation. It consumes only events for its target
 /// while preserving the source order of equal-offset events.
 pub struct FloatParameterCursor<'events> {
-    events: &'events [ParameterEvent<'events>],
+    events: &'events [ParameterEvent],
     frame_count: u32,
     parameter: ParameterIndex,
     next_event: usize,
@@ -338,7 +331,7 @@ impl FloatParameterCursor<'_> {
     fn apply_point(
         &mut self,
         index: usize,
-        event: &ParameterEvent<'_>,
+        event: &ParameterEvent,
     ) -> Result<(), ParameterCursorError> {
         let value = match event.change {
             ParameterEventChange::Set(ParameterEventValue::Float(value))
@@ -351,12 +344,6 @@ impl FloatParameterCursor<'_> {
         self.point_value = value;
         Ok(())
     }
-}
-
-fn valid_choice_identifier(value: &str) -> bool {
-    !value.is_empty()
-        && !value.chars().any(char::is_whitespace)
-        && !value.chars().any(char::is_control)
 }
 
 /// Failure while validating a borrowed process event slice.
@@ -394,11 +381,6 @@ pub enum ParameterEventsError {
         /// Zero-based event index.
         index: usize,
     },
-    /// A choice identity was empty or contained whitespace/control characters.
-    InvalidChoice {
-        /// Zero-based event index.
-        index: usize,
-    },
 }
 
 impl fmt::Display for ParameterEventsError {
@@ -431,12 +413,6 @@ impl fmt::Display for ParameterEventsError {
             ),
             Self::NonFiniteValue { index } => {
                 write!(formatter, "parameter event {index} has a non-finite value")
-            }
-            Self::InvalidChoice { index } => {
-                write!(
-                    formatter,
-                    "parameter event {index} has an invalid choice identity"
-                )
             }
         }
     }
@@ -546,16 +522,6 @@ mod tests {
             ParameterEvents::new(&reversed, 4, 2),
             Err(ParameterEventsError::NonMonotonicOffsets { .. })
         ));
-
-        let invalid_choice = [ParameterEvent::set(
-            0,
-            GAIN,
-            ParameterEventValue::Choice("bad choice"),
-        )];
-        assert_eq!(
-            ParameterEvents::new(&invalid_choice, 4, 1),
-            Err(ParameterEventsError::InvalidChoice { index: 0 })
-        );
 
         let non_finite = [ParameterEvent::linear(0, GAIN, f64::NAN)];
         assert_eq!(

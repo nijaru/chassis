@@ -89,6 +89,30 @@ impl ParameterIndex {
     }
 }
 
+/// Dense parameter-local choice identity used only by runtime/process paths.
+///
+/// Resolve stable IDs with [`ParameterDescriptor::choice_index`] during setup.
+/// An index is meaningful only for that parameter's immutable option list and
+/// must never be serialized as persistence identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ChoiceIndex(u32);
+
+impl ChoiceIndex {
+    /// Construct a raw parameter-local index.
+    ///
+    /// The active [`ParameterStore`] validates the option index before DSP.
+    #[must_use]
+    pub const fn new(index: u32) -> Self {
+        Self(index)
+    }
+
+    /// Return the raw parameter-local index.
+    #[must_use]
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
+
 /// Stable identity of one choice option.
 ///
 /// The identity text is shared: schemas own the options they declare, so cloning
@@ -474,6 +498,22 @@ impl ParameterDescriptor {
         }
     }
 
+    /// Resolve a stable choice ID to this parameter's dense runtime identity.
+    ///
+    /// This text lookup belongs to setup/control paths, not realtime callbacks.
+    /// Returns `None` for non-choice parameters or unknown IDs.
+    #[must_use]
+    pub fn choice_index(&self, stable_id: &str) -> Option<ChoiceIndex> {
+        let ParameterKind::Choice { options, .. } = &self.kind else {
+            return None;
+        };
+        options
+            .iter()
+            .position(|option| option.id().as_str() == stable_id)
+            .and_then(|index| u32::try_from(index).ok())
+            .map(ChoiceIndex::new)
+    }
+
     /// Validate this descriptor's complete domain and default.
     ///
     /// # Errors
@@ -617,15 +657,15 @@ impl ParameterDescriptor {
         Ok(value)
     }
 
-    /// Validate one borrowed process-time event value against this descriptor.
+    /// Validate one dense process-time event value against this descriptor.
     ///
     /// # Errors
     ///
     /// Returns [`ParameterValueError`] when the event has the wrong type, is
-    /// outside this domain, or names an unknown choice.
+    /// outside this domain, or indexes an unknown choice.
     pub fn validate_event_value(
         &self,
-        value: &ParameterEventValue<'_>,
+        value: &ParameterEventValue,
     ) -> Result<(), ParameterValueError> {
         match (&self.kind, value) {
             (
@@ -653,7 +693,11 @@ impl ParameterDescriptor {
             }
             (ParameterKind::Boolean { .. }, ParameterEventValue::Boolean(_)) => {}
             (ParameterKind::Choice { options, .. }, ParameterEventValue::Choice(value)) => {
-                if !options.iter().any(|option| option.id.as_str() == *value) {
+                if usize::try_from(value.get())
+                    .ok()
+                    .and_then(|index| options.get(index))
+                    .is_none()
+                {
                     return Err(ParameterValueError::UnknownChoice);
                 }
             }
@@ -1199,15 +1243,14 @@ impl ParameterStore {
                 ParameterEventChange::Set(ParameterEventValue::Boolean(value)) => {
                     ParameterValue::Boolean(value)
                 }
-                ParameterEventChange::Set(ParameterEventValue::Choice(id)) => {
+                ParameterEventChange::Set(ParameterEventValue::Choice(index)) => {
                     let ParameterKind::Choice { options, .. } = self.descriptors[position].kind()
                     else {
                         unreachable!("validated choice event has a choice descriptor");
                     };
-                    let option = options
-                        .iter()
-                        .find(|option| option.id().as_str() == id)
-                        .expect("validated choice belongs to the schema");
+                    let index =
+                        usize::try_from(index.get()).expect("validated choice index fits usize");
+                    let option = &options[index];
                     ParameterValue::Choice(option.id().clone())
                 }
             };
@@ -1611,10 +1654,20 @@ mod tests {
         let gain = store.index("input.gain").expect("gain index exists");
         let quality = store.index("quality.level").expect("quality index exists");
         let mode = store.index("mode").expect("mode index exists");
+        let descriptor = store.descriptor(mode).unwrap();
+        assert_eq!(descriptor.choice_index("clean"), Some(ChoiceIndex::new(0)));
+        assert_eq!(descriptor.choice_index("warm"), Some(ChoiceIndex::new(1)));
+        assert_eq!(descriptor.choice_index("missing"), None);
+        assert_eq!(descriptor.choice_index("bad choice"), None);
+        assert_eq!(store.descriptor(gain).unwrap().choice_index("warm"), None);
         let raw_events = [
             ParameterEvent::set(0, gain, ParameterEventValue::Float(0.5)),
             ParameterEvent::linear(2, gain, 1.0),
-            ParameterEvent::set(3, mode, ParameterEventValue::Choice("warm")),
+            ParameterEvent::set(
+                3,
+                mode,
+                ParameterEventValue::Choice(descriptor.choice_index("warm").unwrap()),
+            ),
         ];
         let events = ParameterEvents::new(&raw_events, 4, 4).expect("events are valid");
         store.validate_events(events).expect("events match schema");

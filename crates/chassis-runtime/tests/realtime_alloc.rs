@@ -154,7 +154,7 @@ fn process_config() -> ProcessConfig {
     .expect("test process configuration is valid")
 }
 
-fn process_context<'a>(events: &'a [ParameterEvent<'a>]) -> ProcessContext<'a> {
+fn process_context(events: &[ParameterEvent]) -> ProcessContext<'_> {
     ProcessContext::new(
         ProcessMode::Realtime,
         TransportSnapshot::unknown(),
@@ -185,7 +185,14 @@ fn repeated_post_activation_process_calls_do_not_allocate_or_deallocate() {
 
     let mut left = [1.0_f32; 512];
     let mut right = [1.0_f32; 512];
-    let event_batches = ["clean", "warm"].map(|mode| {
+    let mode_parameter = ParameterIndex::new(3);
+    let event_batches = ["clean", "warm"].map(|id| {
+        let mode = runtime
+            .parameters()
+            .descriptor(mode_parameter)
+            .unwrap()
+            .choice_index(id)
+            .unwrap();
         [
             ParameterEvent::set(0, ParameterIndex::new(1), ParameterEventValue::Integer(3)),
             ParameterEvent::set(

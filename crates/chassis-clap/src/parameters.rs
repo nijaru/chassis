@@ -3,8 +3,8 @@ use std::{fmt, string::String, vec::Vec};
 use chassis_runtime::{
     automation::{ParameterEvent, ParameterEventValue},
     parameters::{
-        ChoiceId, ChoiceOption, ParameterDescriptor, ParameterIndex, ParameterKind, ParameterStore,
-        ParameterValue, ParameterValuesMut,
+        ChoiceId, ChoiceIndex, ChoiceOption, ParameterDescriptor, ParameterIndex, ParameterKind,
+        ParameterStore, ParameterValue, ParameterValuesMut,
     },
     schema::StateIdentity,
     state::{
@@ -145,7 +145,7 @@ impl ClapParameterBinding {
         flags
     }
 
-    pub(crate) fn event_value(&self, value: f64) -> Option<ParameterEventValue<'_>> {
+    pub(crate) fn event_value(&self, value: f64) -> Option<ParameterEventValue> {
         let value = self.normalize_host_plain(value)?;
         match self.descriptor.kind() {
             ParameterKind::Float { .. } => Some(ParameterEventValue::Float(value)),
@@ -157,8 +157,15 @@ impl ClapParameterBinding {
                 1.0 => Some(ParameterEventValue::Boolean(true)),
                 _ => None,
             },
-            ParameterKind::Choice { options, .. } => choice_option(options, value)
-                .map(|option| ParameterEventValue::Choice(option.id().as_str())),
+            ParameterKind::Choice { options, .. } => {
+                choice_option(options, value)?;
+                // Preserve the validated plain stepped projection without
+                // carrying schema text into the realtime event stream.
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let index = value as usize;
+                let index = u32::try_from(index).ok()?;
+                Some(ParameterEventValue::Choice(ChoiceIndex::new(index)))
+            }
         }
     }
 
@@ -711,7 +718,7 @@ pub(crate) fn normalized_event(
     id: ClapId,
     time: u32,
     value: f64,
-) -> Option<ParameterEvent<'_>> {
+) -> Option<ParameterEvent> {
     let index = state.index_for_id(id)?;
     let binding = &state.bindings[index];
     Some(ParameterEvent::set(
@@ -721,10 +728,10 @@ pub(crate) fn normalized_event(
     ))
 }
 
-pub(crate) fn normalized_events<'a>(
-    state: &'a ClapParameterState,
+pub(crate) fn normalized_events(
+    state: &ClapParameterState,
     input: &InputEvents<'_>,
-    output: &mut Vec<ParameterEvent<'a>>,
+    output: &mut Vec<ParameterEvent>,
 ) -> Result<(), &'static str> {
     output.clear();
     if input.len() > state.maximum_input_events {
@@ -857,7 +864,7 @@ mod tests {
         assert_eq!(binding.normalize_host_plain(0.99), Some(0.0));
         assert_eq!(
             binding.event_value(0.99),
-            Some(ParameterEventValue::Choice("clean"))
+            Some(ParameterEventValue::Choice(ChoiceIndex::new(0)))
         );
         assert!(state.apply_plain_value(ClapId::new(1), 0.99));
         assert_eq!(state.value(0), 0.0);
@@ -1194,7 +1201,7 @@ mod tests {
     }
 
     #[test]
-    fn choice_events_normalize_to_borrowed_schema_identities() {
+    fn choice_events_normalize_to_dense_option_indices() {
         let descriptors = choice_descriptors();
         let state = ClapParameterState::new(&descriptors, &[("gain", 1), ("mode", 2)])
             .expect("parameter mapping is valid");
@@ -1212,7 +1219,7 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(
             events.iter().next().expect("first event").change(),
-            ParameterEventChange::Set(ParameterEventValue::Choice("clean"))
+            ParameterEventChange::Set(ParameterEventValue::Choice(ChoiceIndex::new(0)))
         );
 
         // Out-of-range option indices are dropped before core validation.

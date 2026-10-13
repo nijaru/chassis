@@ -183,7 +183,7 @@ where
     host: HostAudioProcessorHandle<'a>,
     restart_sent: bool,
     shared: &'a ChassisShared,
-    normalized_events: Vec<chassis_runtime::automation::ParameterEvent<'a>>,
+    normalized_events: Vec<chassis_runtime::automation::ParameterEvent>,
     control_values: Vec<f64>,
     parameter_generation: Option<u64>,
     process_slots: Vec<ClapProcessSlot>,
