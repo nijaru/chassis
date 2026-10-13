@@ -126,7 +126,11 @@ bytes
  -> publish both together
 ```
 
-Any failure leaves live parameter and custom state unchanged. Persistent state is semantic versioned data, not Rust object layout or transient DSP history.
+Any failure leaves live parameter/custom state and restart status unchanged. Typed documents cannot contain non-finite floats or invalid choice identifiers, including migration output.
+
+An accepted custom-state change while active requests reactivation through `InstanceRuntime::restart_requested()`. That runtime request is sticky until deactivation and independent of processor-originated requests. The old processor remains valid with its activation-time custom resources; the next activation prepares the newly published state. Reset does not adopt custom state. Parameter-only loads remain block-visible without an automatic runtime restart.
+
+Persistent state is semantic versioned data, not Rust object layout or transient DSP history.
 
 ## Activation-scoped latency
 

@@ -91,7 +91,9 @@ bytes
  -> publish accepted state together
 ```
 
-Invalid decode, migration, framework values, unknown parameters, incomplete snapshots, or product validation leave live state unchanged.
+Invalid decode, migration, framework values, unknown parameters, incomplete snapshots, or product validation leave live state and restart status unchanged. Typed insertion and decode enforce semantic-value validity before a document can be published.
+
+Accepted custom-state changes while active request reactivation immediately. The request is sticky until deactivation; old DSP resources remain valid with their activation-time custom state until the new activation adopts the durable replacement. Parameter-only loads remain block-visible without an automatic runtime restart.
 
 Migration/decoding are non-realtime operations. Retain fixtures for every released schema.
 

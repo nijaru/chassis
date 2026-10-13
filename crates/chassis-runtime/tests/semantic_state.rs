@@ -11,9 +11,9 @@ use std::{
 };
 
 use chassis_runtime::{
-    audio::{DEFAULT_EFFECT_CONFIGURATION, DEFAULT_EFFECT_PORTS, MAIN_OUTPUT},
+    audio::{DEFAULT_EFFECT_CONFIGURATION, DEFAULT_EFFECT_PORTS, MAIN_INPUT, MAIN_OUTPUT},
     automation::ParameterEvents,
-    buffer::{ChannelBuffer, OutputEndpoint},
+    buffer::{ChannelBuffer, InputEndpoint, OutputEndpoint},
     parameters::{ParameterDescriptor, ParameterStore, ParameterValue},
     process::{
         ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessChannel, ProcessConfig,
@@ -268,11 +268,25 @@ fn amount_document(gain: f64, amount: f64) -> StateDocument {
 }
 
 fn render_amount(runtime: &mut InstanceRuntime<StateProcessor>) -> f64 {
+    let input = runtime.audio_port_index(&MAIN_INPUT).expect("input port");
     let output = runtime.audio_port_index(&MAIN_OUTPUT).expect("output port");
     let mut samples = [0.0];
+    let mut right = [0.0];
     let mut buffers = [
-        ChannelBuffer::output_only(OutputEndpoint::new(output, 0), &mut samples, 1)
-            .expect("valid output buffer"),
+        ChannelBuffer::in_place(
+            InputEndpoint::new(input, 0),
+            OutputEndpoint::new(output, 0),
+            &mut samples,
+            1,
+        )
+        .unwrap(),
+        ChannelBuffer::in_place(
+            InputEndpoint::new(input, 1),
+            OutputEndpoint::new(output, 1),
+            &mut right,
+            1,
+        )
+        .unwrap(),
     ];
     runtime
         .process(

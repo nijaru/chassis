@@ -45,7 +45,7 @@ The current prototype supports:
 - stable choice identifier;
 - bounded product-owned bytes.
 
-Parameter values persist in meaningful plain units, not host-normalized 0..1 values. NaN and infinity are rejected. `-0.0` is canonicalized to `0.0` by the current envelope.
+Parameter values persist in meaningful plain units, not host-normalized 0..1 values. Typed insertion and decoding share semantic-value validation, so NaN, infinity, and invalid choice identifiers cannot enter a `StateDocument`, including migration output. Encoding owns byte/resource bounds rather than delaying semantic validation until save. `-0.0` is canonicalized to `0.0` by the current envelope.
 
 Runtime DSP history is never serialized merely because its Rust type can be serialized.
 
@@ -148,7 +148,7 @@ bytes
 
 No live state is touched until all steps succeed. Product validation can inspect both temporary candidates, so cross-field constraints do not require partial mutation. Product rejection, migration failure, malformed input, and framework validation failure all leave both live domains unchanged.
 
-`Component::activate_with_state()` may inspect the accepted complete semantic state during non-realtime processor preparation. Persistence authority remains in `InstanceRuntime`, not in the active processor.
+`Component::activate_with_state()` inspects accepted complete semantic state during non-realtime processor preparation. An accepted custom-state change while active sets a runtime-owned restart request. It stays set until deactivation, even after reset or a later state reversion. Existing DSP resources remain valid and retain their activation-time custom state until reactivation adopts the new durable state; parameter-only changes remain visible through block state without an automatic restart. Failed loads change neither durable state nor the restart request. Persistence authority remains in `InstanceRuntime`, not in the active processor.
 
 Runtime parameter-only and explicit-ID compatibility methods have been removed. Lower-level `ParameterStore` serialization helpers are not a second component identity authority.
 
