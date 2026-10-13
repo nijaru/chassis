@@ -156,11 +156,14 @@ Before product DSP runs, `InstanceRuntime` rejects callback endpoints that:
 
 - target an unknown or inactive audio port;
 - use the wrong input/output direction;
-- name a channel outside the active layout.
+- name a channel outside the active layout;
+- repeat an endpoint, omit an active endpoint, or supply a view with no endpoints.
+
+Activation prepares reusable endpoint-coverage scratch. Every accepted view consumes at least one unique endpoint, bounding validation traversal by the accepted whole configuration; callback frame/event bounds are rejected before that traversal. Silent channels are explicit views, not omitted endpoints.
 
 Adapters creating safe process views remain responsible for their own raw pointer, aliasing, null-buffer, and format-specific proofs before core receives the views. The semantic endpoint legality contract itself is format-independent and activation-owned.
 
-The current runtime may traverse a buffer source once for endpoint legality and again for block dimensions/processing. Keep that simple bounded behavior until representative measurement justifies a combined execution plan or stronger source-qualification API.
+A source must repeat the same finite topology and dimensions across traversals. The current runtime traverses it once for complete endpoint coverage and again for block dimensions/processing. Keep that simple bounded behavior until representative measurement justifies a combined execution plan or stronger source-qualification API.
 
 ## Processing
 

@@ -256,7 +256,7 @@ impl ConfiguredAudioPort {
 /// Policy specifications live entirely in setup/control-domain metadata. Stable
 /// keys are resolved to dense indices only after one proposed configuration is
 /// accepted for activation.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Eq)]
 pub struct AudioIoConfigurationSpec {
     ports: Vec<ConfiguredAudioPort>,
 }
@@ -279,13 +279,19 @@ impl AudioIoConfigurationSpec {
     }
 }
 
+impl PartialEq for AudioIoConfigurationSpec {
+    fn eq(&self, other: &Self) -> bool {
+        same_audio_configuration(&self.ports, &other.ports)
+    }
+}
+
 /// Whole-component policy for accepted audio I/O configurations.
 ///
 /// Structural port validity and product configuration policy are distinct:
 /// descriptors say which ports exist, while this policy says which complete
 /// active-port/layout combinations are semantically supported.
 #[non_exhaustive]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Eq)]
 pub enum AudioIoPolicy {
     /// Accept every structurally valid configuration described by the port schema.
     ///
@@ -294,6 +300,22 @@ pub enum AudioIoPolicy {
     AnyStructurallyValid,
     /// Accept exactly one of the listed whole-component configurations.
     Enumerated(Vec<AudioIoConfigurationSpec>),
+}
+
+impl PartialEq for AudioIoPolicy {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::AnyStructurallyValid, Self::AnyStructurallyValid) => true,
+            (Self::Enumerated(left), Self::Enumerated(right)) => {
+                left.len() == right.len()
+                    && left.iter().all(|configuration| {
+                        left.iter().filter(|item| *item == configuration).count()
+                            == right.iter().filter(|item| *item == configuration).count()
+                    })
+            }
+            _ => false,
+        }
+    }
 }
 
 impl AudioIoPolicy {
@@ -377,9 +399,10 @@ impl AudioIoPolicy {
 
 fn same_audio_configuration(left: &[ConfiguredAudioPort], right: &[ConfiguredAudioPort]) -> bool {
     left.len() == right.len()
-        && left
-            .iter()
-            .all(|expected| right.iter().any(|actual| actual == expected))
+        && left.iter().all(|expected| {
+            left.iter().filter(|port| *port == expected).count()
+                == right.iter().filter(|port| *port == expected).count()
+        })
 }
 
 /// Invalid whole-component audio configuration policy definition.
@@ -663,6 +686,22 @@ pub enum AudioEndpointError {
         /// Direction declared by the component schema.
         actual: PortDirection,
     },
+    /// A process view carries neither an input nor an output endpoint.
+    EmptyChannel,
+    /// A logical endpoint occurs more than once in the callback.
+    DuplicateEndpoint {
+        /// Repeated active port.
+        port: AudioPortIndex,
+        /// Repeated channel in that port.
+        channel: u32,
+    },
+    /// The callback omitted endpoints from the accepted whole audio configuration.
+    IncompleteTopology {
+        /// Total active input and output endpoints required.
+        expected: usize,
+        /// Number of unique endpoints supplied.
+        actual: usize,
+    },
     /// The endpoint channel is outside the active layout.
     ChannelOutOfRange {
         /// Active port being addressed.
@@ -704,6 +743,16 @@ impl fmt::Display for AudioEndpointError {
                 formatter,
                 "audio endpoint port {} has direction {actual:?}, expected {expected:?}",
                 port.get()
+            ),
+            Self::EmptyChannel => formatter.write_str("audio view has no endpoints"),
+            Self::DuplicateEndpoint { port, channel } => write!(
+                formatter,
+                "audio endpoint port {} channel {channel} is repeated",
+                port.get()
+            ),
+            Self::IncompleteTopology { expected, actual } => write!(
+                formatter,
+                "audio callback supplies {actual} endpoints but the activation requires {expected}"
             ),
             Self::ChannelOutOfRange {
                 port,

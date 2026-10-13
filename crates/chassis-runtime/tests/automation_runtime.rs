@@ -79,13 +79,23 @@ impl Process<f64> for Gain {
 
 fn render(runtime: &mut InstanceRuntime<Gain>, events: &[ParameterEvent<'_>]) -> [f64; 4] {
     let mut samples = [1.0; 4];
-    let mut channels = [ChannelBuffer::in_place(
-        InputEndpoint::new(AudioPortIndex::new(0), 0),
-        OutputEndpoint::new(AudioPortIndex::new(1), 0),
-        &mut samples,
-        4,
-    )
-    .unwrap()];
+    let mut right = [1.0; 4];
+    let mut channels = [
+        ChannelBuffer::in_place(
+            InputEndpoint::new(AudioPortIndex::new(0), 0),
+            OutputEndpoint::new(AudioPortIndex::new(1), 0),
+            &mut samples,
+            4,
+        )
+        .unwrap(),
+        ChannelBuffer::in_place(
+            InputEndpoint::new(AudioPortIndex::new(0), 1),
+            OutputEndpoint::new(AudioPortIndex::new(1), 1),
+            &mut right,
+            4,
+        )
+        .unwrap(),
+    ];
     let context = ProcessContext::new(
         ProcessMode::Realtime,
         TransportSnapshot::unknown(),
@@ -110,13 +120,23 @@ fn invalid_batch_cannot_partially_retain_valid_endpoints() {
         ParameterEvent::set(1, ParameterIndex::new(1), ParameterEventValue::Integer(9)),
     ];
     let mut samples = [1.0_f64; 4];
-    let mut channels = [ChannelBuffer::in_place(
-        InputEndpoint::new(AudioPortIndex::new(0), 0),
-        OutputEndpoint::new(AudioPortIndex::new(1), 0),
-        &mut samples,
-        4,
-    )
-    .unwrap()];
+    let mut right = [1.0_f64; 4];
+    let mut channels = [
+        ChannelBuffer::in_place(
+            InputEndpoint::new(AudioPortIndex::new(0), 0),
+            OutputEndpoint::new(AudioPortIndex::new(1), 0),
+            &mut samples,
+            4,
+        )
+        .unwrap(),
+        ChannelBuffer::in_place(
+            InputEndpoint::new(AudioPortIndex::new(0), 1),
+            OutputEndpoint::new(AudioPortIndex::new(1), 1),
+            &mut right,
+            4,
+        )
+        .unwrap(),
+    ];
     let context = ProcessContext::new(
         ProcessMode::Realtime,
         TransportSnapshot::unknown(),

@@ -54,13 +54,15 @@ ProcessChannel<S>
 
 A materialized slice uses `ChannelBufferSlice`; a format adapter can yield safe host-derived channel wrappers lazily. Laziness changes when the safe view is produced, not the alias proof required for it.
 
+Every callback covers each active input/output endpoint exactly once, in any order, with paired or single-direction views. Missing/silent channels require explicit sample views; omission is not silence. Sources are finite and repeat the same topology, relationships, and dimensions across traversals. Runtime validation uses activation-owned endpoint coverage scratch, rejecting missing, duplicate, or endpoint-free views before DSP. Since each accepted view consumes a unique endpoint, even a repeated source is rejected within the activation's endpoint count plus one yielded view.
+
 `InstanceRuntime::process_source()` is the authoritative runtime entry for arbitrary sources. `InstanceRuntime::process()` is the non-allocating materialized-slice convenience wrapper.
 
 ## ProcessBlock
 
 `ProcessBlock<S, B>` exposes actual frame count, process mode/transport context, borrowed canonical base parameters, bounded ordered parameter and note events, and one borrowed buffer source. Activation configuration is used for validation, not retained as a public block accessor.
 
-Before product DSP runs, core validates frame bounds, event block association/type/domain, audio endpoint legality, note-port capabilities, and source dimensions. Stable key/backend mapping belongs to setup and is not rediscovered per callback.
+Before audio traversal, core rejects frame/event-bound or block-association failures. Before product DSP runs, it also validates complete audio topology, source dimensions, parameter type/domain, and note-port capabilities. Stable key/backend mapping belongs to setup and is not rediscovered per callback.
 
 Float automation trajectories are evaluated lazily through cursors rather than expanded into per-sample event storage.
 

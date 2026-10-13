@@ -99,19 +99,135 @@ fn active_runtime() -> (Arc<AtomicU32>, InstanceRuntime<ProbeProcessor>) {
 #[test]
 fn valid_dense_endpoints_reach_product_dsp() {
     let (process_calls, mut runtime) = active_runtime();
-    let mut samples = [1.0_f32];
-    let mut buffers = [ChannelBuffer::in_place(
-        InputEndpoint::new(MAIN_INPUT_INDEX, 0),
-        OutputEndpoint::new(MAIN_OUTPUT_INDEX, 0),
-        &mut samples,
-        1,
-    )
-    .expect("buffer is valid")];
+    let mut left = [1.0_f32];
+    let mut right = [2.0_f32];
+    // Traversal order is not identity: both channels cover the stereo topology.
+    let mut buffers = [
+        ChannelBuffer::in_place(
+            InputEndpoint::new(MAIN_INPUT_INDEX, 1),
+            OutputEndpoint::new(MAIN_OUTPUT_INDEX, 1),
+            &mut right,
+            1,
+        )
+        .expect("right buffer is valid"),
+        ChannelBuffer::in_place(
+            InputEndpoint::new(MAIN_INPUT_INDEX, 0),
+            OutputEndpoint::new(MAIN_OUTPUT_INDEX, 0),
+            &mut left,
+            1,
+        )
+        .expect("left buffer is valid"),
+    ];
 
     runtime
         .process(1, process_context(1), &mut buffers)
         .expect("valid resolved endpoints process");
     assert_eq!(process_calls.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn missing_and_duplicate_endpoints_never_reach_product_dsp() {
+    let (process_calls, mut runtime) = active_runtime();
+    assert!(
+        runtime
+            .process::<f32>(1, process_context(1), &mut [])
+            .is_err()
+    );
+    let mut left = [1.0_f32];
+    let mut right = [2.0_f32];
+    let left = ChannelBuffer::in_place(
+        InputEndpoint::new(MAIN_INPUT_INDEX, 0),
+        OutputEndpoint::new(MAIN_OUTPUT_INDEX, 0),
+        &mut left,
+        1,
+    )
+    .unwrap();
+    let right = ChannelBuffer::in_place(
+        InputEndpoint::new(MAIN_INPUT_INDEX, 0),
+        OutputEndpoint::new(MAIN_OUTPUT_INDEX, 0),
+        &mut right,
+        1,
+    )
+    .unwrap();
+    let mut buffers = [left, right];
+    assert!(
+        runtime
+            .process(1, process_context(1), &mut buffers[..1])
+            .is_err()
+    );
+    assert!(
+        runtime
+            .process(1, process_context(1), &mut buffers)
+            .is_err()
+    );
+    assert_eq!(process_calls.load(Ordering::Relaxed), 0);
+}
+
+struct RepeatedInputSource {
+    visits: std::cell::Cell<usize>,
+}
+
+struct RepeatedInputs<'a> {
+    visits: &'a std::cell::Cell<usize>,
+    remaining: usize,
+}
+
+impl Iterator for RepeatedInputs<'_> {
+    type Item = ChannelBuffer<'static, f32>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.remaining == 0 {
+            return None;
+        }
+        self.remaining -= 1;
+        self.visits.set(self.visits.get() + 1);
+        Some(ChannelBuffer::input_only(InputEndpoint::new(MAIN_INPUT_INDEX, 0), &[1.0], 1).unwrap())
+    }
+}
+
+impl ProcessBufferSource<f32> for RepeatedInputSource {
+    type Channel<'a> = ChannelBuffer<'static, f32>;
+    type Channels<'a> = RepeatedInputs<'a>;
+
+    fn validate_frame_count(
+        &mut self,
+        _: usize,
+    ) -> Result<(), chassis_runtime::process::ProcessBlockError> {
+        Ok(())
+    }
+
+    fn channels(&mut self) -> Self::Channels<'_> {
+        RepeatedInputs {
+            visits: &self.visits,
+            remaining: 100,
+        }
+    }
+}
+
+#[test]
+fn repeated_sources_are_rejected_with_activation_bounded_traversal() {
+    let (process_calls, mut runtime) = active_runtime();
+    let mut source = RepeatedInputSource {
+        visits: std::cell::Cell::new(0),
+    };
+    assert!(
+        runtime
+            .process_source(1, process_context(1), &mut source)
+            .is_err()
+    );
+    assert_eq!(source.visits.get(), 2);
+    assert_eq!(process_calls.load(Ordering::Relaxed), 0);
+
+    source.visits.set(0);
+    assert!(matches!(
+        runtime.process_source(65, process_context(65), &mut source),
+        Err(InstanceProcessError::InvalidBlock(_))
+    ));
+    assert_eq!(
+        source.visits.get(),
+        0,
+        "reject callback bounds before traversing audio"
+    );
 }
 
 #[test]

@@ -460,7 +460,11 @@ impl<S> ProcessChannel<S> for &mut ChannelBuffer<'_, S> {
 /// lazily from an adapter-owned host buffer representation. They must not grow
 /// owned storage in the callback. `validate_frame_count()` must inspect every
 /// channel the source can yield and reject a mismatched callback dimension before
-/// product DSP is entered.
+/// product DSP is entered. Traversals must be finite and repeat the same endpoint
+/// set, relationships, and dimensions for this callback (sample contents may
+/// change). Each active input/output endpoint appears exactly once, possibly in
+/// a paired view; silent channels still need an explicit sample view. The runtime
+/// checks whole topology with activation-owned scratch before dimension scans.
 pub trait ProcessBufferSource<S> {
     /// One safe channel item yielded by a traversal.
     type Channel<'a>: ProcessChannel<S>
@@ -566,18 +570,34 @@ where
         context: ProcessContext<'context>,
         source: &'source mut B,
     ) -> Result<Self, ProcessBlockError> {
+        let expected = Self::validate_context(config.process(), frame_count, context)?;
+        source.validate_frame_count(expected)?;
+        Ok(Self {
+            frame_count,
+            context,
+            parameters,
+            source,
+            sample: PhantomData,
+        })
+    }
+
+    pub(crate) fn validate_context(
+        process: ProcessConfig,
+        frame_count: u32,
+        context: ProcessContext<'_>,
+    ) -> Result<usize, ProcessBlockError> {
         if context.parameter_events().frame_count() != frame_count {
             return Err(ProcessBlockError::ParameterEventFrameCountMismatch {
                 expected: frame_count,
                 actual: context.parameter_events().frame_count(),
             });
         }
-        let maximum_parameter_events = usize::try_from(config.process().max_parameter_events())
+        let maximum_parameter_events = usize::try_from(process.max_parameter_events())
             .map_err(|_| ProcessBlockError::ParameterEventLimitNotRepresentable)?;
         if context.parameter_events().len() > maximum_parameter_events {
             return Err(ProcessBlockError::ParameterEventCountTooLarge {
                 actual: context.parameter_events().len(),
-                maximum: config.process().max_parameter_events(),
+                maximum: process.max_parameter_events(),
             });
         }
         if context.note_events().frame_count() != frame_count {
@@ -586,15 +606,15 @@ where
                 actual: context.note_events().frame_count(),
             });
         }
-        let maximum_note_events = usize::try_from(config.process().max_note_events())
+        let maximum_note_events = usize::try_from(process.max_note_events())
             .map_err(|_| ProcessBlockError::NoteEventLimitNotRepresentable)?;
         if context.note_events().len() > maximum_note_events {
             return Err(ProcessBlockError::NoteEventCountTooLarge {
                 actual: context.note_events().len(),
-                maximum: config.process().max_note_events(),
+                maximum: process.max_note_events(),
             });
         }
-        if let Some(minimum) = config.process().guaranteed_min_frames()
+        if let Some(minimum) = process.guaranteed_min_frames()
             && frame_count < minimum.get()
         {
             return Err(ProcessBlockError::BelowGuaranteedMinimum {
@@ -603,24 +623,14 @@ where
             });
         }
 
-        if frame_count > config.process().max_frames().get() {
+        if frame_count > process.max_frames().get() {
             return Err(ProcessBlockError::ExceedsActivatedMaximum {
                 actual: frame_count,
-                maximum: config.process().max_frames().get(),
+                maximum: process.max_frames().get(),
             });
         }
 
-        let expected = usize::try_from(frame_count)
-            .map_err(|_| ProcessBlockError::FrameCountNotRepresentable)?;
-        source.validate_frame_count(expected)?;
-
-        Ok(Self {
-            frame_count,
-            context,
-            parameters,
-            source,
-            sample: PhantomData,
-        })
+        usize::try_from(frame_count).map_err(|_| ProcessBlockError::FrameCountNotRepresentable)
     }
 
     /// Return the actual number of frames in this callback.

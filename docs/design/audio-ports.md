@@ -69,7 +69,7 @@ Enumerated([configuration...])
 
 `AnyStructurallyValid` is an explicit choice for dynamic/embedded components whose semantics genuinely impose no stronger relationship than descriptor validity.
 
-`Enumerated` owns a finite set of allowed whole configurations. Schema construction rejects an empty enumerated policy, structurally invalid allowed configurations, and duplicate configurations. Matching is semantic and order-independent rather than depending on declaration order.
+`Enumerated` owns a finite set of allowed whole configurations. Schema construction rejects an empty enumerated policy, structurally invalid allowed configurations, and duplicate configurations. Matching and policy equality are semantic and order-independent: reordering ports within a configuration or alternatives within the policy is not schema drift. Descriptor order still establishes dense port identity and is not interchangeable.
 
 Policy evaluation is non-realtime/inactive and cannot depend on mutable `Processor` state. Policy is part of immutable component schema identity for one runtime generation; activation rejects policy drift even if port descriptors are otherwise unchanged.
 

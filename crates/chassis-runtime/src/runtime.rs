@@ -10,7 +10,7 @@ use std::vec::Vec;
 use crate::{
     audio::{
         AudioEndpointError, AudioIoConfiguration, AudioIoConfigurationError, AudioIoPolicyError,
-        AudioPortDescriptor, AudioPortIndex, ConfiguredAudioPort, PortDirection, PortKey,
+        AudioPortDescriptor, AudioPortIndex, ConfiguredAudioPort, PortKey,
         ResolvedAudioIoConfiguration,
     },
     buffer::ChannelBuffer,
@@ -20,7 +20,7 @@ use crate::{
     parameters::{ParameterStateError, ParameterStore, ParameterStoreError, ParameterValuesMut},
     process::{
         ActivationConfig, ChannelBufferSlice, ProcessBlock, ProcessBlockError, ProcessBufferSource,
-        ProcessChannel, ProcessConfig, ProcessContext,
+        ProcessConfig, ProcessContext,
     },
     schema::{ComponentSchema, ComponentSchemaError},
     state::{
@@ -28,6 +28,10 @@ use crate::{
         StateMigrationError,
     },
 };
+
+mod audio_buffers;
+
+use audio_buffers::AudioBufferValidation;
 
 /// Immutable product definition/factory for one Chassis component type.
 ///
@@ -250,6 +254,8 @@ pub enum ActivateError<E> {
     InvalidAudioIo(AudioIoConfigurationError),
     /// The structurally valid I/O configuration is not accepted by component policy.
     UnsupportedAudioIo,
+    /// The accepted channel topology could not be represented or its validation scratch allocated.
+    AudioChannelCapacity,
     /// Product activation failed after the framework configuration was validated.
     Product(E),
 }
@@ -279,6 +285,9 @@ where
             Self::UnsupportedAudioIo => {
                 formatter.write_str("audio I/O configuration is unsupported by component policy")
             }
+            Self::AudioChannelCapacity => {
+                formatter.write_str("could not prepare audio channel validation capacity")
+            }
             Self::Product(error) => write!(formatter, "product activation failed: {error}"),
         }
     }
@@ -296,7 +305,8 @@ where
             | Self::ParameterSchemaMismatch
             | Self::EventPortSchemaMismatch
             | Self::StateIdentityMismatch
-            | Self::UnsupportedAudioIo => None,
+            | Self::UnsupportedAudioIo
+            | Self::AudioChannelCapacity => None,
             Self::InvalidComponentSchema(error) => Some(error),
             Self::InvalidAudioIo(error) => Some(error),
             Self::Product(error) => Some(error),
@@ -507,6 +517,7 @@ struct ActiveRuntime<P> {
     process: ProcessConfig,
     audio_ports: Vec<ConfiguredAudioPort>,
     resolved_audio: ResolvedAudioIoConfiguration,
+    audio_buffers: AudioBufferValidation,
     latency: LatencySamples,
     processor: P,
 }
@@ -621,6 +632,9 @@ where
     /// impl Component for Definition {
     ///     type Processor = Dsp;
     ///     type ActivationError = core::convert::Infallible;
+    ///     fn schema(&self) -> Result<chassis_runtime::schema::ComponentSchema, chassis_runtime::schema::ComponentSchemaError> {
+    ///         chassis_runtime::schema::ComponentSchema::stereo_effect(vec![])
+    ///     }
     ///     fn activate(&self, _: &chassis_runtime::process::ActivationConfig<'_>) -> Result<Dsp, Self::ActivationError> { Ok(Dsp) }
     /// }
     /// let definition = Definition;
@@ -688,7 +702,8 @@ where
     /// Returns [`ActivateError::AlreadyActive`] if already active, a schema
     /// mismatch/error if the supplied component no longer describes this instance
     /// generation, [`ActivateError::InvalidAudioIo`] for malformed configuration,
-    /// or [`ActivateError::Product`] when product activation fails.
+    /// [`ActivateError::AudioChannelCapacity`] if topology validation scratch
+    /// cannot be prepared, or [`ActivateError::Product`] when product activation fails.
     pub fn activate<C>(
         &mut self,
         component: &C,
@@ -727,6 +742,8 @@ where
         if !self.schema.audio_io_policy().accepts(audio_io) {
             return Err(ActivateError::UnsupportedAudioIo);
         }
+        let audio_buffers = AudioBufferValidation::new(&resolved_audio)
+            .map_err(|()| ActivateError::AudioChannelCapacity)?;
         let audio_ports = audio_io.ports().to_vec();
         let config = ActivationConfig::new(
             process,
@@ -741,6 +758,7 @@ where
             process,
             audio_ports,
             resolved_audio,
+            audio_buffers,
             latency,
             processor,
         });
@@ -785,8 +803,9 @@ where
 
     /// Process one allocation-free safe buffer source through the active processor.
     ///
-    /// The runtime validates endpoint identity/direction/channel legality against
-    /// the activation-owned dense audio configuration before product DSP. Source-
+    /// The runtime validates unique, complete endpoint coverage and
+    /// identity/direction/channel legality against the activation-owned dense
+    /// audio configuration before product DSP. Source-
     /// specific raw-pointer/alias proofs still belong to adapters/embeddings.
     /// After successful processing, final automation endpoints become durable
     /// base values for the next block, state export, and reactivation. Validation
@@ -821,11 +840,15 @@ where
             process,
             audio_ports,
             resolved_audio,
+            audio_buffers,
             latency: _,
             processor,
         } = active;
 
-        validate_audio_endpoints(source, resolved_audio)
+        ProcessBlock::<S, B>::validate_context(*process, frame_count, context)
+            .map_err(InstanceProcessError::InvalidBlock)?;
+        audio_buffers
+            .validate(source, resolved_audio)
             .map_err(InstanceProcessError::InvalidAudioEndpoint)?;
 
         let config =
@@ -1019,24 +1042,4 @@ where
         self.apply_state(&document, validate_product_state)
             .map_err(InstanceSemanticStateLoadError::Apply)
     }
-}
-
-fn validate_audio_endpoints<S, B>(
-    source: &mut B,
-    resolved: &ResolvedAudioIoConfiguration,
-) -> Result<(), AudioEndpointError>
-where
-    B: ProcessBufferSource<S> + ?Sized,
-{
-    for channel in source.channels() {
-        if let Some(endpoint) = channel.input_endpoint() {
-            let port = endpoint.port_index();
-            resolved.validate_endpoint(port, endpoint.channel(), PortDirection::Input)?;
-        }
-        if let Some(endpoint) = channel.output_endpoint() {
-            let port = endpoint.port_index();
-            resolved.validate_endpoint(port, endpoint.channel(), PortDirection::Output)?;
-        }
-    }
-    Ok(())
 }

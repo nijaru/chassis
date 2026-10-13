@@ -101,6 +101,60 @@ fn runtime_owns_complete_schema_and_dense_audio_lookup() {
     assert_eq!(runtime.audio_ports(), DEFAULT_EFFECT_PORTS);
 }
 
+struct PolicyProbe {
+    reverse: bool,
+}
+
+impl Component for PolicyProbe {
+    type Processor = ProbeProcessor;
+    type ActivationError = Infallible;
+
+    fn schema(&self) -> Result<ComponentSchema, chassis_runtime::schema::ComponentSchemaError> {
+        let policy = chassis_runtime::audio::AudioIoPolicy::stereo_effect();
+        let mut configurations: Vec<_> = policy
+            .configurations()
+            .unwrap()
+            .iter()
+            .map(|configuration| {
+                let mut ports = configuration.ports().to_vec();
+                if self.reverse {
+                    ports.reverse();
+                }
+                chassis_runtime::audio::AudioIoConfigurationSpec::new(ports)
+            })
+            .collect();
+        if self.reverse {
+            configurations.reverse();
+        }
+        ComponentSchema::unidentified(
+            DEFAULT_EFFECT_PORTS.to_vec(),
+            chassis_runtime::audio::AudioIoPolicy::enumerated(configurations),
+            vec![],
+            vec![],
+        )
+    }
+
+    fn activate(&self, _: &ActivationConfig<'_>) -> Result<ProbeProcessor, Infallible> {
+        Ok(ProbeProcessor)
+    }
+}
+
+#[test]
+fn policy_enumeration_order_is_not_semantic_schema_drift() {
+    let mut runtime = InstanceRuntime::for_component(&PolicyProbe { reverse: false }).unwrap();
+    runtime
+        .activate(
+            &PolicyProbe { reverse: true },
+            process_config(),
+            DEFAULT_EFFECT_CONFIGURATION,
+        )
+        .expect("the same allowed configuration set is not a schema change");
+    assert_eq!(
+        runtime.audio_port_index(&MAIN_INPUT),
+        Some(AudioPortIndex::new(0))
+    );
+}
+
 #[test]
 fn activation_rejects_audio_schema_drift() {
     let original = Probe {
