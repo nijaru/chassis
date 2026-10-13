@@ -21,7 +21,7 @@ use std::{
     vec::Vec,
 };
 
-use audio::{AudioMappingError, ClapAudioConfiguration, ClapProcessSlot};
+use audio::{ClapAudioConfiguration, ClapProcessSlot};
 use chassis_runtime::{
     audio::PortDirection,
     automation::ParameterEvents,
@@ -55,10 +55,7 @@ use clack_plugin::{
     stream::{InputStream, OutputStream},
     utils::Cookie,
 };
-use parameters::{
-    ClapParameterState, ParameterMappingError, ParameterStateError, ParameterSyncError,
-    normalized_events,
-};
+use parameters::{ClapParameterState, ParameterStateError, ParameterSyncError, normalized_events};
 use process_audio::{ClapBufferSource, ClapSample, ClapSamplePrecision, sample_precision};
 
 /// Explicit CLAP audio-port projection metadata.
@@ -304,7 +301,7 @@ where
         ));
     }
     let parameters = ClapParameterState::new(schema.parameters(), C::CLAP_PARAMETER_IDS)
-        .map_err(|error| parameter_mapping_error(&error))?
+        .map_err(PluginError::from)?
         .with_input_event_bound(C::CLAP_MAX_INPUT_EVENTS);
     Ok(ChassisShared {
         schema: Arc::new(schema),
@@ -331,7 +328,7 @@ where
         ));
     }
     let mut audio = ClapAudioConfiguration::new(shared.schema.audio_ports(), C::CLAP_AUDIO_PORTS)
-        .map_err(|error| audio_mapping_error(&error))?;
+        .map_err(PluginError::from)?;
     if !shared.schema.audio_io_policy().accepts(audio.audio_io()) {
         return Err(PluginError::Message(
             "CLAP audio mapping is unsupported by the component audio I/O policy",
@@ -785,14 +782,6 @@ where
             .map_err(sync_error)?;
         Ok(())
     }
-}
-
-fn audio_mapping_error(_error: &AudioMappingError) -> PluginError {
-    PluginError::Message("Invalid CLAP audio-port mapping")
-}
-
-fn parameter_mapping_error(_error: &ParameterMappingError) -> PluginError {
-    PluginError::Message("Invalid CLAP parameter mapping")
 }
 
 fn sync_error(_error: ParameterSyncError) -> PluginError {
