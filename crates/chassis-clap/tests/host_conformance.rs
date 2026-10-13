@@ -187,7 +187,7 @@ impl Process<f32> for ProbeProcessor {
                     .float_cursor(trim_index, base)
                     .expect("trim cursor is valid");
                 for (offset, sample) in channel
-                    .make_in_place()
+                    .copy_input_to_output()
                     .expect("main channel has input and output")
                     .iter_mut()
                     .enumerate()
@@ -224,7 +224,7 @@ impl Process<f64> for ProbeProcessor {
                     .float_cursor(trim_index, base)
                     .expect("trim cursor is valid");
                 for (offset, sample) in channel
-                    .make_in_place()
+                    .copy_input_to_output()
                     .expect("main channel has input and output")
                     .iter_mut()
                     .enumerate()

@@ -120,7 +120,7 @@ where
         }
     }
 
-    fn make_in_place(&mut self) -> Result<&mut [S], BufferAccessError> {
+    fn copy_input_to_output(&mut self) -> Result<&mut [S], BufferAccessError> {
         match &mut self.pair {
             ChannelPair::InPlace(samples) => Ok(&mut **samples),
             ChannelPair::InputOutput(input, output) => {

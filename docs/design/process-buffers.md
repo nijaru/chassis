@@ -26,13 +26,13 @@ Endpoints carry schema-local dense `AudioPortIndex` plus channel index. Stable k
 
 ## Controlled copy convenience
 
-`ChannelBuffer::make_in_place()` provides one explicit convenience:
+`ChannelBuffer::copy_input_to_output()` provides one explicit convenience:
 
 - exact in-place -> existing mutable slice, no copy;
-- separate -> bounded input-to-output copy, then output slice;
+- separate -> bounded input-to-output copy on every call, then output slice;
 - input-only/output-only -> error because no valid paired in-place view exists.
 
-Products with out-of-place algorithms can use input/output access directly. Zero-copy is not a goal by itself; keep the bounded copy unless measurement justifies more complex ownership.
+This operation explicitly initializes output; it is not an idempotent mutable accessor. Initialize once for an in-place algorithm, then use `output_mut()` for subsequent stages. Products with out-of-place algorithms can use input/output access directly. Zero-copy is not a goal by itself; keep the bounded copy unless measurement justifies more complex ownership.
 
 ## Generic no-allocation source
 
@@ -49,7 +49,7 @@ ProcessChannel<S>
   relationship
   semantic endpoints
   frame count
-  input / output_mut / make_in_place
+  input / output_mut / copy_input_to_output
 ```
 
 A materialized slice uses `ChannelBufferSlice`; a format adapter can yield safe host-derived channel wrappers lazily. Laziness changes when the safe view is produced, not the alias proof required for it.

@@ -102,7 +102,7 @@ impl Process<f32> for ConformanceProcessor {
                         .float_cursor(trim_index, base_trim)
                         .expect("conformance trim base is finite");
                     for (offset, sample) in buffer
-                        .make_in_place()
+                        .copy_input_to_output()
                         .expect("paired main channel has input and output")
                         .iter_mut()
                         .enumerate()
@@ -144,7 +144,7 @@ impl Process<f64> for ConformanceProcessor {
                         .float_cursor(trim_index, base_trim)
                         .expect("conformance trim base is finite");
                     for (offset, sample) in buffer
-                        .make_in_place()
+                        .copy_input_to_output()
                         .expect("paired main channel has input and output")
                         .iter_mut()
                         .enumerate()

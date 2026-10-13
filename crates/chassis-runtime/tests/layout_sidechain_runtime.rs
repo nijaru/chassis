@@ -138,7 +138,7 @@ impl Process<f32> for LayoutProcessor {
                 continue;
             }
             for sample in channel
-                .make_in_place()
+                .copy_input_to_output()
                 .expect("main channels are paired input/output")
             {
                 *sample *= self.factor;

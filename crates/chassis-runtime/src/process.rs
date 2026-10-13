@@ -376,13 +376,16 @@ pub trait ProcessChannel<S> {
     /// Borrow writable output samples when an output endpoint exists.
     fn output_mut(&mut self) -> Option<&mut [S]>;
 
-    /// Return writable in-place samples, explicitly copying separate input to output once.
+    /// Copy input to output and return the writable output view.
+    ///
+    /// Each call reinitializes separate output. Use [`Self::output_mut`] after
+    /// initialization to preserve the work of earlier processing stages.
     ///
     /// # Errors
     ///
     /// Returns [`BufferAccessError`] for input-only/output-only relationships
     /// that cannot define an input-to-output in-place transform.
-    fn make_in_place(&mut self) -> Result<&mut [S], BufferAccessError>
+    fn copy_input_to_output(&mut self) -> Result<&mut [S], BufferAccessError>
     where
         S: Copy;
 }
@@ -412,11 +415,11 @@ impl<S> ProcessChannel<S> for ChannelBuffer<'_, S> {
         ChannelBuffer::output_mut(self)
     }
 
-    fn make_in_place(&mut self) -> Result<&mut [S], BufferAccessError>
+    fn copy_input_to_output(&mut self) -> Result<&mut [S], BufferAccessError>
     where
         S: Copy,
     {
-        ChannelBuffer::make_in_place(self)
+        ChannelBuffer::copy_input_to_output(self)
     }
 }
 
@@ -445,11 +448,11 @@ impl<S> ProcessChannel<S> for &mut ChannelBuffer<'_, S> {
         (**self).output_mut()
     }
 
-    fn make_in_place(&mut self) -> Result<&mut [S], BufferAccessError>
+    fn copy_input_to_output(&mut self) -> Result<&mut [S], BufferAccessError>
     where
         S: Copy,
     {
-        (**self).make_in_place()
+        (**self).copy_input_to_output()
     }
 }
 
@@ -950,7 +953,7 @@ mod tests {
 
         for channel in block.channels() {
             channel
-                .make_in_place()
+                .copy_input_to_output()
                 .expect("split source channels are paired")
                 .iter_mut()
                 .for_each(|sample| *sample *= 0.5);

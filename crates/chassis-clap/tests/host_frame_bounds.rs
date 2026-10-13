@@ -68,7 +68,7 @@ impl Process<f32> for FrameProcessor {
                     .output_endpoint()
                     .is_some_and(|endpoint| endpoint.port_index() == self.main_output)
             {
-                let _ = channel.make_in_place();
+                let _ = channel.copy_input_to_output();
             }
         }
     }

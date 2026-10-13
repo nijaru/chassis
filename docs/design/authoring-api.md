@@ -157,7 +157,7 @@ That is sufficient for current effect, instrument, sidechain/layout-switching, m
 
 `InstanceRuntime` validates dense endpoints against the activation-owned resolved configuration before product DSP, rejecting unknown/inactive ports, wrong direction, and out-of-range channels. Adapters still own raw-pointer, aliasing, null-buffer, and other backend-specific proofs before constructing safe core views.
 
-`make_in_place()` may perform one bounded input -> output copy for separate buffers. Keep that simple behavior unless representative measurement justifies additional complexity.
+`copy_input_to_output()` may perform one bounded input -> output copy for separate buffers. Keep that simple behavior unless representative measurement justifies additional complexity.
 
 ## Parameters and state
 

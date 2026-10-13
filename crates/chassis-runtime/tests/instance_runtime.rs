@@ -115,7 +115,7 @@ impl Process<f32> for EffectProcessor {
             _ => 1.0,
         };
         for mut buffer in block.channels() {
-            if let Ok(samples) = buffer.make_in_place() {
+            if let Ok(samples) = buffer.copy_input_to_output() {
                 for sample in samples {
                     *sample *= gain;
                 }

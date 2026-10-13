@@ -308,11 +308,13 @@ impl<'a, S> ChannelBuffer<'a, S> {
         }
     }
 
-    /// Return a writable in-place processing view, copying separate input to output once.
+    /// Copy the current input to output and return the writable output view.
     ///
-    /// Exact in-place buffers are returned directly. Separate buffers perform
-    /// one bounded `copy_from_slice` into the output. Input-only and output-only
-    /// channels do not define an input-to-output transform and are rejected.
+    /// Exact in-place buffers need no copy. For separate buffers, every call
+    /// overwrites output with input using one bounded `copy_from_slice`. Call
+    /// once to initialize an in-place algorithm, then use [`Self::output_mut`]
+    /// for later processing stages so previous output is preserved. Input-only
+    /// and output-only channels have no paired transform and are rejected.
     ///
     /// # Errors
     ///
@@ -320,7 +322,7 @@ impl<'a, S> ChannelBuffer<'a, S> {
     /// [`BufferAccessError::MissingInput`] for output-only channels, or
     /// [`BufferAccessError::FrameCountMismatch`] for directly constructed separate
     /// buffers with unequal lengths.
-    pub fn make_in_place(&mut self) -> Result<&mut [S], BufferAccessError>
+    pub fn copy_input_to_output(&mut self) -> Result<&mut [S], BufferAccessError>
     where
         S: Copy,
     {
@@ -460,7 +462,7 @@ mod tests {
 
             assert_eq!(buffer.relationship(), BufferRelationship::InPlace);
             buffer
-                .make_in_place()
+                .copy_input_to_output()
                 .expect("paired buffer has input and output")[1] = 4.0;
         }
 
@@ -468,7 +470,7 @@ mod tests {
     }
 
     #[test]
-    fn separate_make_in_place_copies_once_to_output() {
+    fn separate_copy_initializes_and_explicitly_reinitializes_output() {
         let input = [1_u32, 2, 3];
         let mut output = [0_u32; 3];
         let mut buffer = ChannelBuffer::separate(
@@ -481,9 +483,21 @@ mod tests {
         .expect("test buffers are long enough");
 
         let output_view = buffer
-            .make_in_place()
+            .copy_input_to_output()
             .expect("paired buffer has input and output");
         assert_eq!(output_view, input);
+        for sample in output_view {
+            *sample *= 2;
+        }
+        for sample in buffer.output_mut().unwrap() {
+            *sample *= 3;
+        }
+        assert_eq!(buffer.output_mut().unwrap(), &[6, 12, 18]);
+        assert_eq!(
+            buffer.copy_input_to_output().unwrap(),
+            input,
+            "explicit copying reinitializes separate output; mutable access does not"
+        );
     }
 
     #[test]
@@ -496,7 +510,7 @@ mod tests {
             output: OutputEndpoint::new(AudioPortIndex::new(1), 0),
             output_samples: &mut output,
         };
-        assert!(buffer.make_in_place().is_err());
+        assert!(buffer.copy_input_to_output().is_err());
         assert_eq!(output, [9]);
     }
 

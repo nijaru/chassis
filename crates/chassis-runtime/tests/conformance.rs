@@ -149,7 +149,7 @@ impl Process<f32> for ConformanceProcessor {
             }
 
             let samples = buffer
-                .make_in_place()
+                .copy_input_to_output()
                 .expect("conformance main channels always have paired input/output");
             if let Some(gain_index) = gain_index {
                 let mut gain = parameter_events

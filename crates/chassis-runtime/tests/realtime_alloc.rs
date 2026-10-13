@@ -135,7 +135,7 @@ impl Process<f32> for GainProcessor {
         B: ProcessBufferSource<f32> + ?Sized,
     {
         for mut channel in block.channels() {
-            if let Ok(samples) = channel.make_in_place() {
+            if let Ok(samples) = channel.copy_input_to_output() {
                 for sample in samples {
                     *sample *= 0.5;
                 }

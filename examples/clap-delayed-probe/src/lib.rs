@@ -115,7 +115,7 @@ impl Process<f32> for DelayedProcessor {
             let delay = &mut self.delay[index];
             let position = &mut self.positions[index];
             for sample in channel
-                .make_in_place()
+                .copy_input_to_output()
                 .expect("main channel is an in-place pair")
             {
                 std::mem::swap(sample, &mut delay[*position]);

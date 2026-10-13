@@ -73,7 +73,12 @@ impl Process<f64> for Gain {
             let mut cursor = events
                 .float_cursor(ParameterIndex::new(0), initial)
                 .unwrap();
-            for (offset, sample) in channel.make_in_place().unwrap().iter_mut().enumerate() {
+            for (offset, sample) in channel
+                .copy_input_to_output()
+                .unwrap()
+                .iter_mut()
+                .enumerate()
+            {
                 *sample *= cursor.value_at(u32::try_from(offset).unwrap()).unwrap();
             }
         }
