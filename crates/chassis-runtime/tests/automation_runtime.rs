@@ -178,7 +178,11 @@ fn invalid_batch_cannot_partially_retain_valid_endpoints() {
                 },),
             )),
         );
-        assert_eq!(samples, [1.0; 4], "invalid events must prevent DSP");
+        assert_eq!(
+            samples.map(f64::to_bits),
+            [1.0_f64.to_bits(); 4],
+            "invalid events must prevent DSP"
+        );
         assert_eq!(
             runtime.encode_state(StateLimits::default()).unwrap(),
             before

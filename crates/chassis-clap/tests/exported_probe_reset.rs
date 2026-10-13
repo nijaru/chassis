@@ -131,8 +131,12 @@ fn exported_reset_clears_history_and_preserves_activation_latency_without_alloca
     for channel in rendered {
         for (offset, sample) in channel.iter().enumerate() {
             assert_eq!(
-                *sample,
-                if offset == 64 { 1.0 } else { 0.0 },
+                sample.to_bits(),
+                if offset == 64 {
+                    1.0_f32.to_bits()
+                } else {
+                    0.0_f32.to_bits()
+                },
                 "sample {offset}"
             );
         }

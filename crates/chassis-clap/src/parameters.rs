@@ -809,7 +809,7 @@ mod tests {
                 Some(ParameterEventValue::Boolean(expected > 0.0))
             );
             assert!(state.apply_plain_value(ClapId::new(3), plain));
-            assert_eq!(state.value(2), expected);
+            assert_eq!(state.value(2).to_bits(), expected.to_bits());
         }
         for (plain, expected) in [(-2.7, -2), (2.7, 2)] {
             assert_eq!(
@@ -821,7 +821,10 @@ mod tests {
                 Some(ParameterEventValue::Integer(expected))
             );
             assert!(state.apply_plain_value(ClapId::new(2), plain));
-            assert_eq!(state.value(1), integer_to_plain(expected));
+            assert_eq!(
+                state.value(1).to_bits(),
+                integer_to_plain(expected).to_bits()
+            );
         }
         for invalid in [f64::NAN, f64::INFINITY, -0.1, 1.1] {
             assert_eq!(boolean.normalize_host_plain(invalid), None);
@@ -867,7 +870,7 @@ mod tests {
             Some(ParameterEventValue::Choice(ChoiceIndex::new(0)))
         );
         assert!(state.apply_plain_value(ClapId::new(1), 0.99));
-        assert_eq!(state.value(0), 0.0);
+        assert_eq!(state.value(0).to_bits(), 0.0_f64.to_bits());
 
         let descriptors = descriptors();
         assert!(matches!(

@@ -314,7 +314,7 @@ fn active_custom_replacement_requests_restart_until_reactivation() {
     runtime
         .activate(&component, process_config(), DEFAULT_EFFECT_CONFIGURATION)
         .unwrap();
-    assert_eq!(render_amount(&mut runtime), 1.0);
+    assert_eq!(render_amount(&mut runtime).to_bits(), 1.0_f64.to_bits());
 
     component.processor_restart.store(true, Ordering::Relaxed);
     assert!(runtime.restart_requested(), "processor signal is retained");
@@ -331,7 +331,7 @@ fn active_custom_replacement_requests_restart_until_reactivation() {
         .apply_state(&amount_document(0.25, 2.0), accept)
         .unwrap();
     assert!(runtime.restart_requested());
-    assert_eq!(render_amount(&mut runtime), 1.0);
+    assert_eq!(render_amount(&mut runtime).to_bits(), 1.0_f64.to_bits());
     let saved = runtime.state_document().unwrap();
     assert_eq!(
         saved.encode().unwrap(),
@@ -360,7 +360,7 @@ fn active_custom_replacement_requests_restart_until_reactivation() {
         runtime.restart_requested(),
         "reset does not adopt custom resources"
     );
-    assert_eq!(render_amount(&mut runtime), 1.0);
+    assert_eq!(render_amount(&mut runtime).to_bits(), 1.0_f64.to_bits());
 
     runtime.deactivate().unwrap();
     assert!(!runtime.restart_requested());
@@ -368,7 +368,7 @@ fn active_custom_replacement_requests_restart_until_reactivation() {
         .activate(&component, process_config(), DEFAULT_EFFECT_CONFIGURATION)
         .unwrap();
     assert!(!runtime.restart_requested());
-    assert_eq!(render_amount(&mut runtime), 2.0);
+    assert_eq!(render_amount(&mut runtime).to_bits(), 2.0_f64.to_bits());
 }
 
 #[test]
