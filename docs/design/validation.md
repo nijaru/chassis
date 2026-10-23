@@ -51,6 +51,24 @@ These gates do not establish production DAW behavior or representative performan
 
 Hosted workflows and local results are separate evidence. Before publication, hosted jobs were rejected and local checks supplied the interim record. Consult the actual workflow run for the revision under review before claiming Linux/macOS/Windows coverage. The dated validator, host, and benchmark results below are baselines, not automatic qualification of later commits.
 
+### Component-owned complete state — 2026-10-23
+
+At code revision `7620284` on macOS 26.6.2 arm64 with stable Rust 1.99.1:
+
+- workspace tests: 185 passed; formatting, strict all-feature/all-target Clippy, warning-denied rustdoc, and release workspace build passed;
+- CI-baseline Rust 1.98.0 workspace tests and strict Clippy passed locally;
+- `cargo deny check` 0.19.0 passed with unused-license-allowance warnings; `cargo machete` 0.9.1 found no unused dependencies. Local tool versions differ from CI's pins;
+- resource-backed core state proof covers validated defaults without persistence identity, complete replacement/rejection, component migration, schema admission, desired-state save/reopen, deferred-reactivation processing with coupled table addressing, reset/reversion, and deterministic reactivation;
+- 1,000 pending resource-backed callbacks with float ramp/choice input and reset measured zero allocations/deallocations, retained the saveable desired generation, and did not retarget old resources;
+- actual-entry CLAP state tests cover scalar component migration/validation, atomic rejection, schema drift, and custom defaults differing between temporary factory and retained main-thread definitions;
+- packaged conformance: 35 passed / 0 failed / 9 skipped; delayed probe: 21 passed / 0 failed / 23 skipped. Pinned `clap-validator` 0.4.1 (`b2f1d9b79b1d264a5747f46707d72b1aa40a02ef`) passed both five-second, two-worker fuzz runs.
+
+The coupled-resource regression failed when restoring either pre-fix parameter selection or trajectory forwarding. Independent review found the retained-definition custom-default and load-schema admission holes; actual-entry regressions failed when those checks were removed, and both are now enforced by one scalar admission helper. The previous semantic-state fixture was replaced with this resource-backed proof; typed invalid-value/migration-output protection remains in the codec tests, while the new fixture exercises component-owned policy rather than per-load test closures.
+
+Hosted [Rust CI](https://github.com/nijaru/chassis/actions/runs/40030698060) and [CLAP Conformance](https://github.com/nijaru/chassis/actions/runs/40030698084) succeeded at `7620284`, with all Linux/macOS/Windows jobs passing. This includes CI's pinned dependency tools and packaged validator/fuzz matrix.
+
+Custom-state deployment remains unsupported. The core transition intentionally discards parameter automation until reactivation; it does not qualify arbitrary product DSP or a future complete-state bridge. No production DAW, representative performance benchmark, or new Miri run was performed; raw reference construction and CHSS bytes are unchanged.
+
 ### Realtime rejection and dense projection — 2026-10-23
 
 At code revision `d6e7eff` on macOS 26.6.2 arm64 with stable Rust 1.99.1:
@@ -132,6 +150,7 @@ Current cases include:
 - `host_latency_audio.rs`: nonzero reported latency matching actual delayed audio;
 - `host_restart.rs`: one processor restart request per activation, immediate successful-state-load restart notification before processing, rejected state without restart, unchanged active latency, and reactivation using published state;
 - `host_active_state_save.rs`: coherent CLAP state save while processing is active;
+- `host_state_policy.rs`: component-owned scalar migrations/validation, atomic load rejection, schema drift, and custom-default rejection across factory/main-thread definitions;
 - `host_reentrancy.rs`: plugin -> host -> plugin main-thread re-entry through parameter-rescan and latency-change callbacks;
 - `host_panic_containment.rs`: activation/process panic containment at the Clack FFI boundary.
 
@@ -286,7 +305,7 @@ The recorded REAPER baseline below establishes sample-exact PDC alignment for it
 
 Treat host state as untrusted bytes. Keep coverage for malformed/truncated/oversized input, invalid types/numerics, wrong product/schema, unknown parameters, migration chains, resource exhaustion, and failed loads leaving live state unchanged.
 
-`InstanceRuntime` complete-state export/load now derives identity/version from its `ComponentSchema`; runtime explicit-product-ID and parameter-only compatibility APIs are removed. Lower parameter-store serialization helpers do not constitute a second component identity authority.
+`InstanceRuntime` complete-state export/load derives identity/version from its `ComponentSchema`; construction and loads use component-owned defaults/validation/migrations. Schema-only construction and per-load policy overrides are removed. The resource-backed state fixture processes while custom resources are stale, proving that frozen DSP parameters/withheld trajectories cannot overwrite saveable desired state. Lower parameter-store serialization helpers do not constitute a second component identity authority.
 
 Retain golden fixtures for every released schema. The current CHSS v1 envelope remains provisional until its compatibility policy and deployment/cross-format state gates are complete.
 
@@ -294,8 +313,8 @@ Retain golden fixtures for every released schema. The current CHSS v1 envelope r
 
 | Host / harness | Platform | Status | Evidence |
 | --- | --- | --- | --- |
-| Clack in-process host harness | Linux/macOS/Windows CI | passed at `d6e7eff`; same revision macOS local | accepted/rejected process allocation and host logging, f32/f64, lifecycle, active state save, latency, re-entrancy, panic containment |
-| `clap-validator` 0.4.1 | Linux/macOS/Windows CI | passed at `d6e7eff`; same revision macOS local | conformance 35 pass / 0 fail / 9 skip; delayed probe 21 / 0 / 23; both bounded fuzz runs |
+| Clack in-process host harness | Linux/macOS/Windows CI | passed at `7620284`; same revision macOS local | accepted/rejected process allocation and host logging, f32/f64, component state policy, lifecycle, active state save, latency, re-entrancy, panic containment |
+| `clap-validator` 0.4.1 | Linux/macOS/Windows CI | passed at `7620284`; same revision macOS local | conformance 35 pass / 0 fail / 9 skip; delayed probe 21 / 0 / 23; both bounded fuzz runs |
 | REAPER 7.79 | macOS arm64 (M3 Max, 48 kHz) | 2026-09-06 baseline | 2026-09-06 headless `-renderproject` qualification: scan + instantiate (FX browser, 5 params enumerated), square `trim` automation render sample-exact against the deterministic reference (value changes land at exact sample offsets 24000/36000), injected-CHSS state load render sample-exact (trim 0.25/0.75; blobs byte-identical to a REAPER-saved blob at 0.5 and validated by the real `StateDocument` decoder), project save while the transport rolled through automation with coherent base state (trim=0.5, not torn) and sample-exact automation replay after reload, no-FX baseline render bit-identical to the source fixture, and PDC alignment: a wet track carrying the exported 64-sample delayed probe (`examples/clap-delayed-probe`) mixes against a dry track as exactly `2*x[i]` for all 48,000 frames — REAPER honored the CLAP latency extension and aligned the delayed DSP sample-exact. Host-quirk recorded: `TrackFX_SetParamNormalized` on an inactive CLAP reports success but delivers no change; the differential shows FabFilter Pro-Q 4 (CLAP) behaving identically while ReaEQ (VST) applies immediately, so this is REAPER's inactive-CLAP delivery behavior, not an adapter defect — the automation path (process events) is sample-exact. |
 | Bitwig | — | not run | production-host re-entrancy confirmation remains useful when available |
 
