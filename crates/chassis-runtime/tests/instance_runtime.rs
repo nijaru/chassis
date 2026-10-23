@@ -75,26 +75,19 @@ impl Component for Effect {
     fn activate(
         &self,
         _config: &ActivationConfig<'_>,
-    ) -> Result<Self::Processor, Self::ActivationError> {
-        self.metrics.activations.fetch_add(1, Ordering::Relaxed);
-        Ok(EffectProcessor {
-            metrics: Arc::clone(&self.metrics),
-        })
-    }
-
-    fn activate_with_parameters(
-        &self,
-        config: &ActivationConfig<'_>,
         parameters: &ParameterStore,
+        _custom_state: &[chassis_runtime::state::StateEntry],
     ) -> Result<Self::Processor, Self::ActivationError> {
-        let gain = match parameters.get("gain") {
-            Some(ParameterValue::Float(value)) => *value,
-            _ => 0.0,
+        let Some(ParameterValue::Float(gain)) = parameters.get("gain") else {
+            unreachable!("validated gain");
         };
         self.metrics
             .activation_gain_bits
             .store(gain.to_bits(), Ordering::Relaxed);
-        self.activate(config)
+        self.metrics.activations.fetch_add(1, Ordering::Relaxed);
+        Ok(EffectProcessor {
+            metrics: Arc::clone(&self.metrics),
+        })
     }
 }
 

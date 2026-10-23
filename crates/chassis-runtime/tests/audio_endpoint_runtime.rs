@@ -44,6 +44,8 @@ impl Component for ProbeComponent {
     fn activate(
         &self,
         _config: &ActivationConfig<'_>,
+        _parameters: &chassis_runtime::parameters::ParameterStore,
+        _custom_state: &[chassis_runtime::state::StateEntry],
     ) -> Result<Self::Processor, Self::ActivationError> {
         Ok(ProbeProcessor {
             process_calls: Arc::clone(&self.process_calls),

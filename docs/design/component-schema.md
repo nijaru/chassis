@@ -54,7 +54,7 @@ Implemented details include:
 - explicit `ComponentSchema::stereo_effect_with_state(...)` for conventional effects with semantic persistent identity;
 - `ComponentSchema`, `ComponentId`, `StateIdentity`, and `StateSchemaVersion`;
 - one immutable schema snapshot owned by `InstanceRuntime`;
-- `InstanceRuntime::from_schema` / `for_component` as the coherent construction paths; proof-order `new` / `new_with_event_ports` constructors are removed;
+- `InstanceRuntime::for_component` as the sole public construction path, validating component-owned custom/parameter defaults together; schema-only construction cannot bypass state policy;
 - activation rejection for audio/event/parameter/state-identity and audio-I/O-policy drift;
 - runtime-owned semantic state identity/version for complete save/load/migration APIs, with runtime explicit-ID compatibility shims removed;
 - the exact runtime-frozen schema exposed through `ActivationConfig::schema()` so processor setup never regenerates component metadata;
@@ -138,7 +138,8 @@ pub trait Component {
     type ActivationError;
 
     fn schema(&self) -> Result<ComponentSchema, ComponentSchemaError>;
-    fn activate_with_state(...) -> Result<Self::Processor, Self::ActivationError>;
+    fn activate(config, parameters, custom_state) -> Result<Self::Processor, Self::ActivationError>;
+    // Optional custom defaults, complete validation, and migration registration.
 }
 ```
 
@@ -183,7 +184,7 @@ The current instrument, multi-output, layout-switching, and dynamic-metadata pro
 
 ## Runtime construction
 
-`InstanceRuntime::from_schema` and `InstanceRuntime::for_component` consume one complete validated schema snapshot and derive mutable base state from it.
+`InstanceRuntime::for_component` consumes one validated schema snapshot, derives descriptor-owned parameter defaults, canonicalizes custom defaults, and applies the component's complete-state policy. Identity-free construction still validates defaults. There is no public schema-only constructor bypassing that policy.
 
 Do not reintroduce constructor families whose differences only reflect the historical order features were implemented.
 

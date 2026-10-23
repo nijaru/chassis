@@ -65,6 +65,8 @@ impl Component for StateProbe {
     fn activate(
         &self,
         _config: &ActivationConfig<'_>,
+        _parameters: &chassis_runtime::parameters::ParameterStore,
+        _custom_state: &[chassis_runtime::state::StateEntry],
     ) -> Result<Self::Processor, Self::ActivationError> {
         let barriers = BARRIERS.get().expect("test barriers are initialized");
         Ok(StateProcessor {

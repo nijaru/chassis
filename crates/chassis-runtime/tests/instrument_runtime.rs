@@ -68,6 +68,8 @@ impl Component for Instrument {
     fn activate(
         &self,
         config: &ActivationConfig<'_>,
+        _parameters: &chassis_runtime::parameters::ParameterStore,
+        _custom_state: &[chassis_runtime::state::StateEntry],
     ) -> Result<Self::Processor, Self::ActivationError> {
         Ok(InstrumentProcessor {
             output: config

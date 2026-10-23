@@ -4,9 +4,9 @@ use std::convert::Infallible;
 
 use chassis_runtime::{
     parameters::{ParameterDescriptor, ParameterValue},
-    runtime::{InstanceRuntime, Processor},
+    runtime::{Component, InstanceRuntime, Processor},
     schema::{ComponentId, ComponentSchema, StateSchemaVersion},
-    state::{StateDecodeError, StateDocument, StateEntry, StateLimits, StateMigration, StateValue},
+    state::{StateDecodeError, StateDocument, StateEntry, StateLimits, StateValue},
 };
 
 const PRODUCT_ID: &str = "com.example.adversarial";
@@ -120,36 +120,30 @@ struct NoopProcessor;
 
 impl Processor for NoopProcessor {}
 
-struct NeverMigration;
-
-impl StateMigration for NeverMigration {
-    type Error = Infallible;
-
-    fn source_schema(&self) -> u32 {
-        u32::MAX - 1
+struct NoopComponent;
+impl Component for NoopComponent {
+    type Processor = NoopProcessor;
+    type ActivationError = Infallible;
+    fn schema(&self) -> Result<ComponentSchema, chassis_runtime::schema::ComponentSchemaError> {
+        ComponentSchema::stereo_effect_with_state(
+            ComponentId::new("com.example.effect").unwrap(),
+            StateSchemaVersion::new(1),
+            vec![ParameterDescriptor::float("gain", "Gain", 0.0, 2.0, 1.0).unwrap()],
+        )
     }
-
-    fn to_schema(&self) -> u32 {
-        u32::MAX
-    }
-
-    fn migrate(&self, document: StateDocument) -> Result<StateDocument, Self::Error> {
-        Ok(document)
+    fn activate(
+        &self,
+        _: &chassis_runtime::process::ActivationConfig<'_>,
+        _: &chassis_runtime::parameters::ParameterStore,
+        _: &[StateEntry],
+    ) -> Result<NoopProcessor, Infallible> {
+        Ok(NoopProcessor)
     }
 }
 
 #[test]
 fn every_truncated_runtime_load_is_failure_atomic() {
-    let descriptor =
-        ParameterDescriptor::float("gain", "Gain", 0.0, 2.0, 1.0).expect("test parameter is valid");
-    let schema = ComponentSchema::stereo_effect_with_state(
-        ComponentId::new("com.example.effect").expect("semantic identity is valid"),
-        StateSchemaVersion::new(1),
-        vec![descriptor],
-    )
-    .expect("runtime schema is valid");
-    let mut runtime =
-        InstanceRuntime::<NoopProcessor>::from_schema(schema).expect("runtime schema is valid");
+    let mut runtime = InstanceRuntime::for_component(&NoopComponent).unwrap();
     runtime
         .parameters_mut()
         .set("gain", ParameterValue::Float(1.5))
@@ -161,17 +155,11 @@ fn every_truncated_runtime_load_is_failure_atomic() {
         .insert(StateEntry::new("parameter/gain", StateValue::Float(0.25)))
         .expect("replacement parameter is unique");
     let encoded = replacement.encode().expect("replacement encodes");
-    let migrations: [&NeverMigration; 0] = [];
 
     for length in 0..encoded.len() {
         assert!(
             runtime
-                .apply_state_bytes(
-                    &encoded[..length],
-                    StateLimits::default(),
-                    &migrations,
-                    |_, _| Ok::<(), Infallible>(()),
-                )
+                .apply_state_bytes(&NoopComponent, &encoded[..length], StateLimits::default(),)
                 .is_err(),
             "runtime accepted truncated prefix of {length} bytes"
         );
@@ -182,9 +170,7 @@ fn every_truncated_runtime_load_is_failure_atomic() {
     }
 
     runtime
-        .apply_state_bytes(&encoded, StateLimits::default(), &migrations, |_, _| {
-            Ok::<(), Infallible>(())
-        })
+        .apply_state_bytes(&NoopComponent, &encoded, StateLimits::default())
         .expect("complete replacement applies");
     assert_eq!(
         runtime.parameters().get("gain"),

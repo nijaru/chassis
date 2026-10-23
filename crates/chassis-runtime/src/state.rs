@@ -93,6 +93,13 @@ impl StateEntry {
         }
     }
 
+    pub(crate) fn validate(&self) -> Result<(), StateDocumentError> {
+        if self.key.is_empty() {
+            return Err(StateDocumentError::EmptyKey);
+        }
+        self.value.validate()
+    }
+
     /// Return the canonical key.
     #[must_use]
     pub fn key(&self) -> &str {
@@ -190,10 +197,7 @@ impl StateDocument {
     /// Returns an error without changing the document when the key is empty or
     /// already present, a float is non-finite, or a choice identity is invalid.
     pub fn insert(&mut self, entry: StateEntry) -> Result<(), StateDocumentError> {
-        if entry.key.is_empty() {
-            return Err(StateDocumentError::EmptyKey);
-        }
-        entry.value.validate()?;
+        entry.validate()?;
         if self
             .entries
             .iter()

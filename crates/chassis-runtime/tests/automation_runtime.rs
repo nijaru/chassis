@@ -48,7 +48,12 @@ impl Component for Effect {
         )
     }
 
-    fn activate(&self, _: &ActivationConfig<'_>) -> Result<Gain, Infallible> {
+    fn activate(
+        &self,
+        _: &ActivationConfig<'_>,
+        _: &chassis_runtime::parameters::ParameterStore,
+        _: &[chassis_runtime::state::StateEntry],
+    ) -> Result<Gain, Infallible> {
         Ok(Gain)
     }
 }

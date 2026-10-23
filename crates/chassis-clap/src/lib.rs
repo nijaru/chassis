@@ -29,7 +29,7 @@ use chassis_runtime::{
     process::{ProcessConfig, ProcessContext, ProcessMode, TransportSnapshot},
     runtime::{Component, InstanceRuntime, Process as ChassisProcess, Processor},
     schema::ComponentSchema,
-    state::{StateDocument, StateLimits},
+    state::StateLimits,
 };
 use clack_extensions::{
     audio_ports::{AudioPortInfoWriter, PluginAudioPorts, PluginAudioPortsImpl},
@@ -272,14 +272,31 @@ where
     }
 }
 
+// All scalar-only lifecycle admissions use the same checks, including the
+// retained main-thread definition rather than just its temporary factory peer.
+fn scalar_runtime<C: Component>(
+    component: &C,
+    expected_schema: Option<&ComponentSchema>,
+) -> Result<InstanceRuntime<C::Processor>, PluginError> {
+    let runtime = InstanceRuntime::for_component(component).map_err(PluginError::from)?;
+    if expected_schema.is_some_and(|expected| runtime.schema() != expected) {
+        return Err(PluginError::Message("CLAP component schema changed"));
+    }
+    if !runtime.custom_state().is_empty() {
+        return Err(PluginError::Message(
+            "CLAP complete custom-state projection is not implemented",
+        ));
+    }
+    Ok(runtime)
+}
+
 fn new_shared<C>() -> Result<ChassisShared, PluginError>
 where
     C: ClapComponent,
 {
     let component = C::default();
-    let schema = component
-        .schema()
-        .map_err(|_| PluginError::Message("Invalid Chassis component schema"))?;
+    let runtime = scalar_runtime(&component, None)?;
+    let schema = runtime.schema().clone();
     if schema.state_identity().is_none() {
         return Err(PluginError::Message(
             "CLAP state projection requires semantic component state identity",
@@ -319,14 +336,7 @@ where
     C: ClapComponent,
 {
     let component = C::default();
-    let schema = component
-        .schema()
-        .map_err(|_| PluginError::Message("Invalid Chassis component schema"))?;
-    if schema != *shared.schema {
-        return Err(PluginError::Message(
-            "CLAP component schema changed between shared and main-thread construction",
-        ));
-    }
+    scalar_runtime(&component, Some(&shared.schema))?;
     let mut audio = ClapAudioConfiguration::new(shared.schema.audio_ports(), C::CLAP_AUDIO_PORTS)
         .map_err(PluginError::from)?;
     if !shared.schema.audio_io_policy().accepts(audio.audio_io()) {
@@ -364,8 +374,7 @@ where
     P: Processor,
 {
     let process = map_process_config(audio_config, C::CLAP_MAX_PARAMETER_EVENTS)?;
-    let runtime = InstanceRuntime::from_schema((*main_thread.schema).clone())
-        .map_err(|_| PluginError::Message("Invalid Chassis instance runtime"))?;
+    let runtime = scalar_runtime(&main_thread.component, Some(&main_thread.schema))?;
 
     let maximum_events = usize::try_from(C::CLAP_MAX_PARAMETER_EVENTS)
         .map_err(|_| PluginError::Message("CLAP parameter event bound is not representable"))?;
@@ -588,8 +597,11 @@ where
     fn load(&self, input: &mut InputStream) -> Result<(), PluginError> {
         let limits = StateLimits::default();
         let encoded = read_bounded_state(input, limits.max_total_bytes)?;
-        let document =
-            StateDocument::decode_with_limits(&encoded, limits).map_err(PluginError::from)?;
+        let mut candidate = scalar_runtime(&self.component, Some(&self.schema))?;
+        candidate
+            .apply_state_bytes(&self.component, &encoded, limits)
+            .map_err(PluginError::from)?;
+        let document = candidate.state_document().map_err(PluginError::from)?;
         let identity = self
             .schema
             .state_identity()

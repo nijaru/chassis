@@ -67,7 +67,7 @@ let mut runtime = InstanceRuntime::for_component(&component)?;
 runtime.activate(&component, process_config, requested_audio_io)?;
 ```
 
-`InstanceRuntime::for_component()` asks the component for one coherent schema, validates it, stores the complete schema, and constructs canonical base parameter state from the schema's parameter descriptors.
+`InstanceRuntime::for_component()` is the only public constructor. It obtains one coherent schema, derives parameter defaults from its descriptors, validates/canonicalizes `Component::default_custom_state()`, and calls `Component::validate_state()` over both halves. Identity-free components follow the same admission without a fabricated persistence ID. The default component policy rejects custom fields; products supporting them validate required/unknown fields and cross-field relationships explicitly.
 
 Activation then:
 
@@ -78,13 +78,13 @@ Activation then:
 5. rejects structurally valid configurations not accepted by the schema-owned `AudioIoPolicy`;
 6. resolves accepted stable audio keys to activation-owned dense metadata and owns the configured ports while non-realtime;
 7. constructs `ActivationConfig` from runtime-owned data;
-8. calls `Component::activate_with_state()` with the current complete semantic state;
+8. revalidates complete state through `Component::validate_state()` and calls the single `Component::activate(config, parameters, custom_state)` preparation hook;
 9. reads `Processor::latency()` from the successfully constructed processor;
 10. publishes the processor, accepted configuration, resolved endpoint metadata, and latency snapshot together as the active child.
 
 A failed activation never publishes a partial active child. Executable negative-space coverage verifies failure leaves the runtime inactive, preserves durable state, and permits later successful activation.
 
-The component definition is intentionally not stored inside `InstanceRuntime`. A deployment may transfer the active runtime/processor according to its thread contract without forcing `Component: Send` in core.
+The component definition is intentionally not stored inside `InstanceRuntime`; construction, complete loads, and activation borrow it. A deployment may transfer the active runtime/processor without forcing `Component: Send` in core. Component validation/migrations and their boxed `ComponentStateError` payloads stay strictly off callbacks.
 
 ## Semantic state identity
 
@@ -128,7 +128,11 @@ bytes
 
 Any failure leaves live parameter/custom state and restart status unchanged. Typed documents cannot contain non-finite floats or invalid choice identifiers, including migration output.
 
-An accepted custom-state change while active requests reactivation through `InstanceRuntime::restart_requested()`. That runtime request is sticky until deactivation and independent of processor-originated requests. The old processor remains valid with its activation-time custom resources; the next activation prepares the newly published state. Reset does not adopt custom state. Parameter-only loads remain block-visible without an automatic runtime restart.
+Complete loads borrow the component and reject schema drift; `state_migrations()` supplies adjacent migrations rather than the loader supplying a separate policy. Defaults are construction input, not missing-field recovery: a current-schema load must remain complete, and migrations explicitly introduce new required fields.
+
+An accepted active custom-state change moves the first pre-load parameter store into an activation-owned frozen projection and requests reactivation. Until deactivation, `ProcessBlock` receives that projection and no parameter trajectories. Original event bounds/domains are still checked; notes, transport, and audio continue. Parameter events are discarded without durable endpoint completion. Later loads and direct control edits affect saveable desired state only. Reset, repeated loads, and state reversion cannot refresh or release the frozen projection. Deactivation reclaims it with the old resources off-callback; reactivation validates/prepares the latest desired state.
+
+This intentionally ignores parameter automation for as long as the environment defers restart. Merely freezing base values while forwarding automation is unsafe for coupled resource bounds. Parameter-only loads before this gate remain block-visible without an automatic runtime restart. Processor-originated restart requests retain their existing parameter/automation behavior; they do not activate the custom-state gate.
 
 Persistent state is semantic versioned data, not Rust object layout or transient DSP history.
 
@@ -183,7 +187,7 @@ A source must repeat the same finite topology and dimensions across traversals. 
 
 Adapters/embeddings prove raw pointer/alias facts before safe channel views enter core. Setup owns stable-to-dense endpoint translation and whole-I/O policy acceptance. Callback code consumes pre-resolved dense identities without callback-owned channel vectors or stable-string lookup.
 
-After successful DSP, the runtime retains final automation points as durable parameter values. Event-free blocks, state export, and reactivation use those completed values. Failed validation or a processor panic commits no endpoints. Source ramps remain block-local; sources supply clipped continuation points rather than relying on hidden ramp state.
+Outside the pending custom-state gate, successful DSP retains final automation points as durable parameter values. Event-free blocks, state export, and reactivation use those completed values. Failed validation or a processor panic commits no endpoints. Source ramps remain block-local; sources supply clipped continuation points rather than relying on hidden ramp state.
 
 `crates/chassis-runtime/tests/realtime_alloc.rs` mechanically checks post-activation allocation/deallocation with float/integer/boolean/choice completion, including choice replacement after control edits and state loading. Full adapter-path allocation/work and performance evidence remains separate.
 
@@ -197,7 +201,7 @@ The bridge uses even completed generations and odd in-progress writer tokens. Re
 
 CLAP projects the runtime's completed store rather than replaying automation. Publication uses the generation actually synchronized before processing. A newer control edit or state load defeats the CAS; the adapter invalidates its local generation cache and restores the newer whole store when a bounded snapshot succeeds. Cache validity tracks the whole local store, including untouched values. No separate pending-notification authority is needed.
 
-Schema-owned semantic state identity is already used by CLAP save/load. Future adapter work should continue reducing duplicated projection mechanics without moving mutable semantic authority out of `InstanceRuntime`.
+CLAP scalar load uses component-owned migrations/validation before publishing accepted values, and activation validates synchronized scalar state. Shared creation, the retained main-thread definition, activation, and load use one scalar-only admission check for schema drift and custom defaults. Complete custom fields remain rejected; no coherent custom/scalar generation bridge is implemented yet.
 
 ## Deactivation and teardown
 

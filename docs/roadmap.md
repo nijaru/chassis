@@ -6,7 +6,7 @@ This roadmap records unfinished capabilities, not a requirement to build every l
 
 ## What exists
 
-- One format-independent schema/instance/processor model, including complete semantic state and activation-scoped audio I/O.
+- One format-independent schema/instance/processor model, including component-owned state defaults/validation/migrations, resource-safe deferred reactivation, and activation-scoped audio I/O.
 - Direct runtime fixtures for effects, event-only components, a note-driven instrument, multiple outputs, sidechains/layout switching, and dynamic metadata.
 - Complete callback topology validation, alias-classified CLAP buffers, f32/f64 processing, typed parameters/dense choice events, sample-accurate automation, explicit custom-state reactivation, latency/restart, process modes, and bounded scalar telemetry.
 - Native CLAP deployment for fixed mapped audio configurations, scalar parameters/state, automation, render mode, and latency.
@@ -16,7 +16,7 @@ Core capability is not deployment support. CLAP note/event/custom-state projecti
 
 ## Near-term semantic and deployment work
 
-1. Establish component-owned complete-state defaults/validation/migration and one activation preparation hook. A resource-backed fixture must prove safe processing between an accepted state load and deferred reactivation before completing coherent CLAP custom-state projection.
+1. Complete coherent CLAP custom-state projection across inactive/active lifetimes. Core component-owned policy and the resource-backed deferred-reactivation proof are implemented; the scalar-only bridge still rejects custom fields/defaults.
 2. Unify author-defined parameter domain mapping/formatting/parsing and adapter conversion.
 3. Define modulation independently from automation/base state, then tail and host-bypass contracts without prescribing one DSP algorithm.
 4. Export a non-effect fixture: note ports/input, honest descriptor features, then bounded event output and expression/MIDI families.

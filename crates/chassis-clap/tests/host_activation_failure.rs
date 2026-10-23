@@ -31,6 +31,8 @@ impl Component for ActivationProbe {
     fn activate(
         &self,
         config: &ActivationConfig<'_>,
+        _parameters: &chassis_runtime::parameters::ParameterStore,
+        _custom_state: &[chassis_runtime::state::StateEntry],
     ) -> Result<Self::Processor, Self::ActivationError> {
         if config.process().sample_rate() < 48_000.0 {
             Err(())
@@ -91,7 +93,12 @@ impl Component for EventProbe {
         )
     }
 
-    fn activate(&self, _: &ActivationConfig<'_>) -> Result<Self::Processor, Self::ActivationError> {
+    fn activate(
+        &self,
+        _: &ActivationConfig<'_>,
+        _parameters: &chassis_runtime::parameters::ParameterStore,
+        _custom_state: &[chassis_runtime::state::StateEntry],
+    ) -> Result<Self::Processor, Self::ActivationError> {
         Ok(ActivationProcessor)
     }
 }

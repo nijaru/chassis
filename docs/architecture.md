@@ -33,7 +33,7 @@ Keep format, toolkit, device, codec, and OS concepts at their integration bounda
 
 | Owner | Authority |
 | --- | --- |
-| `Component` | Immutable definition and activation factories |
+| `Component` | Immutable schema, complete-state defaults/validation/migrations, and activation factory |
 | `ComponentSchema` | Audio/event/parameter metadata, whole-audio-I/O policy, semantic state identity, stable-to-dense lookup |
 | `InstanceRuntime<P>` | Validated schema generation, durable parameter/custom state, accepted activation, lifecycle coordination |
 | `Processor` | Exclusive active DSP history and prepared resources |
@@ -60,7 +60,7 @@ Detailed owners: [runtime](design/runtime.md), [component schema](design/compone
 
 Keep durable/base values, automation trajectories, modulation, and effective DSP values distinct. Explicit host ramps are not automatically smoothed. Timed streams preserve offsets and the ordering the source actually supplies; independent streams do not acquire a causal total order merely from equal timestamps.
 
-State load decodes, migrates, and validates a temporary complete candidate before publication. Typed documents are valid at construction, including migration output. Accepted active custom-state changes explicitly request reactivation; existing resources stay valid until that transition. Active save captures one completed semantic generation. Newer control/state publication defeats stale realtime completion. Processor history is not persisted merely because it is serializable.
+State load borrows component-owned policy and decodes, migrates, and validates a temporary complete candidate before publication. Typed documents are valid at construction, including migration output. Accepted active custom-state changes request reactivation and freeze the pre-load DSP parameter projection; parameter automation is checked but discarded until that transition. Desired complete state remains saveable while old resources continue processing. Active save captures one completed semantic generation. Newer control/state publication defeats stale realtime completion. Processor history is not persisted merely because it is serializable.
 
 Core complete-state/note capabilities are broader than current CLAP projection. Each deployment must map them faithfully or reject unsupported use. Do not silently discard custom state, note identity, modulation, or labeled layout semantics. CHSS bytes and public APIs remain provisional.
 

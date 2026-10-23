@@ -148,7 +148,7 @@ bytes
 
 No live state is touched until all steps succeed. Product validation can inspect both temporary candidates, so cross-field constraints do not require partial mutation. Product rejection, migration failure, malformed input, and framework validation failure all leave both live domains unchanged.
 
-`Component::activate_with_state()` inspects accepted complete semantic state during non-realtime processor preparation. An accepted custom-state change while active sets a runtime-owned restart request. It stays set until deactivation, even after reset or a later state reversion. Existing DSP resources remain valid and retain their activation-time custom state until reactivation adopts the new durable state; parameter-only changes remain visible through block state without an automatic restart. Failed loads change neither durable state nor the restart request. Persistence authority remains in `InstanceRuntime`, not in the active processor.
+`Component` owns custom defaults, complete validation, and adjacent migration registration; construction and loads cannot substitute per-call policy. The single `Component::activate(config, parameters, custom_state)` hook prepares accepted state off-thread. An accepted active custom-state change freezes the pre-load DSP parameter projection and requests restart. Until deactivation, incoming parameter events are checked but discarded without endpoint completion; desired parameter/custom state remains saveable. Reset and state reversion do not release the gate. Parameter-only loads remain live before this transition. Failed loads change neither desired state nor the gate. Persistence authority remains in `InstanceRuntime`, not in the active processor.
 
 Runtime parameter-only and explicit-ID compatibility methods have been removed. Lower-level `ParameterStore` serialization helpers are not a second component identity authority.
 
@@ -175,7 +175,7 @@ CLAP/VST3 stream boundaries can carry canonical Chassis bytes directly through b
 
 Adapters must not create a second persistence authority for the same component semantics.
 
-The current CLAP adapter persists scalar parameters only. It rejects non-parameter entries instead of accepting a load that loses custom fields. It requires the current schema version and does not yet project adjacent migrations or product validation. Activation synchronizes scalar parameters into a fresh runtime; complete custom-state preservation/activation is remaining deployment work. The complete-state core contract above does not establish equivalent CLAP support.
+The current CLAP adapter persists scalar parameters only. It rejects non-parameter entries and nonempty custom defaults, including defaults on the retained main-thread definition. Scalar loads run component-owned adjacent migrations and complete validation in a temporary runtime before publication; schema drift is rejected. Activation synchronizes scalar parameters into a validated fresh runtime. Complete custom/scalar generation preservation is remaining deployment work; the core contract does not establish equivalent CLAP support.
 
 Short/partial stream reads/writes and backend errors are real boundary cases and require adapter tests rather than an assumption that state arrives in one complete call.
 

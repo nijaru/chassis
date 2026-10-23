@@ -93,6 +93,8 @@ impl Component for ConformanceEffect {
     fn activate(
         &self,
         config: &ActivationConfig<'_>,
+        _parameters: &chassis_runtime::parameters::ParameterStore,
+        _custom_state: &[chassis_runtime::state::StateEntry],
     ) -> Result<Self::Processor, Self::ActivationError> {
         self.metrics.activations.fetch_add(1, Ordering::Relaxed);
         Ok(ConformanceProcessor {
@@ -440,14 +442,14 @@ fn activation_rejects_structurally_valid_but_unsupported_audio_configuration() {
         ConfiguredAudioPort::new(MAIN_OUTPUT, ChannelLayout::Mono),
     ];
 
-    assert_eq!(
+    assert!(matches!(
         runtime.activate(
             &component,
             process_config(Some(1), 8),
             AudioIoConfiguration::new(&mono),
         ),
         Err(ActivateError::UnsupportedAudioIo)
-    );
+    ));
     assert!(!runtime.is_active());
     assert_eq!(metric(&metrics.activations), 0);
 }

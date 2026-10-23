@@ -21,7 +21,8 @@ Plugins should be especially easy to author because they are a common Chassis de
 Component
   immutable definition / processor factory
   exposes one coherent ComponentSchema
-  activate_with_state(...) -> Processor
+  default_custom_state / validate_state / state_migrations
+  activate(config, parameters, custom_state) -> Processor
 
 ComponentSchema
   semantic state identity/version when persistent
@@ -71,7 +72,7 @@ runtime.process(frame_count, context, buffers)?;
 runtime.deactivate()?;
 ```
 
-The proof-order `InstanceRuntime::new(...)` / `new_with_event_ports(...)` constructors are removed. `from_schema(...)` and `for_component(...)` are the coherent construction paths.
+`for_component(...)` is the only public construction path: it validates component-owned complete defaults. Schema-only and proof-order constructor families are removed.
 
 ## Component schema authority
 
@@ -106,7 +107,7 @@ Stable keys are readable compatibility identities. Dense indices are immutable s
 Processors that need named ports resolve them during activation and store the dense indices in processor state. They do not perform stable-string lookup in the callback.
 
 ```rust,ignore
-fn activate(&self, config: &ActivationConfig<'_>) -> Result<MyProcessor, Error> {
+fn activate(&self, config: &ActivationConfig<'_>, parameters: &ParameterStore, custom: &[StateEntry]) -> Result<MyProcessor, Error> {
     Ok(MyProcessor {
         main_in: config.schema().audio_port_index(&MAIN_INPUT).unwrap(),
         main_out: config.schema().audio_port_index(&MAIN_OUTPUT).unwrap(),
@@ -176,10 +177,12 @@ Complete semantic state derives component identity/version from `ComponentSchema
 
 ```rust,ignore
 let bytes = runtime.encode_state(limits)?;
-runtime.apply_state_bytes(&bytes, limits, migrations, validate)?;
+runtime.apply_state_bytes(&component, &bytes, limits)?;
 ```
 
-The old runtime explicit-product-ID and parameter-only compatibility paths are removed. Loads remain complete transactional replacements. Product custom fields remain semantic entries rather than arbitrary Rust-layout serialization.
+`Component` supplies custom defaults, complete validation, and registered adjacent migrations; the default policy rejects custom fields. Descriptor defaults remain parameter authority. Loads are complete replacements, not merges with defaults/live state. Product custom fields remain semantic entries rather than arbitrary Rust-layout serialization.
+
+An accepted active custom-state replacement freezes the pre-load DSP parameters and discards parameter automation until reactivation; desired replacement state remains saveable. Use complete loads for coupled non-realtime edits. Direct parameter edits and automation enforce descriptor domains only; activation rechecks product relationships and processors must handle legal automation safely with current resources.
 
 Parameter formatting/value mapping still needs a clear authoring contract with round-trip/domain tests.
 

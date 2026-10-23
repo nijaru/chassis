@@ -63,6 +63,8 @@ impl Component for BenchComponent {
     fn activate(
         &self,
         _config: &ActivationConfig<'_>,
+        _parameters: &chassis_runtime::parameters::ParameterStore,
+        _custom_state: &[chassis_runtime::state::StateEntry],
     ) -> Result<Self::Processor, Self::ActivationError> {
         Ok(BenchProcessor)
     }

@@ -45,6 +45,8 @@ impl Component for DelayedProbeEffect {
     fn activate(
         &self,
         config: &ActivationConfig<'_>,
+        _parameters: &chassis_runtime::parameters::ParameterStore,
+        _custom_state: &[chassis_runtime::state::StateEntry],
     ) -> Result<Self::Processor, Self::ActivationError> {
         let samples = if config.process().sample_rate() >= 88_200.0 {
             128

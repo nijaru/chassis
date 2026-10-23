@@ -35,6 +35,8 @@ impl Component for LatencyComponent {
     fn activate(
         &self,
         _config: &ActivationConfig<'_>,
+        _parameters: &chassis_runtime::parameters::ParameterStore,
+        _custom_state: &[chassis_runtime::state::StateEntry],
     ) -> Result<Self::Processor, Self::ActivationError> {
         Ok(LatencyProcessor {
             latency: LatencySamples::new(self.next_latency.load(Ordering::Relaxed)),

@@ -53,13 +53,8 @@ impl Component for DelayedProbe {
     fn activate(
         &self,
         config: &ActivationConfig<'_>,
-    ) -> Result<Self::Processor, Self::ActivationError> {
-        self.activate_with_parameters(config, &ParameterStore::new(&self.parameters).unwrap())
-    }
-    fn activate_with_parameters(
-        &self,
-        config: &ActivationConfig<'_>,
         parameters: &ParameterStore,
+        _custom_state: &[chassis_runtime::state::StateEntry],
     ) -> Result<Self::Processor, Self::ActivationError> {
         let samples = if parameters.get("phase") == Some(&ParameterValue::Float(1.0)) {
             128

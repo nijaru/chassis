@@ -69,6 +69,8 @@ impl Component for ActivationPanicProbe {
     fn activate(
         &self,
         _config: &ActivationConfig<'_>,
+        _parameters: &chassis_runtime::parameters::ParameterStore,
+        _custom_state: &[chassis_runtime::state::StateEntry],
     ) -> Result<Self::Processor, Self::ActivationError> {
         assert!(
             !self.panic_next_activation.swap(false, Ordering::Relaxed),
@@ -156,6 +158,8 @@ impl Component for ProcessPanicProbe {
     fn activate(
         &self,
         _config: &ActivationConfig<'_>,
+        _parameters: &chassis_runtime::parameters::ParameterStore,
+        _custom_state: &[chassis_runtime::state::StateEntry],
     ) -> Result<Self::Processor, Self::ActivationError> {
         Ok(ProcessPanicProcessor)
     }

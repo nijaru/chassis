@@ -80,6 +80,8 @@ impl Component for LayoutEffect {
     fn activate(
         &self,
         config: &ActivationConfig<'_>,
+        _parameters: &chassis_runtime::parameters::ParameterStore,
+        _custom_state: &[chassis_runtime::state::StateEntry],
     ) -> Result<Self::Processor, Self::ActivationError> {
         let main_layout = config
             .audio_io()

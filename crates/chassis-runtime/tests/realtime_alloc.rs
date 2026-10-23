@@ -26,6 +26,9 @@ use chassis_runtime::{
     state::{StateDocument, StateLimits},
 };
 
+#[path = "support/resource_state.rs"]
+mod resource_state;
+
 const MAIN_INPUT_INDEX: AudioPortIndex = AudioPortIndex::new(0);
 const MAIN_OUTPUT_INDEX: AudioPortIndex = AudioPortIndex::new(1);
 
@@ -125,6 +128,8 @@ impl Component for Effect {
     fn activate(
         &self,
         _config: &ActivationConfig<'_>,
+        _parameters: &chassis_runtime::parameters::ParameterStore,
+        _custom_state: &[chassis_runtime::state::StateEntry],
     ) -> Result<Self::Processor, Self::ActivationError> {
         Ok(GainProcessor)
     }
@@ -217,9 +222,7 @@ fn repeated_post_activation_process_calls_do_not_allocate_or_deallocate() {
             // State decoding/publication is non-realtime. The following
             // callback must also replace its decoded choice without freeing it.
             COUNT_THIS_THREAD.with(|counting| counting.set(false));
-            runtime
-                .apply_state(&saved_control, |_, _| Ok::<_, Infallible>(()))
-                .unwrap();
+            runtime.apply_state(&component, &saved_control).unwrap();
             COUNT_THIS_THREAD.with(|counting| counting.set(true));
         }
         // Dense synchronization and invalid payload rejection must also remain
@@ -278,4 +281,72 @@ fn repeated_post_activation_process_calls_do_not_allocate_or_deallocate() {
     assert_eq!(DEALLOCATIONS.load(Ordering::Relaxed), 0);
 
     runtime.deactivate().expect("deactivation succeeds");
+    pending_resource_callbacks_do_not_allocate_or_reclaim();
+}
+
+fn pending_resource_callbacks_do_not_allocate_or_reclaim() {
+    // A retained parameter snapshot owns allocations and choice IDs. Neither
+    // frozen callbacks nor ignored automation may reclaim it or touch pending state.
+    let component = resource_state::TableComponent::default();
+    let mut runtime = InstanceRuntime::for_component(&component).unwrap();
+    runtime
+        .activate(&component, process_config(), DEFAULT_EFFECT_CONFIGURATION)
+        .unwrap();
+    let replacement = resource_state::document(1.0, &[3, 7]);
+    runtime.apply_state(&component, &replacement).unwrap();
+    let automation = [
+        ParameterEvent::set(0, ParameterIndex::new(0), ParameterEventValue::Float(0.0)),
+        ParameterEvent::set(
+            0,
+            ParameterIndex::new(1),
+            ParameterEventValue::Choice(ChoiceIndex::new(0)),
+        ),
+        ParameterEvent::linear(511, ParameterIndex::new(0), 1.0),
+    ];
+    let mut left = [0.0_f64; 512];
+    let mut right = [0.0_f64; 512];
+    ALLOCATIONS.store(0, Ordering::Relaxed);
+    DEALLOCATIONS.store(0, Ordering::Relaxed);
+    COUNT_THIS_THREAD.with(|counting| counting.set(true));
+    for _ in 0..1000 {
+        let mut buffers = [
+            ChannelBuffer::in_place(
+                InputEndpoint::new(MAIN_INPUT_INDEX, 0),
+                OutputEndpoint::new(MAIN_OUTPUT_INDEX, 0),
+                &mut left,
+                512,
+            )
+            .unwrap(),
+            ChannelBuffer::in_place(
+                InputEndpoint::new(MAIN_INPUT_INDEX, 1),
+                OutputEndpoint::new(MAIN_OUTPUT_INDEX, 1),
+                &mut right,
+                512,
+            )
+            .unwrap(),
+        ];
+        runtime
+            .process(
+                512,
+                ProcessContext::new(
+                    ProcessMode::Realtime,
+                    TransportSnapshot::unknown(),
+                    ParameterEvents::new(&automation, 512, 8).unwrap(),
+                ),
+                &mut buffers,
+            )
+            .unwrap();
+        runtime.reset().unwrap();
+    }
+    COUNT_THIS_THREAD.with(|counting| counting.set(false));
+    assert_eq!(ALLOCATIONS.load(Ordering::Relaxed), 0);
+    assert_eq!(DEALLOCATIONS.load(Ordering::Relaxed), 0);
+    assert!(
+        left.into_iter()
+            .chain(right)
+            .all(|value| value.to_bits() == 2.0_f64.to_bits())
+    );
+    assert_eq!(component.incompatible_controls.load(Ordering::Relaxed), 0);
+    assert_eq!(runtime.state_document().unwrap(), replacement);
+    runtime.deactivate().unwrap();
 }

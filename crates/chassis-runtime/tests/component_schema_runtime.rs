@@ -61,6 +61,8 @@ impl Component for Probe {
     fn activate(
         &self,
         _config: &ActivationConfig<'_>,
+        _parameters: &chassis_runtime::parameters::ParameterStore,
+        _custom_state: &[chassis_runtime::state::StateEntry],
     ) -> Result<Self::Processor, Self::ActivationError> {
         Ok(ProbeProcessor)
     }
@@ -134,7 +136,12 @@ impl Component for PolicyProbe {
         )
     }
 
-    fn activate(&self, _: &ActivationConfig<'_>) -> Result<ProbeProcessor, Infallible> {
+    fn activate(
+        &self,
+        _: &ActivationConfig<'_>,
+        _: &chassis_runtime::parameters::ParameterStore,
+        _: &[chassis_runtime::state::StateEntry],
+    ) -> Result<ProbeProcessor, Infallible> {
         Ok(ProbeProcessor)
     }
 }

@@ -37,7 +37,7 @@ Explicit host ramps are reproduced without automatic extra smoothing. Smoothing 
 
 CLAP host lifetimes split long-lived shared/main-thread objects from the active audio processor. `chassis-clap` therefore keeps an adapter-local synchronized scalar projection and synchronizes it into the active `InstanceRuntime`. This projection exists because of deployment lifetime, not as permission for a second semantic authority.
 
-After a successful process call, `InstanceRuntime` retains each parameter's final automation point in its durable store. Untouched parameters remain unchanged; equal-offset source order determines the last value. Validation failure or a DSP panic commits no endpoints. Direct clients therefore carry values into event-free blocks, state export, and reactivation without replaying events themselves. Subsequent control edits use exclusive runtime access and override that completion.
+Outside the pending custom-state transition described below, a successful process call retains each parameter's final automation point in `InstanceRuntime`'s durable store. Untouched parameters remain unchanged; equal-offset source order determines the last value. Validation failure or a DSP panic commits no endpoints. Direct clients therefore carry values into event-free blocks, state export, and reactivation without replaying events themselves. Subsequent control edits use exclusive runtime access and override that completion.
 
 Linear points are block-local endpoints, not future ramp targets. A ramp spanning blocks must be clipped by its source into local points; provide the next block's offset-zero value when needed to preserve the original slope. No pending ramp or hidden extrapolation is retained.
 
@@ -93,7 +93,11 @@ bytes
 
 Invalid decode, migration, framework values, unknown parameters, incomplete snapshots, or product validation leave live state and restart status unchanged. Typed insertion and decode enforce semantic-value validity before a document can be published.
 
-Accepted custom-state changes while active request reactivation immediately. The request is sticky until deactivation; old DSP resources remain valid with their activation-time custom state until the new activation adopts the durable replacement. Parameter-only loads remain block-visible without an automatic runtime restart.
+`Component` supplies custom defaults, complete validation, and registered adjacent migrations. Construction validates descriptor/custom defaults together, even for identity-free components. Complete loads borrow that component, reject schema drift, and cannot substitute a caller-provided validator or migration list. Current-schema missing fields are errors, not requests to merge defaults or live state.
+
+The first accepted active custom-state change freezes the pre-load DSP parameter projection and requests reactivation. While the host/environment defers it, DSP keeps old resources and frozen base values; all parameter events are validated but discarded, with no endpoint completion. Desired parameter/custom state remains saveable. Later loads/control edits update desired state only; reset or state reversion cannot unfreeze DSP. Parameter-only changes remain live before this gate, and processor-originated restart requests do not impose it.
+
+Direct `parameters_mut()` edits and realtime automation validate descriptor domains, not arbitrary product cross-field invariants. Use complete state replacement for coupled control edits; activation checks complete component policy again. Processors must safely handle every admitted automation value with their current resources, requesting restart/retaining valid resources when necessary.
 
 Migration/decoding are non-realtime operations. Retain fixtures for every released schema.
 
@@ -132,7 +136,7 @@ Realtime-originated host notifications require a narrow bounded capability; prod
 
 Before freezing parameter/state APIs:
 
-- preserve custom state, migration, and product validation through CLAP rather than extending its scalar-only projection implicitly;
+- preserve coherent custom/scalar state generations through CLAP rather than extending its scalar-only projection implicitly; component migration/validation already applies to scalar loads;
 - refresh native automated-render and active-save scenarios against changed exported artifacts;
 - define/qualify product-originated gesture and echo semantics;
 - add cross-format state/automation round trips once VST3/AU projections exist;

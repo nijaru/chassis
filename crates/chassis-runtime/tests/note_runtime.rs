@@ -58,6 +58,8 @@ impl Component for NoteProbe {
     fn activate(
         &self,
         _config: &ActivationConfig<'_>,
+        _parameters: &chassis_runtime::parameters::ParameterStore,
+        _custom_state: &[chassis_runtime::state::StateEntry],
     ) -> Result<Self::Processor, Self::ActivationError> {
         Ok(NoteProbeProcessor {
             observed_note_ons: Arc::clone(&self.observed_note_ons),

@@ -24,13 +24,17 @@ The existing Clack pin remains. A reviewed vendored `clack-plugin` patch bypasse
 
 The roadmap review also found remaining stable-choice scans in CLAP synchronization, flush, and publication. The runtime store now owns a cached dense choice projection alongside canonical persistent identity; all callback projection uses fixed-width values. Setup/control/state paths still resolve stable identities. Arbitrary boxed errors and DSP panics remain outside realtime qualification.
 
-## Next — component-owned complete state
+## Closed — component-owned core state and deferred reactivation
 
-The runtime can now publish valid complete state and request custom-state reactivation, but product defaults, validation, and migration are still supplied by callers rather than one component-owned contract. CLAP still projects scalar state only and rejects custom fields/event-port schemas.
+`Component` owns custom defaults, complete-state validation, and adjacent migration registration. `for_component` is the only public runtime constructor; defaults are validated even without persistence identity. One `activate(config, parameters, custom_state)` hook replaces the historical hook chain, and loads borrow the component rather than accept per-call policy.
 
-1. Give the component one complete-state defaults/validation/migration contract and one activation preparation hook. Remove the historical activation-hook chain when migrating callers; do not preserve it as a compatibility family.
-2. Exercise a resource-backed component whose custom state prepares activation-scoped DSP resources. Couple a parameter to those resources and process between accepted active load and deferred host reactivation, not only after restart. Current core loads make replacement parameters immediately visible while old custom-derived resources remain active: settle the safe transition policy before extending deployment state. Prove default construction, rejected candidates, active-load restart, state save/reopen, and deterministic reactivation.
-3. Project one coherent parameter/custom semantic generation across inactive and active CLAP lifetimes. Complete migration and product validation at that boundary; never combine independently sampled scalar/custom snapshots.
+A resource-backed table fixture couples parameter addressing to custom data and processes before restart. The first accepted active custom-state change freezes the pre-load DSP parameter projection. Incoming parameter automation remains validated but is discarded, with no endpoint completion, until deactivation/reactivation. Later loads and control edits affect saveable desired state only. Reset and state reversion cannot unfreeze the old resources. This deliberately sacrifices parameter automation while a host defers restart; retaining it would require a qualified resource-compatibility policy.
+
+CLAP scalar load and activation now use component validation/migrations and reject schema drift. Every factory/main-thread/activation/load admission rejects custom defaults rather than silently losing them. Complete custom-state projection remains unsupported.
+
+## Next — complete CLAP state projection
+
+Project one coherent parameter/custom semantic generation across inactive and active CLAP lifetimes. Never combine independently sampled scalar/custom snapshots or let an old processor publish endpoints into a newly accepted complete generation. Exercise the resource-backed transition through the actual plugin entry, including default save, migrated load, deferred restart, save/reopen, and rejected candidates. The scalar bridge is not yet this contract.
 
 Start with reactivation-based resource replacement. Bounded prepared adoption, coalescing, stale-result rejection, deferred reclamation, cancellation, and unload fencing need a concrete client before choosing a queue or executor. No hidden global executor or last-owner `Arc` destruction on the callback.
 

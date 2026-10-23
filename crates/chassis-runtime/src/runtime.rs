@@ -13,23 +13,27 @@ use crate::{
         AudioPortDescriptor, AudioPortIndex, ConfiguredAudioPort, PortKey,
         ResolvedAudioIoConfiguration,
     },
+    automation::ParameterEvents,
     buffer::ChannelBuffer,
     events::{
         EventPortDescriptor, EventPortIndex, EventPortKey, EventPortSchemaError, NoteEventPortError,
     },
-    parameters::{ParameterStateError, ParameterStore, ParameterStoreError, ParameterValuesMut},
+    parameters::{ParameterStore, ParameterStoreError, ParameterValuesMut},
     process::{
         ActivationConfig, ChannelBufferSlice, ProcessBlock, ProcessBlockError, ProcessBufferSource,
         ProcessConfig, ProcessContext,
     },
     schema::{ComponentSchema, ComponentSchemaError},
-    state::{
-        StateDecodeError, StateDocument, StateEntry, StateLimits, StateMigration,
-        StateMigrationError,
-    },
+    state::{StateEntry, StateMigration},
 };
 
 mod audio_buffers;
+mod semantic_state;
+
+pub use semantic_state::{
+    ComponentStateError, InstanceSemanticStateError, InstanceSemanticStateLoadError,
+    InstanceStateError, InstanceStateExportError,
+};
 
 use audio_buffers::AudioBufferValidation;
 
@@ -56,59 +60,53 @@ pub trait Component {
     /// Returns [`ComponentSchemaError`] when any immutable schema is invalid.
     fn schema(&self) -> Result<ComponentSchema, ComponentSchemaError>;
 
-    /// Create the exclusively-owned realtime processor for one activation.
+    /// Default custom entries, combined with descriptor-owned parameter defaults.
     ///
-    /// All allocation/precomputation required by the processor belongs here or
-    /// in product helpers called from here, before realtime processing begins.
-    ///
-    /// # Errors
-    ///
-    /// Returns the product-defined activation error when required resources or
-    /// product invariants cannot be established.
-    fn activate(
-        &self,
-        config: &ActivationConfig<'_>,
-    ) -> Result<Self::Processor, Self::ActivationError>;
-
-    /// Create the realtime processor with the current validated base state.
-    ///
-    /// This is the durable-instance activation hook. The default delegates to
-    /// [`Self::activate`] so existing components that do not need state-aware
-    /// preparation remain simple. Components whose activation-time resources
-    /// depend on current base values may override this method.
-    ///
-    /// # Errors
-    ///
-    /// Returns the same product-defined activation error as [`Self::activate`].
-    fn activate_with_parameters(
-        &self,
-        config: &ActivationConfig<'_>,
-        parameters: &ParameterStore,
-    ) -> Result<Self::Processor, Self::ActivationError> {
-        let _ = parameters;
-        self.activate(config)
+    /// This is a non-realtime construction operation. Entries must be unique,
+    /// valid, and outside the reserved `parameter/` namespace.
+    fn default_custom_state(&self) -> Vec<StateEntry> {
+        Vec::new()
     }
 
-    /// Create the realtime processor with the current complete semantic state.
+    /// Validate one complete parameter/custom candidate off the realtime thread.
     ///
-    /// Custom entries are the canonical non-`parameter/` entries retained by
-    /// the durable instance. The default delegates to
-    /// [`Self::activate_with_parameters`] so products that only use framework
-    /// parameters remain simple. Products that derive activation-time resources
-    /// from custom persistent fields may override this hook.
+    /// The default policy supports parameters only and rejects all custom fields.
+    /// Products with custom state must check required fields, unknown fields, and
+    /// cross-field invariants here. Defaults and reactivation are checked too.
     ///
     /// # Errors
     ///
-    /// Returns the same product-defined activation error as [`Self::activate`].
-    fn activate_with_state(
+    /// Returns a component policy error without publishing any candidate.
+    fn validate_state(
+        &self,
+        _parameters: &ParameterStore,
+        custom: &[StateEntry],
+    ) -> Result<(), ComponentStateError> {
+        if custom.is_empty() {
+            Ok(())
+        } else {
+            Err(ComponentStateError::UnsupportedCustomState)
+        }
+    }
+
+    /// Adjacent semantic migrations owned by this component, never by a loader.
+    fn state_migrations(&self) -> &[&dyn StateMigration<Error = ComponentStateError>] {
+        &[]
+    }
+
+    /// Prepare one processor from the current complete validated state.
+    ///
+    /// Allocation and resource preparation belong here, before processing.
+    ///
+    /// # Errors
+    ///
+    /// Returns the product error without publishing a partial activation.
+    fn activate(
         &self,
         config: &ActivationConfig<'_>,
         parameters: &ParameterStore,
         custom_state: &[StateEntry],
-    ) -> Result<Self::Processor, Self::ActivationError> {
-        let _ = custom_state;
-        self.activate_with_parameters(config, parameters)
-    }
+    ) -> Result<Self::Processor, Self::ActivationError>;
 }
 
 /// Processing latency reported by one successfully activated processor.
@@ -186,7 +184,7 @@ pub trait Process<S>: Processor {
 }
 
 /// Failure while constructing a durable [`InstanceRuntime`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum InstanceRuntimeError {
     /// The component's immutable audio-port schema failed validation.
     InvalidAudioPorts(AudioIoConfigurationError),
@@ -196,6 +194,8 @@ pub enum InstanceRuntimeError {
     InvalidParameters(ParameterStoreError),
     /// The component's immutable event-port schema failed validation.
     InvalidEventPorts(EventPortSchemaError),
+    /// Default complete state failed framework or component validation.
+    InvalidState(InstanceSemanticStateError),
 }
 
 fn runtime_schema_error(error: ComponentSchemaError) -> InstanceRuntimeError {
@@ -218,6 +218,7 @@ impl fmt::Display for InstanceRuntimeError {
             }
             Self::InvalidParameters(error) => write!(formatter, "invalid parameters: {error}"),
             Self::InvalidEventPorts(error) => write!(formatter, "invalid event ports: {error}"),
+            Self::InvalidState(error) => error.fmt(formatter),
         }
     }
 }
@@ -229,12 +230,13 @@ impl std::error::Error for InstanceRuntimeError {
             Self::InvalidAudioIoPolicy(error) => Some(error),
             Self::InvalidParameters(error) => Some(error),
             Self::InvalidEventPorts(error) => Some(error),
+            Self::InvalidState(error) => Some(error),
         }
     }
 }
 
 /// Framework activation failure before an active processor is published.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum ActivateError<E> {
     /// The instance already owns an active processor.
     AlreadyActive,
@@ -256,6 +258,8 @@ pub enum ActivateError<E> {
     UnsupportedAudioIo,
     /// The accepted channel topology could not be represented or its validation scratch allocated.
     AudioChannelCapacity,
+    /// Complete state no longer satisfies component policy after control edits.
+    InvalidState(ComponentStateError),
     /// Product activation failed after the framework configuration was validated.
     Product(E),
 }
@@ -288,6 +292,7 @@ where
             Self::AudioChannelCapacity => {
                 formatter.write_str("could not prepare audio channel validation capacity")
             }
+            Self::InvalidState(error) => write!(formatter, "invalid activation state: {error}"),
             Self::Product(error) => write!(formatter, "product activation failed: {error}"),
         }
     }
@@ -309,6 +314,7 @@ where
             | Self::AudioChannelCapacity => None,
             Self::InvalidComponentSchema(error) => Some(error),
             Self::InvalidAudioIo(error) => Some(error),
+            Self::InvalidState(error) => Some(error),
             Self::Product(error) => Some(error),
         }
     }
@@ -368,158 +374,13 @@ impl std::error::Error for InstanceProcessError {
     }
 }
 
-/// Failure while exporting complete semantic state through schema-owned identity.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum InstanceStateExportError {
-    /// This component schema has no semantic persistence identity.
-    MissingStateIdentity,
-    /// Parameter/state document construction or encoding failed.
-    State(ParameterStateError),
-}
-
-impl fmt::Display for InstanceStateExportError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::MissingStateIdentity => {
-                formatter.write_str("component schema has no semantic state identity")
-            }
-            Self::State(error) => write!(formatter, "state export failed: {error}"),
-        }
-    }
-}
-
-impl std::error::Error for InstanceStateExportError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::MissingStateIdentity => None,
-            Self::State(error) => Some(error),
-        }
-    }
-}
-
-/// Failure while replacing the durable instance's framework-managed parameter state.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum InstanceStateError {
-    /// The component schema has no semantic persistence identity.
-    MissingStateIdentity,
-    /// Rebuilding the already-validated parameter schema unexpectedly failed.
-    InvalidParameters(ParameterStoreError),
-    /// The semantic parameter state was invalid for this product/schema.
-    ParameterState(ParameterStateError),
-    /// A full state document omitted one or more framework-managed parameters.
-    IncompleteParameterState {
-        /// Number of parameters required by the current schema.
-        expected: usize,
-        /// Number of parameter entries supplied by the document.
-        actual: usize,
-    },
-}
-
-impl fmt::Display for InstanceStateError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::MissingStateIdentity => {
-                formatter.write_str("component schema has no semantic state identity")
-            }
-            Self::InvalidParameters(error) => write!(formatter, "invalid parameters: {error}"),
-            Self::ParameterState(error) => write!(formatter, "invalid parameter state: {error}"),
-            Self::IncompleteParameterState { expected, actual } => write!(
-                formatter,
-                "parameter state contains {actual} parameters but {expected} are required"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for InstanceStateError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::MissingStateIdentity | Self::IncompleteParameterState { .. } => None,
-            Self::InvalidParameters(error) => Some(error),
-            Self::ParameterState(error) => Some(error),
-        }
-    }
-}
-
-/// Failure while validating a complete semantic instance state.
-#[derive(Debug)]
-pub enum InstanceSemanticStateError<E> {
-    /// Framework-managed parameter validation failed.
-    Parameters(InstanceStateError),
-    /// Product-defined validation of the complete candidate state failed.
-    Product(E),
-}
-
-impl<E> fmt::Display for InstanceSemanticStateError<E>
-where
-    E: fmt::Display,
-{
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Parameters(error) => write!(formatter, "invalid parameter state: {error}"),
-            Self::Product(error) => write!(formatter, "invalid product state: {error}"),
-        }
-    }
-}
-
-impl<E> std::error::Error for InstanceSemanticStateError<E>
-where
-    E: std::error::Error + 'static,
-{
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Parameters(error) => Some(error),
-            Self::Product(error) => Some(error),
-        }
-    }
-}
-
-/// Failure while decoding, migrating, or applying a complete semantic state.
-#[derive(Debug)]
-pub enum InstanceSemanticStateLoadError<M, E> {
-    /// The encoded state was malformed or exceeded its bounds.
-    Decode(StateDecodeError),
-    /// Product-schema migration failed before live state was touched.
-    Migration(StateMigrationError<M>),
-    /// The migrated complete state failed framework or product validation.
-    Apply(InstanceSemanticStateError<E>),
-}
-
-impl<M, E> fmt::Display for InstanceSemanticStateLoadError<M, E>
-where
-    M: fmt::Display,
-    E: fmt::Display,
-{
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Decode(error) => write!(formatter, "could not decode state: {error}"),
-            Self::Migration(error) => write!(formatter, "could not migrate state: {error}"),
-            Self::Apply(error) => write!(formatter, "could not apply state: {error}"),
-        }
-    }
-}
-
-impl<M, E> std::error::Error for InstanceSemanticStateLoadError<M, E>
-where
-    M: std::error::Error + 'static,
-    E: std::error::Error + 'static,
-{
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Decode(error) => Some(error),
-            Self::Migration(error) => Some(error),
-            Self::Apply(error) => Some(error),
-        }
-    }
-}
-
 struct ActiveRuntime<P> {
     process: ProcessConfig,
     audio_ports: Vec<ConfiguredAudioPort>,
     resolved_audio: ResolvedAudioIoConfiguration,
     audio_buffers: AudioBufferValidation,
     latency: LatencySamples,
-    custom_state_restart_required: bool,
+    frozen_parameters: Option<ParameterStore>,
     processor: P,
 }
 
@@ -538,7 +399,8 @@ impl<P> ActiveRuntime<P> {
 /// The runtime owns one validated immutable [`ComponentSchema`], canonical base
 /// parameter state derived from that schema, validated custom semantic state,
 /// and optionally an active processor/configuration. The component definition
-/// itself remains outside this object and is borrowed only while activating.
+/// itself remains outside this object and is borrowed for construction,
+/// complete state admission, and activation.
 pub struct InstanceRuntime<P>
 where
     P: Processor,
@@ -553,34 +415,30 @@ impl<P> InstanceRuntime<P>
 where
     P: Processor,
 {
-    /// Construct one inactive runtime from a complete validated component schema.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`InstanceRuntimeError`] only if rebuilding the parameter base
-    /// store from an already validated schema unexpectedly fails.
-    pub fn from_schema(schema: ComponentSchema) -> Result<Self, InstanceRuntimeError> {
-        let parameters = ParameterStore::new(schema.parameters())
-            .map_err(InstanceRuntimeError::InvalidParameters)?;
-        Ok(Self {
-            schema,
-            parameters,
-            custom_state: Vec::new(),
-            active: None,
-        })
-    }
-
     /// Construct one inactive runtime from a component's coherent immutable schema.
     ///
     /// # Errors
     ///
-    /// Returns [`InstanceRuntimeError`] if the component schema is invalid.
+    /// Returns [`InstanceRuntimeError`] if the schema, custom defaults, or
+    /// component validation of the combined defaults fails. Persistence identity
+    /// is not required for construction.
     pub fn for_component<C>(component: &C) -> Result<Self, InstanceRuntimeError>
     where
         C: Component<Processor = P>,
     {
         let schema = component.schema().map_err(runtime_schema_error)?;
-        Self::from_schema(schema)
+        let parameters = ParameterStore::new(schema.parameters())
+            .map_err(InstanceRuntimeError::InvalidParameters)?;
+        let mut runtime = Self {
+            schema,
+            parameters,
+            custom_state: Vec::new(),
+            active: None,
+        };
+        runtime
+            .initialize_state(component)
+            .map_err(InstanceRuntimeError::InvalidState)?;
+        Ok(runtime)
     }
 
     /// Return the immutable validated component schema owned by this instance.
@@ -613,7 +471,10 @@ where
         self.schema.event_port_index(key)
     }
 
-    /// Return the durable current base/control parameter values.
+    /// Return durable desired base/control values.
+    ///
+    /// While custom-state reactivation is pending, DSP instead borrows the
+    /// frozen pre-load projection; these values remain the saveable replacement.
     #[must_use]
     pub const fn parameters(&self) -> &ParameterStore {
         &self.parameters
@@ -623,6 +484,9 @@ where
     ///
     /// Cross-thread adapters must synchronize before entering this single-owner
     /// semantic store; this method itself does not make the runtime `Sync`.
+    /// This view checks descriptor domains, not component cross-field policy.
+    /// Use complete state replacement for coupled non-realtime edits. During a
+    /// pending custom-state restart, edits affect desired state, not frozen DSP.
     /// The returned view cannot replace the immutable schema:
     ///
     /// ```compile_fail
@@ -636,7 +500,7 @@ where
     ///     fn schema(&self) -> Result<chassis_runtime::schema::ComponentSchema, chassis_runtime::schema::ComponentSchemaError> {
     ///         chassis_runtime::schema::ComponentSchema::stereo_effect(vec![])
     ///     }
-    ///     fn activate(&self, _: &chassis_runtime::process::ActivationConfig<'_>) -> Result<Dsp, Self::ActivationError> { Ok(Dsp) }
+    ///     fn activate(&self, _: &chassis_runtime::process::ActivationConfig<'_>, _: &ParameterStore, _: &[chassis_runtime::state::StateEntry]) -> Result<Dsp, Self::ActivationError> { Ok(Dsp) }
     /// }
     /// let definition = Definition;
     /// let mut runtime = InstanceRuntime::<Dsp>::for_component(&definition).unwrap();
@@ -687,11 +551,12 @@ where
     /// Accepted custom-state changes request restart immediately. This runtime
     /// request remains set until deactivation, even if later loads restore the
     /// previous state. The processor may independently request restart; current
-    /// resources remain valid until the caller completes the lifecycle transition.
+    /// resources and the frozen DSP parameter projection remain valid until that
+    /// transition. Incoming parameter events are checked but discarded meanwhile.
     #[must_use]
     pub fn restart_requested(&self) -> bool {
         self.active.as_ref().is_some_and(|active| {
-            active.custom_state_restart_required || active.processor.restart_requested()
+            active.frozen_parameters.is_some() || active.processor.restart_requested()
         })
     }
 
@@ -709,7 +574,8 @@ where
     /// mismatch/error if the supplied component no longer describes this instance
     /// generation, [`ActivateError::InvalidAudioIo`] for malformed configuration,
     /// [`ActivateError::AudioChannelCapacity`] if topology validation scratch
-    /// cannot be prepared, or [`ActivateError::Product`] when product activation fails.
+    /// cannot be prepared, [`ActivateError::InvalidState`] when complete component
+    /// policy fails, or [`ActivateError::Product`] when product activation fails.
     pub fn activate<C>(
         &mut self,
         component: &C,
@@ -742,6 +608,10 @@ where
             return Err(ActivateError::EventPortSchemaMismatch);
         }
 
+        component
+            .validate_state(&self.parameters, &self.custom_state)
+            .map_err(ActivateError::InvalidState)?;
+
         let resolved_audio = audio_io
             .resolve(self.schema.audio_ports())
             .map_err(ActivateError::InvalidAudioIo)?;
@@ -757,7 +627,7 @@ where
             &self.schema,
         );
         let processor = component
-            .activate_with_state(&config, &self.parameters, &self.custom_state)
+            .activate(&config, &self.parameters, &self.custom_state)
             .map_err(ActivateError::Product)?;
         let latency = processor.latency();
         self.active = Some(ActiveRuntime {
@@ -766,7 +636,7 @@ where
             resolved_audio,
             audio_buffers,
             latency,
-            custom_state_restart_required: false,
+            frozen_parameters: None,
             processor,
         });
         Ok(())
@@ -788,7 +658,7 @@ where
 
     /// Process one materialized channel slice through the active processor.
     ///
-    /// This compatibility entry point wraps the slice in [`ChannelBufferSlice`]
+    /// This slice entry point wraps the slice in [`ChannelBufferSlice`]
     /// and delegates to [`Self::process_source`]. It performs no allocation.
     ///
     /// # Errors
@@ -814,8 +684,10 @@ where
     /// identity/direction/channel legality against the activation-owned dense
     /// audio configuration before product DSP. Source-
     /// specific raw-pointer/alias proofs still belong to adapters/embeddings.
-    /// After successful processing, final automation endpoints become durable
-    /// base values for the next block, state export, and reactivation. Validation
+    /// Outside the pending custom-state gate, successful processing retains final
+    /// automation endpoints for the next block, state export, and reactivation.
+    /// While gated, DSP uses frozen base values and no parameter trajectories;
+    /// incoming events are still validated but never retained. Validation
     /// failure or a processor panic retains no endpoints. Control edits require
     /// exclusive runtime access; a subsequent edit overrides completed automation.
     ///
@@ -849,7 +721,7 @@ where
             resolved_audio,
             audio_buffers,
             latency: _,
-            custom_state_restart_required: _,
+            frozen_parameters,
             processor,
         } = active;
 
@@ -861,8 +733,6 @@ where
 
         let config =
             ActivationConfig::new(*process, AudioIoConfiguration::new(audio_ports), schema);
-        let mut block = ProcessBlock::new(&config, parameters, frame_count, context, source)
-            .map_err(InstanceProcessError::InvalidBlock)?;
         parameters
             .validate_events(context.parameter_events())
             .map_err(ProcessBlockError::InvalidParameterEvents)
@@ -871,8 +741,27 @@ where
             .note_events()
             .validate_ports(schema.event_ports())
             .map_err(InstanceProcessError::InvalidNoteEvents)?;
+        // While custom resources are stale, even otherwise-valid automation can
+        // refer to the replacement resources. Keep the first pre-load base state
+        // and withhold trajectories; do not let old DSP complete into pending state.
+        let dsp_context = if frozen_parameters.is_some() {
+            ProcessContext::with_note_events(
+                context.mode(),
+                context.transport(),
+                ParameterEvents::empty_for_block(frame_count),
+                context.note_events(),
+            )
+        } else {
+            context
+        };
+        let dsp_parameters = frozen_parameters.as_ref().unwrap_or(parameters);
+        let mut block =
+            ProcessBlock::new(&config, dsp_parameters, frame_count, dsp_context, source)
+                .map_err(InstanceProcessError::InvalidBlock)?;
         processor.process(&mut block);
-        parameters.retain_automation_endpoints(context.parameter_events());
+        if frozen_parameters.is_none() {
+            parameters.retain_automation_endpoints(context.parameter_events());
+        }
         Ok(())
     }
 
@@ -880,8 +769,8 @@ where
     ///
     /// The processor is destroyed in the caller's domain only after the caller
     /// has ended all process/reset borrows. The owned inactive I/O configuration
-    /// and activation-scoped latency are dropped with the active resources and
-    /// can be replaced on reactivation.
+    /// activation-scoped latency, and frozen parameter projection are dropped
+    /// with the active resources and can be replaced on reactivation.
     ///
     /// # Errors
     ///
@@ -893,166 +782,5 @@ where
             .ok_or(InstanceLifecycleError::NotActive)?;
         drop(active.processor);
         Ok(())
-    }
-
-    fn semantic_state_identity(&self) -> Option<(String, u32)> {
-        self.schema.state_identity().map(|identity| {
-            (
-                identity.component().as_str().to_owned(),
-                identity.schema().get(),
-            )
-        })
-    }
-
-    /// Build the complete durable semantic state using schema-owned identity.
-    ///
-    /// Framework-managed parameters are emitted from the canonical parameter
-    /// store and validated custom entries are appended. Encoding remains
-    /// deterministic because [`StateDocument`] canonicalizes entry order.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`InstanceStateExportError::MissingStateIdentity`] when this
-    /// component is intentionally identity-less, or wraps a parameter/state
-    /// document error.
-    pub fn state_document(&self) -> Result<StateDocument, InstanceStateExportError> {
-        let (product_id, product_schema) = self
-            .semantic_state_identity()
-            .ok_or(InstanceStateExportError::MissingStateIdentity)?;
-        let mut document = self
-            .parameters
-            .state_document(product_id, product_schema)
-            .map_err(InstanceStateExportError::State)?;
-        for entry in &self.custom_state {
-            document
-                .insert(entry.clone())
-                .map_err(ParameterStateError::Document)
-                .map_err(InstanceStateExportError::State)?;
-        }
-        Ok(document)
-    }
-
-    /// Encode complete durable semantic state under schema-owned identity.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`InstanceStateExportError`] if identity, document construction,
-    /// or bounded encoding fails.
-    pub fn encode_state(&self, limits: StateLimits) -> Result<Vec<u8>, InstanceStateExportError> {
-        let document = self.state_document()?;
-        document
-            .encode_with_limits(limits)
-            .map_err(ParameterStateError::Encode)
-            .map_err(InstanceStateExportError::State)
-    }
-
-    fn parameter_state_candidate(
-        &self,
-        document: &StateDocument,
-        product_id: &str,
-        product_schema: u32,
-    ) -> Result<ParameterStore, InstanceStateError> {
-        let descriptors = self.schema.parameters().to_vec();
-        let mut candidate =
-            ParameterStore::new(&descriptors).map_err(InstanceStateError::InvalidParameters)?;
-        candidate
-            .apply_state_for_product(document, product_id, product_schema)
-            .map_err(InstanceStateError::ParameterState)?;
-
-        let actual = document
-            .entries()
-            .iter()
-            .filter(|entry| entry.key().starts_with("parameter/"))
-            .count();
-        let expected = descriptors.len();
-        if actual != expected {
-            return Err(InstanceStateError::IncompleteParameterState { expected, actual });
-        }
-        Ok(candidate)
-    }
-
-    /// Replace complete semantic instance state using schema-owned identity.
-    ///
-    /// Framework parameters and custom entries are validated into temporary
-    /// candidates. Product validation sees both candidates, and neither is
-    /// published until every check succeeds. Changed custom state requires a
-    /// new activation to reach DSP: an active instance requests restart while
-    /// retaining its current valid resources until deactivation/reactivation.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`InstanceSemanticStateError`] for missing identity, framework
-    /// state validation failures, or product validation failure. Publication is
-    /// atomic across parameter and custom state.
-    pub fn apply_state<E, F>(
-        &mut self,
-        document: &StateDocument,
-        validate_product_state: F,
-    ) -> Result<(), InstanceSemanticStateError<E>>
-    where
-        F: FnOnce(&ParameterStore, &[StateEntry]) -> Result<(), E>,
-    {
-        let (product_id, product_schema) =
-            self.semantic_state_identity()
-                .ok_or(InstanceSemanticStateError::Parameters(
-                    InstanceStateError::MissingStateIdentity,
-                ))?;
-        let candidate_parameters = self
-            .parameter_state_candidate(document, &product_id, product_schema)
-            .map_err(InstanceSemanticStateError::Parameters)?;
-        let mut candidate_custom: Vec<_> = document
-            .entries()
-            .iter()
-            .filter(|entry| !entry.key().starts_with("parameter/"))
-            .cloned()
-            .collect();
-        candidate_custom
-            .sort_unstable_by(|left, right| left.key().as_bytes().cmp(right.key().as_bytes()));
-        validate_product_state(&candidate_parameters, &candidate_custom)
-            .map_err(InstanceSemanticStateError::Product)?;
-
-        if let Some(active) = &mut self.active {
-            active.custom_state_restart_required |= self.custom_state != candidate_custom;
-        }
-        self.parameters = candidate_parameters;
-        self.custom_state = candidate_custom;
-        Ok(())
-    }
-
-    /// Decode, migrate, validate, and publish complete semantic state using
-    /// schema-owned identity and schema version.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`InstanceSemanticStateLoadError`] for missing state identity,
-    /// bounded decode failures, migration failures, framework validation, or
-    /// product validation. The runtime is unchanged on failure.
-    pub fn apply_state_bytes<M, E, F>(
-        &mut self,
-        bytes: &[u8],
-        limits: StateLimits,
-        migrations: &[&M],
-        validate_product_state: F,
-    ) -> Result<(), InstanceSemanticStateLoadError<M::Error, E>>
-    where
-        M: StateMigration + ?Sized,
-        M::Error: std::error::Error + 'static,
-        E: std::error::Error + 'static,
-        F: FnOnce(&ParameterStore, &[StateEntry]) -> Result<(), E>,
-    {
-        let target_schema = self
-            .schema
-            .state_identity()
-            .map(|identity| identity.schema().get())
-            .ok_or(InstanceSemanticStateLoadError::Apply(
-                InstanceSemanticStateError::Parameters(InstanceStateError::MissingStateIdentity),
-            ))?;
-        let document = StateDocument::decode_with_limits(bytes, limits)
-            .map_err(InstanceSemanticStateLoadError::Decode)?;
-        let document = document
-            .migrate_to(target_schema, migrations)
-            .map_err(InstanceSemanticStateLoadError::Migration)?;
-        self.apply_state(&document, validate_product_state)
-            .map_err(InstanceSemanticStateLoadError::Apply)
     }
 }
