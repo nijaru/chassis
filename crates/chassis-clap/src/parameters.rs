@@ -4,7 +4,7 @@ use chassis_runtime::{
     automation::{ParameterEvent, ParameterEventValue},
     parameters::{
         ChoiceId, ChoiceIndex, ChoiceOption, ParameterDescriptor, ParameterIndex, ParameterKind,
-        ParameterStore, ParameterValue, ParameterValuesMut,
+        ParameterStore, ParameterValuesMut,
     },
     schema::StateIdentity,
     state::{
@@ -146,7 +146,15 @@ impl ClapParameterBinding {
     }
 
     pub(crate) fn event_value(&self, value: f64) -> Option<ParameterEventValue> {
-        let value = self.normalize_host_plain(value)?;
+        self.process_value(self.normalize_host_plain(value)?)
+    }
+
+    /// Strict conversion of an already-normalized publication value.
+    pub(crate) fn process_value(&self, value: f64) -> Option<ParameterEventValue> {
+        let (minimum, maximum) = self.plain_range();
+        if !value.is_finite() || !(minimum..=maximum).contains(&value) {
+            return None;
+        }
         match self.descriptor.kind() {
             ParameterKind::Float { .. } => Some(ParameterEventValue::Float(value)),
             ParameterKind::Integer { .. } => {
@@ -169,29 +177,6 @@ impl ClapParameterBinding {
         }
     }
 
-    pub(crate) fn parameter_value(&self, value: f64) -> Option<ParameterValue> {
-        match self.descriptor.kind() {
-            ParameterKind::Float {
-                minimum, maximum, ..
-            } if value.is_finite() && (*minimum..=*maximum).contains(&value) => {
-                Some(ParameterValue::Float(value))
-            }
-            ParameterKind::Float { .. } => None,
-            ParameterKind::Integer {
-                minimum, maximum, ..
-            } => integer_from_plain(value)
-                .filter(|value| (*minimum..=*maximum).contains(value))
-                .map(ParameterValue::Integer),
-            ParameterKind::Boolean { .. } => match value {
-                0.0 => Some(ParameterValue::Boolean(false)),
-                1.0 => Some(ParameterValue::Boolean(true)),
-                _ => None,
-            },
-            ParameterKind::Choice { options, .. } => choice_option(options, value)
-                .map(|option| ParameterValue::Choice(option.id().clone())),
-        }
-    }
-
     fn state_value(&self, value: f64) -> Option<StateValue> {
         match self.descriptor.kind() {
             ParameterKind::Float { .. } => Some(StateValue::Float(value)),
@@ -206,14 +191,14 @@ impl ClapParameterBinding {
         }
     }
 
-    fn plain_value(&self, value: &ParameterValue) -> Option<f64> {
-        self.descriptor.validate_value(value).ok()?;
-        match value {
-            ParameterValue::Float(value) => Some(*value),
-            ParameterValue::Integer(value) => Some(integer_to_plain(*value)),
-            ParameterValue::Boolean(value) => Some(f64::from(u8::from(*value))),
-            ParameterValue::Choice(value) => self.choice_plain(value.as_str()),
-        }
+    fn plain_value(&self, value: ParameterEventValue) -> Option<f64> {
+        self.descriptor.validate_event_value(&value).ok()?;
+        Some(match value {
+            ParameterEventValue::Float(value) => value,
+            ParameterEventValue::Integer(value) => integer_to_plain(value),
+            ParameterEventValue::Boolean(value) => f64::from(u8::from(value)),
+            ParameterEventValue::Choice(value) => f64::from(value.get()),
+        })
     }
 
     fn state_plain_value(&self, value: &StateValue) -> Option<f64> {
@@ -236,7 +221,7 @@ impl ClapParameterBinding {
             (ParameterKind::Choice { .. }, StateValue::Choice(value)) => self.choice_plain(value),
             _ => None,
         }
-        .filter(|value| self.parameter_value(*value).is_some())
+        .filter(|value| self.process_value(*value).is_some())
     }
 
     fn choice_plain(&self, value: &str) -> Option<f64> {
@@ -476,13 +461,7 @@ impl ClapParameterState {
     fn validated_plain_value(&self, id: ClapId, value: f64) -> Option<(usize, f64)> {
         let index = self.index_for_id(id)?;
         let value = self.bindings[index].normalize_host_plain(value)?;
-        let value = self.bindings[index].parameter_value(value)?;
-        let value = match value {
-            ParameterValue::Float(value) => value,
-            ParameterValue::Integer(value) => integer_to_plain(value),
-            ParameterValue::Boolean(value) => f64::from(u8::from(value)),
-            ParameterValue::Choice(value) => self.bindings[index].choice_plain(value.as_str())?,
-        };
+        self.bindings[index].process_value(value)?;
         Some((index, value))
     }
 
@@ -509,16 +488,16 @@ impl ClapParameterState {
             .bindings
             .iter()
             .zip(scratch.iter().copied())
-            .any(|(binding, value)| binding.parameter_value(value).is_none())
+            .any(|(binding, value)| binding.process_value(value).is_none())
         {
             return Err(ParameterSyncError::InvalidPublishedValue);
         }
         for (binding, value) in self.bindings.iter().zip(scratch.iter().copied()) {
             let parameter = binding
-                .parameter_value(value)
+                .process_value(value)
                 .ok_or(ParameterSyncError::InvalidPublishedValue)?;
             store
-                .set_index(binding.index(), parameter)
+                .set_event_value(binding.index(), parameter)
                 .map_err(|_| ParameterSyncError::StoreRejected)?;
         }
         Ok(Some(generation))
@@ -540,7 +519,7 @@ impl ClapParameterState {
         };
         for (binding, target) in self.bindings.iter().zip(scratch.iter_mut()) {
             *target = store
-                .get_index(binding.index())
+                .get_event_value(binding.index())
                 .and_then(|value| binding.plain_value(value))
                 .ok_or(ParameterSyncError::StoreRejected)?;
         }
@@ -763,7 +742,7 @@ mod tests {
     use super::*;
     use chassis_runtime::{
         automation::{ParameterEventChange, ParameterEvents},
-        parameters::{ChoiceId, ChoiceOption, ParameterDescriptor, ParameterStore},
+        parameters::{ChoiceId, ChoiceOption, ParameterDescriptor, ParameterStore, ParameterValue},
         schema::{ComponentId, StateSchemaVersion},
         state::StateEntry,
     };
@@ -832,7 +811,7 @@ mod tests {
             assert!(!state.apply_plain_value(ClapId::new(3), invalid));
         }
         for binding in [integer, boolean] {
-            assert!(binding.parameter_value(0.25).is_none());
+            assert!(binding.process_value(0.25).is_none());
             assert!(binding.state_value(0.25).is_none());
             assert!(
                 binding

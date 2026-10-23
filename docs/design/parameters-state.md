@@ -41,7 +41,7 @@ After a successful process call, `InstanceRuntime` retains each parameter's fina
 
 Linear points are block-local endpoints, not future ramp targets. A ramp spanning blocks must be clipped by its source into local points; provide the next block's offset-zero value when needed to preserve the original slope. No pending ramp or hidden extrapolation is retained.
 
-Choice values in the store share schema-owned IDs, including values accepted from control edits or decoded state. This makes realtime choice replacement/drop safe: an event never owns the last allocation reference.
+Choice values in the store share schema-owned IDs, including values accepted from control edits or decoded state. Each stored choice also caches its parameter-local dense index at the sole mutation boundary. `get_event_value` and `set_event_value` project durable base values through fixed-width payloads without scanning stable identities; CLAP uses them for synchronization and completed publication, and flush keeps already-normalized dense values. Control/state lookup remains off-thread. Realtime choice replacement/drop is safe because an event never owns the last ID allocation reference. Serialization still writes stable choice IDs, never the cached index.
 
 ## Automation publication
 

@@ -5,7 +5,11 @@ members = [
     "examples/clap-conformance",
     "examples/clap-delayed-probe",
 ]
+exclude = ["vendor/clack/plugin"]
 resolver = "3"
+
+[patch."https://github.com/prokopyl/clack"]
+clack-plugin = { path = "vendor/clack/plugin" }
 
 [workspace.package]
 edition = "2024"

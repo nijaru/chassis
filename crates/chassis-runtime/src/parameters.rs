@@ -643,18 +643,55 @@ impl ParameterDescriptor {
     fn canonical_value(
         &self,
         value: ParameterValue,
-    ) -> Result<ParameterValue, ParameterValueError> {
+    ) -> Result<StoredParameterValue, ParameterValueError> {
         if let (ParameterKind::Choice { options, .. }, ParameterValue::Choice(id)) =
             (&self.kind, &value)
         {
             return options
                 .iter()
-                .find(|option| option.id() == id)
-                .map(|option| ParameterValue::Choice(option.id().clone()))
+                .enumerate()
+                .find(|(_, option)| option.id() == id)
+                .map(|(index, option)| StoredParameterValue {
+                    value: ParameterValue::Choice(option.id().clone()),
+                    choice_index: Some(ChoiceIndex::new(
+                        u32::try_from(index).expect("validated choice count fits u32"),
+                    )),
+                })
                 .ok_or(ParameterValueError::UnknownChoice);
         }
         self.validate_value(&value)?;
-        Ok(value)
+        Ok(StoredParameterValue {
+            value,
+            choice_index: None,
+        })
+    }
+
+    fn stored_default(&self) -> StoredParameterValue {
+        self.canonical_value(self.default_value())
+            .expect("store descriptors have validated domains and defaults")
+    }
+
+    fn value_from_validated_event(&self, event: ParameterEventValue) -> StoredParameterValue {
+        let (value, choice_index) = match event {
+            ParameterEventValue::Float(value) => (ParameterValue::Float(value), None),
+            ParameterEventValue::Integer(value) => (ParameterValue::Integer(value), None),
+            ParameterEventValue::Boolean(value) => (ParameterValue::Boolean(value), None),
+            ParameterEventValue::Choice(index) => {
+                let ParameterKind::Choice { options, .. } = self.kind() else {
+                    unreachable!("validated choice event has a choice descriptor");
+                };
+                let position =
+                    usize::try_from(index.get()).expect("validated choice index fits usize");
+                (
+                    ParameterValue::Choice(options[position].id().clone()),
+                    Some(index),
+                )
+            }
+        };
+        StoredParameterValue {
+            value,
+            choice_index,
+        }
     }
 
     /// Validate one dense process-time event value against this descriptor.
@@ -936,6 +973,51 @@ impl fmt::Display for ParameterStoreError {
 
 impl std::error::Error for ParameterStoreError {}
 
+/// Failure to replace a durable value using a dense process-domain payload.
+///
+/// Unlike control/state errors, this carries no allocated parameter key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParameterEventValueError {
+    /// Dense index did not identify a parameter in this schema.
+    UnknownParameter(ParameterIndex),
+    /// Payload failed the descriptor's type/domain validation.
+    InvalidValue(ParameterValueError),
+}
+
+impl fmt::Display for ParameterEventValueError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownParameter(index) => {
+                write!(formatter, "unknown parameter index {}", index.get())
+            }
+            Self::InvalidValue(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for ParameterEventValueError {}
+
+#[derive(Clone)]
+struct StoredParameterValue {
+    value: ParameterValue,
+    // Derived at the sole mutation boundary, never resolved from text in DSP.
+    choice_index: Option<ChoiceIndex>,
+}
+
+impl StoredParameterValue {
+    fn event_value(&self) -> ParameterEventValue {
+        match &self.value {
+            ParameterValue::Float(value) => ParameterEventValue::Float(*value),
+            ParameterValue::Integer(value) => ParameterEventValue::Integer(*value),
+            ParameterValue::Boolean(value) => ParameterEventValue::Boolean(*value),
+            ParameterValue::Choice(_) => ParameterEventValue::Choice(
+                self.choice_index
+                    .expect("stored choice has a dense projection"),
+            ),
+        }
+    }
+}
+
 /// One component instance's validated, mutable base/control values.
 ///
 /// The schema is owned immutably and values are kept aligned with it. This
@@ -943,7 +1025,7 @@ impl std::error::Error for ParameterStoreError {}
 /// the instance runtime retains its completed endpoints after successful processing.
 pub struct ParameterStore {
     descriptors: Vec<ParameterDescriptor>,
-    values: Vec<ParameterValue>,
+    values: Vec<StoredParameterValue>,
     lookup: Vec<usize>,
 }
 
@@ -981,6 +1063,22 @@ impl ParameterValuesMut<'_> {
         value: ParameterValue,
     ) -> Result<(), ParameterStoreError> {
         self.store.set_index(index, value)
+    }
+
+    /// Replace a durable base value using its dense process-domain payload.
+    ///
+    /// Choice indices are local to this parameter's immutable schema. Both
+    /// success and rejection avoid allocation and stable-identity lookup.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParameterEventValueError`] for an unknown parameter or invalid payload.
+    pub fn set_event_value(
+        &mut self,
+        index: ParameterIndex,
+        value: ParameterEventValue,
+    ) -> Result<(), ParameterEventValueError> {
+        self.store.set_event_value(index, value)
     }
 
     /// Restore all values to their validated defaults.
@@ -1048,7 +1146,7 @@ impl ParameterStore {
         let descriptors = descriptors.to_vec();
         let values = descriptors
             .iter()
-            .map(ParameterDescriptor::default_value)
+            .map(ParameterDescriptor::stored_default)
             .collect();
         let mut lookup: Vec<_> = (0..descriptors.len()).collect();
         lookup.sort_unstable_by(|left, right| {
@@ -1086,14 +1184,25 @@ impl ParameterStore {
     #[must_use]
     pub fn get_index(&self, index: ParameterIndex) -> Option<&ParameterValue> {
         let position = usize::try_from(index.get()).ok()?;
-        self.values.get(position)
+        self.values.get(position).map(|stored| &stored.value)
+    }
+
+    /// Return the durable base value as a fixed-width process-domain payload.
+    ///
+    /// Choice indices are schema-local; this performs no stable-identity lookup.
+    #[must_use]
+    pub fn get_event_value(&self, index: ParameterIndex) -> Option<ParameterEventValue> {
+        let position = usize::try_from(index.get()).ok()?;
+        self.values
+            .get(position)
+            .map(StoredParameterValue::event_value)
     }
 
     /// Return the current value for a stable key.
     #[must_use]
     pub fn get(&self, key: impl AsRef<str>) -> Option<&ParameterValue> {
         self.position_for_key(key.as_ref())
-            .map(|index| &self.values[index])
+            .map(|index| &self.values[index].value)
     }
 
     /// Replace one value after validating it against its descriptor.
@@ -1154,16 +1263,44 @@ impl ParameterStore {
         Ok(())
     }
 
+    /// Replace a durable base value using a validated dense process-domain payload.
+    ///
+    /// Both success and rejection avoid allocation and stable-identity lookup.
+    /// Invalid input leaves the store unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParameterEventValueError`] for an unknown parameter or invalid payload.
+    pub fn set_event_value(
+        &mut self,
+        index: ParameterIndex,
+        value: ParameterEventValue,
+    ) -> Result<(), ParameterEventValueError> {
+        let position = usize::try_from(index.get())
+            .map_err(|_| ParameterEventValueError::UnknownParameter(index))?;
+        let descriptor = self
+            .descriptors
+            .get(position)
+            .ok_or(ParameterEventValueError::UnknownParameter(index))?;
+        descriptor
+            .validate_event_value(&value)
+            .map_err(ParameterEventValueError::InvalidValue)?;
+        self.values[position] = descriptor.value_from_validated_event(value);
+        Ok(())
+    }
+
     /// Restore all values to their validated defaults.
     pub fn reset(&mut self) {
         for (value, descriptor) in self.values.iter_mut().zip(self.descriptors.iter()) {
-            *value = descriptor.default_value();
+            *value = descriptor.stored_default();
         }
     }
 
     /// Iterate over descriptors and current values in declaration order.
     pub fn iter(&self) -> impl Iterator<Item = (&ParameterDescriptor, &ParameterValue)> {
-        self.descriptors.iter().zip(&self.values)
+        self.descriptors
+            .iter()
+            .zip(self.values.iter().map(|stored| &stored.value))
     }
 
     /// Build a semantic state document containing all parameter base values.
@@ -1233,28 +1370,10 @@ impl ParameterStore {
             let position = usize::try_from(event.parameter().get())
                 .expect("validated parameter index fits usize");
             let value = match event.change() {
-                ParameterEventChange::Linear { value }
-                | ParameterEventChange::Set(ParameterEventValue::Float(value)) => {
-                    ParameterValue::Float(value)
-                }
-                ParameterEventChange::Set(ParameterEventValue::Integer(value)) => {
-                    ParameterValue::Integer(value)
-                }
-                ParameterEventChange::Set(ParameterEventValue::Boolean(value)) => {
-                    ParameterValue::Boolean(value)
-                }
-                ParameterEventChange::Set(ParameterEventValue::Choice(index)) => {
-                    let ParameterKind::Choice { options, .. } = self.descriptors[position].kind()
-                    else {
-                        unreachable!("validated choice event has a choice descriptor");
-                    };
-                    let index =
-                        usize::try_from(index.get()).expect("validated choice index fits usize");
-                    let option = &options[index];
-                    ParameterValue::Choice(option.id().clone())
-                }
+                ParameterEventChange::Linear { value } => ParameterEventValue::Float(value),
+                ParameterEventChange::Set(value) => value,
             };
-            self.values[position] = value;
+            self.values[position] = self.descriptors[position].value_from_validated_event(value);
         }
     }
 
@@ -1557,6 +1676,82 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn dense_base_values_stay_coherent_across_control_state_reset_and_rejection() {
+        let mut store = ParameterStore::new(&descriptors()).unwrap();
+        let mode = store.index("mode").unwrap();
+        let clean = ParameterEventValue::Choice(ChoiceIndex::new(0));
+        let warm = ParameterEventValue::Choice(ChoiceIndex::new(1));
+        assert_eq!(store.get_event_value(mode), Some(clean));
+
+        store
+            .set(
+                "mode",
+                ParameterValue::Choice(ChoiceId::new("warm").unwrap()),
+            )
+            .unwrap();
+        assert_eq!(store.get_event_value(mode), Some(warm));
+        let saved = store.state_document("test", 1).unwrap();
+        store
+            .set_index(
+                mode,
+                ParameterValue::Choice(ChoiceId::new("clean").unwrap()),
+            )
+            .unwrap();
+        assert_eq!(store.get_event_value(mode), Some(clean));
+        store.values_mut().set_event_value(mode, warm).unwrap();
+        assert_eq!(store.state_document("test", 1).unwrap(), saved);
+        store.values_mut().reset();
+        assert_eq!(store.get_event_value(mode), Some(clean));
+        store.apply_state_for_product(&saved, "test", 1).unwrap();
+        assert_eq!(store.get_event_value(mode), Some(warm));
+
+        assert_eq!(
+            store.set_event_value(mode, ParameterEventValue::Choice(ChoiceIndex::new(2))),
+            Err(ParameterEventValueError::InvalidValue(
+                ParameterValueError::UnknownChoice
+            ))
+        );
+        assert_eq!(
+            store.set_event_value(ParameterIndex::new(99), clean),
+            Err(ParameterEventValueError::UnknownParameter(
+                ParameterIndex::new(99)
+            ))
+        );
+        assert!(
+            store
+                .set_event_value(mode, ParameterEventValue::Integer(1))
+                .is_err()
+        );
+        assert_eq!(store.get_event_value(mode), Some(warm));
+        assert_eq!(store.state_document("test", 1).unwrap(), saved);
+
+        // Dense choice indices are local, not persistence identity.
+        let reversed = ParameterDescriptor::choice(
+            "mode",
+            "Mode",
+            choices().into_iter().rev().collect(),
+            "clean",
+        )
+        .unwrap();
+        let mut reordered = ParameterStore::new(&[reversed]).unwrap();
+        let mut document = StateDocument::new("test", 1).unwrap();
+        document
+            .insert(StateEntry::new(
+                "parameter/mode",
+                StateValue::Choice("warm".into()),
+            ))
+            .unwrap();
+        reordered
+            .apply_state_for_product(&document, "test", 1)
+            .unwrap();
+        assert_eq!(
+            reordered.get_event_value(ParameterIndex::new(0)),
+            Some(ParameterEventValue::Choice(ChoiceIndex::new(0)))
+        );
+        assert_eq!(reordered.get("mode"), store.get("mode"));
     }
 
     #[test]

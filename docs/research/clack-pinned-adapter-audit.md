@@ -15,7 +15,7 @@ The pinned source includes plugin/host main-thread reentrancy and adjacent safet
 
 Release metadata refreshed 2026-10-11: registry `clack-plugin` 0.2.0 was published 2026-09-12, and GitHub `v0.2` now resolves to `27ca28391b57a61bad4bb5099288a7bf9247350d`. The old assertion that this tag identifies Chassis's pin is not current. See [dependency policy](../dependencies.md) for primary release metadata. Review the source delta and rerun adapter conformance before changing source/revision. Downgrading to the affected registry 0.1.1 line remains unacceptable.
 
-The workspace manifest uses a full revision rather than a branch, and `deny.toml` allowlists only the Clack repository as the current git-source exception.
+The workspace manifest uses a full revision rather than a branch, and `deny.toml` allowlists only the Clack repository as the current git-source exception. A workspace Cargo patch selects `vendor/clack/plugin` for `clack-plugin`; common, host, and extensions retain the exact upstream pin. The vendored crate is excluded from Chassis workspace membership, not from the resolved dependency graph.
 
 ## Why Chassis does not use published 0.1.1
 
@@ -122,11 +122,22 @@ Current mechanical evidence includes:
 
 Clack remains the ABI/lifecycle/panic-containment owner, not the sample alias-validation owner. The reviewed Chassis adapter supplies that sample boundary.
 
-### Unclosed realtime failure path
+### Realtime process rejection — local source delta reviewed 2026-10-23
 
-Pinned `plugin/src/plugin/logging.rs` formats/allocates for host logging or writes stderr on error; `extensions/wrapper.rs` reaches it when process returns a `PluginError`. A temporary rejected actual-entry alias probe observed one allocation with the warmed in-process harness at `b0dce56`; exact counts depend on logging/warm-up conditions. The safe `ProcessStatus` API has no nonreporting error variant. Valid-callback allocation tests do not qualify rejection paths, and arbitrary DSP panics are not realtime-safe recovery.
+Upstream `plugin/src/plugin/logging.rs` formats/allocates for host logging or writes stderr on error. The safe `ProcessStatus` API has no nonreporting error variant. Comparing the audited pin with release commit `27ca28391b57a61bad4bb5099288a7bf9247350d` confirmed that plugin process/error handling is unchanged; upgrading alone cannot close this gap. The release's other changes (event gesture decoding, descriptor/features, GUI/extension wrappers, and host wrapper bounds) are not adopted by this fix.
 
-A reviewed nonlogging/nonallocating process-error ABI path remains a qualification blocker. Do not report success for an invalid callback, suppress reporting through panic, or alter the dependency pin without source review and renewed adapter conformance.
+Only `clack-plugin` is vendored from `c5975f9`, with its original source, tests, READMEs, and MIT/Apache license texts. Its manifest replaces upstream workspace/path inheritance with explicit same-pin dependencies and preserves upstream lints. Examples are not copied, and three upstream trailing-whitespace lines are normalized. The only behavioral Rust source changes are:
+
+- `extensions/wrapper.rs`: a crate-private `handle_process` uses the existing pointer/lifecycle lookup and panic containment, returning `None` without calling `plugin_log`;
+- `plugin/instance.rs`: only the process ABI callback uses that helper. Its existing `None -> CLAP_PROCESS_ERROR` mapping is unchanged.
+
+All other callbacks retain normal diagnostics and the existing lifecycle/reentrancy model. Cargo resolves one plugin crate shared by Chassis, extensions, and the test host. The patch introduces no new ABI callback, reference construction, dependency version, or public API.
+
+Chassis deterministic process errors carry static messages, so dropping them does not allocate/deallocate. Boxed/custom errors and arbitrary DSP panics are not covered: catch-unwind remains, but panic hooks, payloads, and arbitrary destructors need not be realtime-safe. Process failure terminates the run; this patch promises no post-panic reuse.
+
+The actual-entry partial-alias rejection regression failed before this patch with one allocation. It now measures acceptance and rejection with zero allocations/deallocations and no host-log calls. No-host-log rejection was also measured locally; the source path cannot fall back to stderr. Packaged validator/fuzz and lifecycle/panic checks are recorded in [validation](../design/validation.md).
+
+Keep this delta narrow. Remove the vendored override only when a reviewed upstream replacement preserves nonlogging process rejection and passes adapter qualification.
 
 ## Current qualification boundary
 
@@ -138,6 +149,6 @@ A manual adapter-overhead benchmark harness exists for representative local hard
 
 ## Refresh triggers
 
-Re-audit when Clack changes revision/source form or a new extension path relies on previously unreviewed lifetime/unsafe behavior. Registry 0.2.0 is now a candidate, not an already-audited replacement.
+Re-audit when Clack changes revision/source form, the vendored patch changes, or a new extension path relies on previously unreviewed lifetime/unsafe behavior. Registry 0.2.0 is not a drop-in replacement for the local process-error fix.
 
 Keep Rust, portable-host, validator, and fuzz gates green for the revision under review. Refresh the dated real-host/performance evidence when making corresponding current claims; neither the old REAPER run nor its benchmark automatically qualifies later changes. Additional real-host reentrancy evidence remains useful when available. Headless f64 semantics and host wire-precision preference are separate questions.

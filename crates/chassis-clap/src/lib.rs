@@ -526,7 +526,7 @@ where
             };
             return write!(writer, "{}", option.name());
         }
-        if binding.parameter_value(value).is_none() {
+        if binding.process_value(value).is_none() {
             return Err(core::fmt::Error);
         }
         write!(writer, "{value}")
@@ -544,10 +544,10 @@ where
         if let ParameterKind::Choice { options, .. } = binding.descriptor().kind() {
             let plain = options.iter().position(|option| option.name() == text)?;
             let plain = f64::from(u32::try_from(plain).ok()?);
-            return binding.parameter_value(plain).map(|_| plain);
+            return binding.process_value(plain).map(|_| plain);
         }
         let value = binding.normalize_host_plain(text.parse().ok()?)?;
-        binding.parameter_value(value).map(|_| value)
+        binding.process_value(value).map(|_| value)
     }
 
     fn flush(&self, input: &InputEvents, _output: &mut OutputEvents) {

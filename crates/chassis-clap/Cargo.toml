@@ -17,7 +17,7 @@ workspace = true
 
 [dev-dependencies]
 clack-host.workspace = true
-clack-extensions = { workspace = true, features = ["clack-host", "latency"] }
+clack-extensions = { workspace = true, features = ["clack-host", "latency", "log"] }
 loom = "0.7.2"
 
 [[bench]]

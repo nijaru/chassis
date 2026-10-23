@@ -98,7 +98,6 @@ dependencies = [
 [[package]]
 name = "clack-plugin"
 version = "0.2.0"
-source = "git+https://github.com/prokopyl/clack?rev=c5975f9f89f0953b00768680357985d46178078a#c5975f9f89f0953b00768680357985d46178078a"
 dependencies = [
  "clack-common",
  "clap-sys",

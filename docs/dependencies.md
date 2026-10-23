@@ -18,7 +18,7 @@ repository: https://github.com/prokopyl/clack
 revision:   c5975f9f89f0953b00768680357985d46178078a
 ```
 
-The revision identifies Clack's development 0.2.0 workspace after the plugin-side reentrancy fix and the immediately following safety/lifetime work. `clack-plugin` and `clack-extensions` are consumed from that same pinned source; `audio-ports`, `latency`, `params`, `render`, and `state` extensions are enabled for the plugin. Tests additionally enable host-side support.
+The revision identifies Clack's development 0.2.0 workspace after the plugin-side reentrancy fix and the immediately following safety/lifetime work. Common, host, and extensions retain this exact source. A workspace Cargo patch consumes `clack-plugin` from `vendor/clack/plugin`, copied from the same revision with a narrow nonlogging process-error fix. The [Clack audit](research/clack-pinned-adapter-audit.md) owns its provenance and complete source delta. Original MIT/Apache license texts are retained; no dependency versions change. `audio-ports`, `latency`, `params`, `render`, and `state` extensions are enabled for the plugin; tests additionally enable host-side support and logging observation.
 
 ### Why this git exception exists
 
@@ -83,7 +83,7 @@ Dependencies are acceptable at non-realtime edges much more readily than on the 
 | Component | Role | License | Position |
 | --- | --- | --- | --- |
 | Chassis workspace | framework | AGPL-3.0-or-later + intended separate commercial license | current |
-| Clack pinned revision `c5975f9` | low-level safe CLAP plugin boundary | MIT OR Apache-2.0 | adopted audited source; dated headless/host evidence in validation guide |
+| Clack `c5975f9` + local plugin patch | low-level safe CLAP plugin boundary | MIT OR Apache-2.0 | vendored plugin process-error fix; common/host/extensions retain git pin; audit and validation own evidence |
 | `clack-extensions` from same revision | CLAP extension wrappers | MIT OR Apache-2.0 | audio ports, latency, parameters, render mode, and state |
 | `clap-sys` | raw CLAP ABI used by Clack | MIT OR Apache-2.0 | transitive; inspect exact lockfile resolution |
 | CLAP SDK | CLAP ABI specification | MIT | compatible |
@@ -95,7 +95,7 @@ Dependencies are acceptable at non-realtime edges much more readily than on the 
 | CPAL | standalone audio device I/O candidate | Apache-2.0 | compatible; standalone/device layer only |
 | midir | standalone MIDI I/O candidate | MIT | compatible; standalone/device layer only |
 
-Clack still owns CLAP ABI lifecycle, descriptor borrowing, and panic containment. Chassis now owns a narrow unsafe sample-pointer boundary in `chassis-clap/src/raw_audio.rs`: it classifies the entire mapped alias topology before creating sample references rather than using pinned Clack's reference-first channel pairing. The pin is unchanged. Host pointer provenance/extent, initialization, metadata separation, and concurrency remain obligations; see the [audit](research/clack-pinned-adapter-audit.md). Its allocating/logging rejection path remains a realtime qualification blocker.
+Clack still owns CLAP ABI lifecycle, descriptor borrowing, and panic containment. Chassis now owns a narrow unsafe sample-pointer boundary in `chassis-clap/src/raw_audio.rs`: it classifies the entire mapped alias topology before creating sample references rather than using pinned Clack's reference-first channel pairing. The pin is unchanged. Host pointer provenance/extent, initialization, metadata separation, and concurrency remain obligations; see the [audit](research/clack-pinned-adapter-audit.md). The local plugin patch bypasses synchronous reporting only for process callbacks, returning actual processing failure; arbitrary boxed errors and panics remain outside realtime qualification.
 
 ## AAX exception
 
@@ -107,7 +107,7 @@ Keep AAX-specific dependencies/code/tooling isolated from format-independent cra
 
 Prefer crates.io releases for normal Rust dependencies. Git dependencies require an explicit reason and full pinned revision because they weaken ordinary registry reproducibility/supply-chain review.
 
-The current Clack pin is the only approved git-source exception. `deny.toml` allowlists that repository to retain the audited trust boundary until a replacement source passes review and qualification. The historical reason was the registry 0.1.1 reentrancy defect; registry 0.2.0 is now available.
+The current Clack pin is the only approved git-source exception. `deny.toml` allowlists that repository to retain the audited trust boundary until a replacement source passes review and qualification. The historical reason was the registry 0.1.1 reentrancy defect; registry 0.2.0 is now available, but retains the process-error reporter that required the local plugin patch. Prefer removing that vendor override when a reviewed upstream replacement supplies the same realtime failure contract.
 
 Release availability sources (checked 2026-10-11): [crates.io 0.2.0 metadata](https://crates.io/api/v1/crates/clack-plugin/0.2.0), [GitHub release](https://github.com/prokopyl/clack/releases/tag/v0.2), and [tag reference](https://api.github.com/repos/prokopyl/clack/git/ref/tags/v0.2).
 

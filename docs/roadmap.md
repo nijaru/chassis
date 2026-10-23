@@ -16,14 +16,13 @@ Core capability is not deployment support. CLAP note/event/custom-state projecti
 
 ## Near-term semantic and deployment work
 
-1. Close CLAP's non-realtime error-reporting gap: rejected process callbacks need a nonlogging, nonallocating ABI failure path, with source review and format qualification.
-2. Establish component-owned complete-state defaults/validation/migration and one activation preparation hook; use a resource-backed reactivation fixture to complete coherent CLAP custom-state projection.
-3. Unify author-defined parameter domain mapping/formatting/parsing and adapter conversion.
-4. Define modulation independently from automation/base state, then tail and host-bypass contracts without prescribing one DSP algorithm.
-5. Export a non-effect fixture: note ports/input, honest descriptor features, then bounded event output and expression/MIDI families.
-6. Add prepared adoption/reclamation and background-work lifecycle only when the resource-backed client needs more than reactivation.
+1. Establish component-owned complete-state defaults/validation/migration and one activation preparation hook. A resource-backed fixture must prove safe processing between an accepted state load and deferred reactivation before completing coherent CLAP custom-state projection.
+2. Unify author-defined parameter domain mapping/formatting/parsing and adapter conversion.
+3. Define modulation independently from automation/base state, then tail and host-bypass contracts without prescribing one DSP algorithm.
+4. Export a non-effect fixture: note ports/input, honest descriptor features, then bounded event output and expression/MIDI families.
+5. Add prepared adoption/reclamation and background-work lifecycle only when the resource-backed client needs more than reactivation.
 
-Automation completion now has one runtime owner; CLAP publishes its completed store without replaying events. Unsupported CLAP custom fields/event ports remain explicitly rejected.
+Automation completion has one runtime owner; CLAP synchronizes/publishes dense values without replaying events or scanning stable choice identities on the callback. A reviewed local Clack plugin patch returns rejected-process failure without synchronous reporting. Unsupported CLAP custom fields/event ports remain explicitly rejected.
 
 These are independently deliverable contracts. Do not turn “core closure” into a blanket freeze or defer all deployment feedback until after a large core redesign.
 

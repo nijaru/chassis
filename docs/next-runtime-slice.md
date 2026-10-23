@@ -18,22 +18,18 @@ The implemented corrections are:
 
 Their contracts live in [buffers](design/process-buffers.md), [parameters/state](design/parameters-state.md), [runtime](design/runtime.md), and the [Clack audit](research/clack-pinned-adapter-audit.md). They do not make the broader framework production-ready.
 
-## Next — close the realtime failure boundary
+## Closed — realtime rejection and dense parameter projection
 
-Pinned Clack reports rejected process callbacks through formatting/allocation or logging. Accepted-callback zero-allocation evidence does not qualify that failure path. Its safe process-status API currently represents `CLAP_PROCESS_ERROR` only through the reporting error path.
+The existing Clack pin remains. A reviewed vendored `clack-plugin` patch bypasses reporting only for process callbacks and preserves actual `CLAP_PROCESS_ERROR`, lifecycle checks, and panic containment. Registry 0.2.0 has unchanged process reporting and is not a replacement for this fix. [Source audit](research/clack-pinned-adapter-audit.md) owns the delta; [validation](design/validation.md) owns revision-scoped evidence.
 
-1. Establish a nonlogging, nonallocating process-error return path at the ABI boundary. Do not disguise rejection as successful processing or rely on panic to suppress reporting.
-2. Review the relevant source delta before changing the audited dependency pin or owning another FFI callback.
-3. Measure valid and rejected actual-entry callbacks separately, then rerun lifecycle/panic, packaged validator/fuzz, and platform gates.
+The roadmap review also found remaining stable-choice scans in CLAP synchronization, flush, and publication. The runtime store now owns a cached dense choice projection alongside canonical persistent identity; all callback projection uses fixed-width values. Setup/control/state paths still resolve stable identities. Arbitrary boxed errors and DSP panics remain outside realtime qualification.
 
-Registry Clack 0.2.0 is a source-review candidate, not an assumed fix. Keep the current pin until the replacement passes review and conformance.
-
-## Then — component-owned complete state
+## Next — component-owned complete state
 
 The runtime can now publish valid complete state and request custom-state reactivation, but product defaults, validation, and migration are still supplied by callers rather than one component-owned contract. CLAP still projects scalar state only and rejects custom fields/event-port schemas.
 
 1. Give the component one complete-state defaults/validation/migration contract and one activation preparation hook. Remove the historical activation-hook chain when migrating callers; do not preserve it as a compatibility family.
-2. Exercise a resource-backed component whose custom state prepares activation-scoped DSP resources. Prove default construction, rejected candidates, active-load restart, state save/reopen, and deterministic reactivation before extending deployment state.
+2. Exercise a resource-backed component whose custom state prepares activation-scoped DSP resources. Couple a parameter to those resources and process between accepted active load and deferred host reactivation, not only after restart. Current core loads make replacement parameters immediately visible while old custom-derived resources remain active: settle the safe transition policy before extending deployment state. Prove default construction, rejected candidates, active-load restart, state save/reopen, and deterministic reactivation.
 3. Project one coherent parameter/custom semantic generation across inactive and active CLAP lifetimes. Complete migration and product validation at that boundary; never combine independently sampled scalar/custom snapshots.
 
 Start with reactivation-based resource replacement. Bounded prepared adoption, coalescing, stale-result rejection, deferred reclamation, cancellation, and unload fencing need a concrete client before choosing a queue or executor. No hidden global executor or last-owner `Arc` destruction on the callback.

@@ -35,7 +35,7 @@ Therefore:
 - isolate SDK-specific licensing constraints in the relevant adapter/tooling layer;
 - document exceptions before adopting them.
 
-Current backend candidates fit this direction: Clack is MIT/Apache-2.0 and clap-wrapper is MIT, while target SDKs retain their own terms.
+Current backend candidates fit this direction: Clack is MIT/Apache-2.0 and clap-wrapper is MIT, while target SDKs retain their own terms. The vendored Clack source and local patch under `vendor/clack` remain `MIT OR Apache-2.0`, with upstream license texts retained; they are not relicensed under Chassis's AGPL grant.
 
 ## Contributions
 

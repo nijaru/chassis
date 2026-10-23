@@ -21,6 +21,7 @@ use chassis_runtime::{
 };
 use clack_extensions::{
     latency::{HostLatency, HostLatencyImpl, PluginLatency},
+    log::{HostLog, HostLogImpl, LogSeverity},
     params::PluginParams,
 };
 use clack_host::{
@@ -38,6 +39,7 @@ thread_local! {
 
 static ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
 static DEALLOCATIONS: AtomicU64 = AtomicU64::new(0);
+static REALTIME_LOG_CALLS: AtomicU64 = AtomicU64::new(0);
 
 fn counting_this_thread() -> bool {
     COUNT_THIS_THREAD.try_with(Cell::get).unwrap_or(false)
@@ -269,6 +271,14 @@ impl SharedHandler<'_> for TestHostShared {
     fn request_callback(&self) {}
 }
 
+impl HostLogImpl for TestHostShared {
+    fn log(&self, _severity: LogSeverity, _message: &str) {
+        if counting_this_thread() {
+            REALTIME_LOG_CALLS.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
 impl MainThreadHandler<'_> for TestHostMainThread {}
 impl AudioProcessorHandler<'_> for TestHostAudioProcessor {}
 
@@ -285,6 +295,7 @@ impl HostHandlers for TestHostHandlers {
 
     fn declare_extensions(builder: &mut HostExtensions<Self>, _shared: &Self::Shared<'_>) {
         builder.register::<HostLatency>();
+        builder.register::<HostLog>();
     }
 }
 
@@ -497,10 +508,8 @@ fn exercise_raw_aliases(processor: &mut StartedPluginAudioProcessor<TestHostHand
         let mut output_audio = unsafe { OutputAudioBuffers::from_raw_buffers(&mut outputs, 64) };
         ALLOCATIONS.store(0, Ordering::Relaxed);
         DEALLOCATIONS.store(0, Ordering::Relaxed);
-        // Clack's fixed-pin error reporter formats/logs rejected callbacks;
-        // its failure path is not realtime allocation-free. Measure acceptance
-        // here, and separately check that partial overlap terminates processing.
-        COUNT_THIS_THREAD.with(|counting| counting.set(!partial));
+        // Measure both acceptance and rejection through the actual CLAP entry.
+        COUNT_THIS_THREAD.with(|counting| counting.set(true));
         let result = processor.process(
             &input_audio,
             &mut output_audio,
@@ -511,10 +520,8 @@ fn exercise_raw_aliases(processor: &mut StartedPluginAudioProcessor<TestHostHand
         );
         COUNT_THIS_THREAD.with(|counting| counting.set(false));
         assert_eq!(result.is_ok(), !partial);
-        if !partial {
-            assert_eq!(ALLOCATIONS.load(Ordering::Relaxed), 0);
-            assert_eq!(DEALLOCATIONS.load(Ordering::Relaxed), 0);
-        }
+        assert_eq!(ALLOCATIONS.load(Ordering::Relaxed), 0);
+        assert_eq!(DEALLOCATIONS.load(Ordering::Relaxed), 0);
     }
     for channel in main {
         assert!(
@@ -528,6 +535,7 @@ fn exercise_raw_aliases(processor: &mut StartedPluginAudioProcessor<TestHostHand
 
 #[test]
 fn full_adapter_process_path_is_allocation_free_at_event_bound_for_f32_and_f64() {
+    REALTIME_LOG_CALLS.store(0, Ordering::Relaxed);
     let entry =
         PluginEntry::load_from_clack::<SingleComponentEntry<ProbeComponent, F32AndF64>>(c"")
             .expect("static probe entry loads");
@@ -623,6 +631,7 @@ fn full_adapter_process_path_is_allocation_free_at_event_bound_for_f32_and_f64()
     }
     // Rejection terminates the run, so perform this probe last.
     exercise_raw_aliases(&mut processor);
+    assert_eq!(REALTIME_LOG_CALLS.load(Ordering::Relaxed), 0);
     plugin.deactivate(processor.stop_processing());
 }
 

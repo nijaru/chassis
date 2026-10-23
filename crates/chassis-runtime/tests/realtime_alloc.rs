@@ -14,7 +14,10 @@ use chassis_runtime::{
     audio::{AudioPortIndex, DEFAULT_EFFECT_CONFIGURATION},
     automation::{ParameterEvent, ParameterEventValue, ParameterEvents},
     buffer::{ChannelBuffer, InputEndpoint, OutputEndpoint},
-    parameters::{ChoiceId, ChoiceOption, ParameterDescriptor, ParameterIndex, ParameterValue},
+    parameters::{
+        ChoiceId, ChoiceIndex, ChoiceOption, ParameterDescriptor, ParameterEventValueError,
+        ParameterIndex, ParameterValue, ParameterValueError,
+    },
     process::{
         ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessChannel, ProcessConfig,
         ProcessContext, ProcessMode, TransportSnapshot,
@@ -219,6 +222,25 @@ fn repeated_post_activation_process_calls_do_not_allocate_or_deallocate() {
                 .unwrap();
             COUNT_THIS_THREAD.with(|counting| counting.set(true));
         }
+        // Dense synchronization and invalid payload rejection must also remain
+        // allocation-free, including after a decoded stable-ID state load.
+        let mode = runtime
+            .parameters()
+            .get_event_value(mode_parameter)
+            .unwrap();
+        runtime
+            .parameters_mut()
+            .set_event_value(mode_parameter, mode)
+            .unwrap();
+        assert_eq!(
+            runtime.parameters_mut().set_event_value(
+                mode_parameter,
+                ParameterEventValue::Choice(ChoiceIndex::new(2)),
+            ),
+            Err(ParameterEventValueError::InvalidValue(
+                ParameterValueError::UnknownChoice
+            )),
+        );
         let mut buffers = [
             ChannelBuffer::in_place(
                 InputEndpoint::new(MAIN_INPUT_INDEX, 0),
@@ -242,6 +264,12 @@ fn repeated_post_activation_process_calls_do_not_allocate_or_deallocate() {
                 &mut buffers,
             )
             .expect("process callback is valid");
+        assert_eq!(
+            runtime.parameters().get_event_value(mode_parameter),
+            Some(ParameterEventValue::Choice(ChoiceIndex::new(
+                u32::try_from(block % 2).unwrap()
+            ))),
+        );
     }
 
     COUNT_THIS_THREAD.with(|counting| counting.set(false));
