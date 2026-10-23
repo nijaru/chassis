@@ -44,7 +44,7 @@ fn counting_this_thread() -> bool {
 
 // This allocator is test instrumentation only. It delegates every operation to
 // `System` unchanged and increments atomics only for the measured callback thread.
-// The production Chassis crates continue to forbid unsafe code.
+// The production format-independent runtime continues to forbid unsafe code.
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         if counting_this_thread() {
