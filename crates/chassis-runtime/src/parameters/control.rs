@@ -387,12 +387,6 @@ fn linear_to_normalized(
     Ok(normalized)
 }
 
-#[allow(
-    clippy::cast_precision_loss,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    reason = "finite normalized input rounds a nonnegative bounded offset; endpoints bypass floating-point integer conversion"
-)]
 #[expect(
     clippy::float_cmp,
     reason = "endpoint and constant-domain identity must be exact, not an epsilon neighborhood"
@@ -424,27 +418,44 @@ fn linear_from_normalized(
         ParameterKind::Integer {
             minimum, maximum, ..
         } => {
-            let value = if normalized == 0.0 {
-                *minimum
-            } else if normalized == 1.0 {
-                *maximum
-            } else {
-                let span = i128::from(*maximum) - i128::from(*minimum);
-                let offset = (normalized * span as f64).round() as i128;
-                i64::try_from(i128::from(*minimum) + offset)
-                    .map_err(|_| ParameterControlError::InvalidNormalized)?
-            };
+            let offset = nearest_step(normalized, minimum.abs_diff(*maximum));
+            let value = i64::try_from(i128::from(*minimum) + i128::from(offset))
+                .map_err(|_| ParameterControlError::InvalidNormalized)?;
             ParameterValue::Integer(value)
         }
         ParameterKind::Boolean { .. } => ParameterValue::Boolean(normalized >= 0.5),
         ParameterKind::Choice { options, .. } => {
-            let index = (normalized * (options.len() - 1) as f64).round() as usize;
+            let span = u64::try_from(options.len() - 1)
+                .map_err(|_| ParameterControlError::InvalidPolicy("too many choices"))?;
+            let index = usize::try_from(nearest_step(normalized, span))
+                .expect("normalized choice offset is bounded by its option count");
             let option = options
                 .get(index)
                 .ok_or(ParameterControlError::InvalidNormalized)?;
             ParameterValue::Choice(option.id().clone())
         }
     })
+}
+
+// Round the exact binary control coordinate times an integer span. Converting
+// the span to f64 first loses low bits and can reverse a wide-domain half tie.
+// Validated coordinates are in 0..=1, so the denominator shift is at least 52
+// and the product fits in 117 bits even for the full-width i64 domain.
+fn nearest_step(normalized: f64, span: u64) -> u64 {
+    let bits = normalized.to_bits();
+    let exponent = (bits >> 52) & 0x7ff;
+    let fraction = bits & ((1_u64 << 52) - 1);
+    let (significand, shift) = if exponent == 0 {
+        (fraction, 1074)
+    } else {
+        (fraction | (1_u64 << 52), 1075 - exponent)
+    };
+    if shift >= 128 {
+        return 0;
+    }
+    let product = u128::from(significand) * u128::from(span);
+    let rounded = (product >> shift) + ((product >> (shift - 1)) & 1);
+    u64::try_from(rounded).expect("normalized offset is bounded by its integer span")
 }
 
 fn format_plain(

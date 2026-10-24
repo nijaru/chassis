@@ -224,6 +224,33 @@ impl fmt::Write for RejectWriter {
 }
 
 #[test]
+fn wide_integer_mapping_preserves_exact_binary_rounding() {
+    let below_half_step = 2.0_f64.powi(-65);
+    for (minimum, maximum, position, expected) in [
+        (0, (1_i64 << 53) + 1, 0.5, (1_i64 << 52) + 1),
+        (0, (1_i64 << 54) + 2, 0.25, (1_i64 << 52) + 1),
+        (i64::MIN, i64::MAX - 1, 0.5, -1),
+        (i64::MIN, i64::MAX, 0.5, 0),
+        // (2^64 - 1) * 2^-65 is just below half a step; the
+        // adjacent binary coordinate is above it, not another tie.
+        (i64::MIN, i64::MAX, below_half_step, i64::MIN),
+        (
+            i64::MIN,
+            i64::MAX,
+            f64::from_bits(below_half_step.to_bits() + 1),
+            i64::MIN + 1,
+        ),
+    ] {
+        let descriptor =
+            ParameterDescriptor::integer("wide", "Wide", minimum, maximum, minimum).unwrap();
+        assert_eq!(
+            descriptor.normalized_to_value(position).unwrap(),
+            ParameterValue::Integer(expected)
+        );
+    }
+}
+
+#[test]
 fn policy_outputs_and_writer_failures_are_checked_after_admission() {
     let descriptor = ParameterDescriptor::float("x", "X", 0.0, 1.0, 0.5)
         .unwrap()
