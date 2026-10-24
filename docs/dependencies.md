@@ -97,6 +97,10 @@ Dependencies are acceptable at non-realtime edges much more readily than on the 
 
 Clack still owns CLAP ABI lifecycle, descriptor borrowing, and panic containment. Chassis now owns a narrow unsafe sample-pointer boundary in `chassis-clap/src/raw_audio.rs`: it classifies the entire mapped alias topology before creating sample references rather than using pinned Clack's reference-first channel pairing. The pin is unchanged. Host pointer provenance/extent, initialization, metadata separation, and concurrency remain obligations; see the [audit](research/clack-pinned-adapter-audit.md). The local plugin patch bypasses synchronous reporting only for process callbacks, returning actual processing failure; arbitrary boxed errors and panics remain outside realtime qualification.
 
+## Qualification tool source
+
+CLAP qualification uses the exact validator revision in `.github/workflows/clap-conformance.yml`, with an MIT-licensed global-modulation generator correction under `vendor/clap-validator`. Its source delta, regression, isolated build, and refresh trigger are owned by [validation](design/validation.md#validator-source-and-local-fix). This is a development tool, not a new runtime dependency or part of distributed plugin artifacts; the Chassis lockfile and Clack pin are unchanged.
+
 ## AAX exception
 
 `clap-wrapper` is MIT, but AAX has separate Avid SDK/PACE requirements. The AAX SDK is available under GPLv3 or Avid's commercial SDK agreement. Proprietary AAX products therefore need appropriate Avid commercial terms independently of the Chassis commercial license.

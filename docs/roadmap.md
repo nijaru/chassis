@@ -9,6 +9,7 @@ This roadmap records unfinished capabilities, not a requirement to build every l
 - One format-independent schema/instance/processor model, including component-owned state defaults/validation/migrations, resource-safe deferred reactivation, and activation-scoped audio I/O.
 - Direct runtime fixtures for effects, event-only components, a note-driven instrument, multiple outputs, sidechains/layout switching, and dynamic metadata.
 - Complete callback topology validation, alias-classified CLAP buffers, f32/f64 processing, typed parameters/dense choice events, sample-accurate automation, explicit custom-state reactivation, latency/restart, process modes, and bounded scalar telemetry.
+- Explicitly opted-in global additive float modulation, separate held-input lifetime, clamped effective cursors, and resource-safe desired/consumed signal separation in core and CLAP.
 - Descriptor-owned normalized-control and formatting/parsing policy, shared by framework controls and deployment text without changing plain-unit automation/state.
 - Native CLAP deployment for fixed mapped audio configurations, typed parameters, coherent complete state with deferred resource reactivation, automation, render mode, and latency.
 - Rust/concurrency/allocation tests, packaged CLAP validator/fuzz gates, and dated host/performance baselines.
@@ -17,7 +18,7 @@ Core capability is not deployment support. CLAP note/event projection remains in
 
 ## Near-term semantic and deployment work
 
-1. Define modulation independently from automation/base state, then tail and host-bypass contracts without prescribing one DSP algorithm.
+1. Define tail and host-bypass contracts without prescribing one DSP algorithm; global float modulation is implemented, while per-note/expression and other domains remain capability-driven follow-up.
 2. Export a non-effect fixture: note ports/input, honest descriptor features, then bounded event output and expression/MIDI families.
 3. Add prepared adoption/reclamation and background-work lifecycle only when the resource-backed client needs more than reactivation.
 

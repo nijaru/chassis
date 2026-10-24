@@ -51,6 +51,14 @@ These gates do not establish production DAW behavior or representative performan
 
 Hosted workflows and local results are separate evidence. Before publication, hosted jobs were rejected and local checks supplied the interim record. Consult the actual workflow run for the revision under review before claiming Linux/macOS/Windows coverage. The dated validator, host, and benchmark results below are baselines, not automatic qualification of later commits.
 
+### Validator source and local fix
+
+The qualification tool remains `clap-validator` 0.4.1 at `b2f1d9b79b1d264a5747f46707d72b1aa40a02ef`, with the reviewed [global-modulation patch](../../vendor/clap-validator/global-modulation.patch). The pin's [`ParamFuzzer::generate_event`](https://github.com/free-audio/clap-validator/blob/b2f1d9b79b1d264a5747f46707d72b1aa40a02ef/src/tests/rng.rs#L863-L891) constructs base-value events containing signed modulation amounts. For a `0..1` gain this sends invalid negative base values; strict plugin rejection correctly fails the unmodified `param-fuzz-modulation` test. Do not loosen parameter admission or exclude that test to compensate.
+
+The patch changes only that global modulation branch's event variant, C struct/header, and amount field, plus a focused seeded regression that fails the original generator. It does not change assertions, ranges, test selection, or production code. Upstream MIT terms are retained alongside it; the tool does not ship in plugin artifacts.
+
+[The installer](../../.github/scripts/install-clap-validator.sh) fetches the exact workflow pin, requires the patch to apply, runs its regression on Rust 1.98.0, and installs into `target/clap-validator/bin` without replacing the user's CLI. All three platform jobs call that same executable for validation and fuzzing. Re-audit and remove the patch when a pinned upstream replacement produces real modulation events; historical results above/below must be read with their recorded source delta.
+
 ### Parameter control policy — 2026-10-24
 
 At code revision `9f17ac3` on macOS 26.6.2 arm64:
@@ -180,7 +188,7 @@ Tests under `crates/chassis-clap/tests/` exercise the actual exported Chassis CL
 
 Current cases include:
 
-- `host_conformance.rs`: f32/f64 callback dispatch, stereo main + stereo sidechain, configured 64-event bound, accepted/rejected-callback allocation/deallocation counting and absence of realtime host logging, author-defined percent display/parsing and stepped conversion through display/flush/process, output constant masks, legal raw in-place audio, illegal partial-alias rejection, reactivation, latency callbacks, audio-thread transfer, repeated inactive instances;
+- `host_conformance.rs`: f32/f64 callback dispatch, stereo main + stereo sidechain, configured 64-event base/mixed-control bounds, held global modulation and state exclusion, strict targeted/malformed-control rejection, accepted/rejected-callback allocation/deallocation counting and absence of realtime host logging, author-defined percent display/parsing and stepped conversion through display/flush/process, output constant masks, legal raw in-place audio, illegal partial-alias rejection, reactivation, latency callbacks, audio-thread transfer, repeated inactive instances;
 - `host_control_text.rs`: custom choice syntax/stable identity, multibyte buffer boundaries, embedded NUL rejection, and formatter errors swallowed by author code;
 - `exported_probe_reset.rs`: actual exported delay fixture reset clears history/positions without allocation and retains the activation delay;
 - `host_frame_bounds.rs`: activation frame extremes and over-bound rejection;
@@ -189,11 +197,11 @@ Current cases include:
 - `host_restart.rs`: one processor restart request per activation, immediate successful-state-load restart notification before processing, rejected state without restart, unchanged active latency, and reactivation using published state;
 - `host_active_state_save.rs`: coherent CLAP state save while processing is active;
 - `host_state_policy.rs`: component-owned scalar migrations/validation, atomic load rejection, schema drift, original custom-default preservation, retained-definition policy admission, and deployment wire-budget rejection;
-- `host_custom_state.rs`: resource-backed complete state through default save, migration/rejection, deferred restart/reset/reversion, active flush, save/reopen, zero-allocation pending callbacks, and a load racing old DSP completion;
+- `host_custom_state.rs`: resource-backed complete state through default save, migration/rejection, deferred restart/reset/reversion, active flush, save/reopen, zero-allocation pending callbacks, and a load racing old DSP completion whose accepted modulation survives rejected base completion;
 - `host_reentrancy.rs`: plugin -> host -> plugin main-thread re-entry through parameter-rescan and latency-change callbacks;
 - `host_panic_containment.rs`: activation/process panic containment at the Clack FFI boundary.
 
-The full adapter allocation test covers 1,000 f32 and 1,000 f64 callbacks with stereo main + stereo sidechain and exactly the configured 64 parameter events, plus actual-entry exact-in-place acceptance and partial-alias rejection, with zero measured allocation/deallocation or host-log calls on the callback thread.
+The full adapter allocation test covers 1,000 f32 and 1,000 f64 callbacks for each of all-base and mixed base/modulation streams, with stereo main + stereo sidechain and exactly the configured 64 parameter controls, plus actual-entry exact-in-place acceptance and partial-alias rejection, with zero measured allocation/deallocation or host-log calls on the callback thread.
 
 ## Core conformance
 
@@ -201,6 +209,7 @@ The format-independent proof is split by concern while exercising the same publi
 
 - `crates/chassis-runtime/tests/conformance.rs`: schema rejection, lifecycle, buffer relationships, process bounds/context, base parameters, sample-accurate automation, invalid events, generic non-flat buffer-source traversal, and rejection of structurally valid but unsupported audio configurations;
 - `crates/chassis-runtime/tests/automation_runtime.rs`: final typed endpoints retained after successful DSP, equal-offset last-value order, event-free carryover, block-local ramp continuation, canonical encoded state, subsequent control precedence, reactivation, and invalid-batch failure atomicity;
+- `crates/chassis-runtime/tests/modulation.rs`: Float-only explicit opt-in, finite unrestricted amount admission, and clamped finite-overflow composition; `automation_runtime.rs` also covers interleaved base ramps, held lifecycle/state exclusion, and failed mixed-batch atomicity; `semantic_state.rs` covers frozen consumed modulation with desired amounts retained for reactivation;
 - `crates/chassis-runtime/tests/parameter_control.rs`: nonlinear mapping, units/precision, extreme and constant numeric domains, distinct discrete/text rounding, wide-integer rounding, full-width integer text, invalid policy outputs, writer failures, and policy-configuration schema drift;
 - `crates/chassis-runtime/tests/component_schema_runtime.rs`: one coherent schema snapshot, dense lookup, and schema-drift rejection;
 - `crates/chassis-runtime/tests/audio_endpoint_runtime.rs`: active/inactive port, direction, channel-range, and dense endpoint legality before product DSP;

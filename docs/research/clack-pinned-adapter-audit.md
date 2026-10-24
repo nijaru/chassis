@@ -93,7 +93,7 @@ CLAP reset                     -> InstanceRuntime::reset
 CLAP deactivate                -> InstanceRuntime::deactivate
 CLAP audio ports               -> setup-built stable mapped ports/process slots
 CLAP process f32/f64           -> raw alias qualification -> safe views -> InstanceRuntime
-CLAP params                    -> typed metadata + bounded value-event normalization/publication
+CLAP params                    -> typed metadata + bounded mixed base/modulation controls
 CLAP state                     -> bounded CHSS save/load + coherent parameter/custom publication
 CLAP render                    -> ProcessMode::Realtime / ProcessMode::Offline
 CLAP latency                   -> activation snapshot + host change notification
@@ -103,6 +103,18 @@ CLAP transport                 -> bounded borrowed transport snapshot
 The deterministic conformance export has audible sample-accurate `trim` automation, typed float/choice state, f32/f64 processing, and zero declared latency. A separate in-process delayed probe proves nonzero reported latency matches actual delayed audio sample-for-sample.
 
 Note/MIDI/event ports, GUI/editor APIs, and broad application/host infrastructure remain intentionally deferred until real clients require them.
+
+## Global modulation boundary — reviewed 2026-10-24
+
+The existing pin's `common/src/events/event_types/param_value.rs` supplies `ParamModEvent`, its repr-C wrapper, and the existing unsafe `Event` implementation. `UnknownEvent::as_event_for_space` in `common/src/events.rs` checks space, type, and exact struct size before borrowing a typed event. Chassis recognizes value/modulation headers explicitly, rejecting wrong known sizes rather than treating a failed typed borrow as an unknown event. Host event pointers still require valid aligned storage covering the declared extent; these checks cannot establish provenance or host concurrency.
+
+`common/src/events/pckn.rs::Match::from_raw` treats every negative integer as wildcard. The adapter instead checks each raw note/port/channel/key field equals exactly `-1`; `-2` must not become a global update. Correctly sized unknown parameter IDs are ignored before targeting/value validation. Known unsupported targeting or invalid values reject process before DSP.
+
+`extensions/src/params/plugin.rs::flush` borrows the input list and dispatches to the active audio processor or inactive main-thread handler. Because it returns void, Chassis validates the bounded immutable recognized batch before applying any changes; malformed batches are ignored without logging. Timing is lost in flush, but list order is preserved. No new Chassis unsafe production path or Clack source delta is needed.
+
+The reviewed [CLAP event contract](https://github.com/free-audio/clap/blob/a47f6badb49d948fd009998f28309cdab78979c9/include/clap/events.h#L100-L109) defines modulation as a held amount set and effective base-plus-amount, not incremental accumulation. [Flush/threading](https://github.com/free-audio/clap/blob/a47f6badb49d948fd009998f28309cdab78979c9/include/clap/ext/params.h#L295-L306) serializes process and flush; activation is outside processing. Independent fixed-size scalar atomics therefore retain external amounts across adapter runtime lifetimes without coupling them to base/custom state publication. Relaxed operations carry no associated payload; save/load never access these scalars. Accepted modulation survives rejected base-state completion.
+
+[Reset](https://github.com/free-audio/clap/blob/a47f6badb49d948fd009998f28309cdab78979c9/include/clap/plugin.h#L84-L90), activation, and state contracts do not specify a modulation-clear/resend protocol. Chassis preserves held input across these boundaries explicitly. This is not a universal state-load rule: [NIH-plug](https://github.com/robbert-vdh/nih-plug/blob/de421011f41a6d10fc8c7a6084e4f4dee0143683/src/wrapper/state.rs#L174-L238) preserves modulation while restoring base state, whereas [CLAP example parameter deserialization](https://github.com/free-audio/clap-plugins/blob/9fdaf3d667c25bb49ff7a04cd877491c48b56524/plugins/parameters.hh#L46-L60) invokes a reset that clears it. A custom-resource mismatch freezes consumed base and modulation before synchronization; desired amounts remain available for reactivation without retargeting old resources.
 
 ## Parameter text boundary — reviewed 2026-10-24
 

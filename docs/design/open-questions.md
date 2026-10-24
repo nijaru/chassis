@@ -4,7 +4,7 @@ This file owns unresolved decisions, not implemented inventories or a second roa
 
 ## Modulation and event ordering
 
-Define modulation domain, timing, addressing, combination, and reset semantics separately from automation and persistent base state. Which capabilities preserve global/per-note expression and MIDI 2 information? Equal timestamps do not establish a cross-family causal order when the source has separate streams. An output sink must report target rejection rather than silently discard essential events.
+Global additive float modulation has an explicit [domain, combination, ordering, and held-input lifecycle](parameters-state.md#global-additive-float-modulation). Which additional capabilities preserve per-note expression and MIDI 2 information without flattening targeting or unlike value domains? Equal timestamps do not establish a cross-family causal order when the source has separate streams. An output sink must report target rejection rather than silently discard essential events.
 
 See [events/transport](events-transport.md) for the accepted ordering constraints and current implemented subset.
 

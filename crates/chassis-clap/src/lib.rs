@@ -306,6 +306,11 @@ fn projected_runtime<C: Component>(
     runtime
         .apply_state(component, &document)
         .map_err(PluginError::from)?;
+    shared
+        .parameters
+        .modulation
+        .sync_into(&mut runtime)
+        .map_err(|_| PluginError::Message("Invalid CLAP modulation projection"))?;
     Ok((runtime, custom_generation))
 }
 
@@ -740,6 +745,13 @@ where
     {
         self.sync_parameters()?;
         let generation = self.parameter_generation;
+        if generation.is_some() {
+            self.shared
+                .parameters
+                .modulation
+                .sync_into(&mut self.runtime)
+                .map_err(|_| PluginError::Message("Invalid CLAP modulation projection"))?;
+        }
         let transport = map_transport(process.transport)?;
         let mut buffers =
             ClapBufferSource::<S>::new(audio, &self.process_slots, &mut self.audio_scratch)?;
@@ -775,7 +787,19 @@ where
             .process_source(frame_count, context, &mut buffers)
             .map_err(|_| PluginError::Message("Invalid Chassis process block"))?;
 
-        if generation.is_some() && !self.normalized_events.is_empty() {
+        // External held input survives a newer state publication, including
+        // while old resources are gated. It is not part of the base-state CAS.
+        self.shared
+            .parameters
+            .modulation
+            .retain_endpoints(&self.normalized_events);
+        let base_changed = self.normalized_events.iter().any(|event| {
+            !matches!(
+                event.change(),
+                chassis_runtime::automation::ParameterEventChange::Modulate { .. }
+            )
+        });
+        if generation.is_some() && base_changed {
             // Runtime completion changed the whole-store cache invariant. A
             // failed/aborted publication must not let end sync skip restoration.
             self.parameter_generation = None;

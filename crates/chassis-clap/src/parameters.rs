@@ -1,7 +1,7 @@
 use std::{fmt, string::String, sync::Mutex, vec::Vec};
 
 use chassis_runtime::{
-    automation::{ParameterEvent, ParameterEventValue},
+    automation::{ParameterEvent, ParameterEventChange, ParameterEventValue},
     parameters::{
         ChoiceId, ChoiceIndex, ChoiceOption, ParameterDescriptor, ParameterIndex, ParameterKind,
         ParameterStore, ParameterValuesMut,
@@ -9,11 +9,16 @@ use chassis_runtime::{
     state::{StateEntry, StateValue},
 };
 use clack_plugin::{
-    events::{Event, event_types::ParamValueEvent, io::InputEvents},
+    events::{
+        Event, UnknownEvent,
+        event_types::{ParamModEvent, ParamValueEvent},
+        io::InputEvents,
+    },
     utils::ClapId,
 };
 
 mod control;
+mod modulation;
 mod publication;
 mod state;
 
@@ -138,6 +143,9 @@ impl ClapParameterBinding {
                 | ParameterKind::Choice { .. }
         ) {
             flags |= ParamInfoFlags::IS_STEPPED;
+        }
+        if self.descriptor.global_modulation().is_some() {
+            flags |= ParamInfoFlags::IS_MODULATABLE;
         }
         if matches!(self.descriptor.kind(), ParameterKind::Choice { .. }) {
             flags |= ParamInfoFlags::IS_ENUM;
@@ -287,6 +295,7 @@ pub(crate) struct ClapStateProjection {
     id_lookup: Vec<usize>,
     key_lookup: Vec<usize>,
     publication: StatePublication,
+    pub(crate) modulation: modulation::ModulationProjection,
     // Only setup/state callers acquire this lock; callbacks see an atomic epoch.
     custom: Mutex<Vec<StateEntry>>,
     maximum_input_events: u32,
@@ -384,7 +393,9 @@ impl ClapStateProjection {
             .map(ClapParameterBinding::default_plain)
             .collect();
 
+        let modulation = modulation::ModulationProjection::new(&bindings);
         Ok(Self {
+            modulation,
             bindings,
             id_lookup,
             key_lookup,
@@ -422,21 +433,38 @@ impl ClapStateProjection {
     }
 
     pub(crate) fn apply_input(&self, input: &InputEvents<'_>) {
-        // Flush has no failure return: reject oversized batches before mutation.
-        if input.len() > self.maximum_input_events {
+        // A void flush rejects a malformed recognized batch before any mutation.
+        // The host's borrowed event list is immutable for this callback. Timing
+        // is intentionally ignored; accepted changes retain list order.
+        if input.len() > self.maximum_input_events
+            || input
+                .into_iter()
+                .any(|event| normalize_input_event(self, event).is_err())
+        {
             return;
         }
         for event in input {
-            let Some(event) = event.as_event::<ParamValueEvent>() else {
+            let Some(event) = normalize_input_event(self, event)
+                .expect("the immutable flush batch was validated")
+            else {
                 continue;
             };
-            if !event.pckn().matches_all() {
-                continue;
+            match event.change() {
+                ParameterEventChange::Set(value) => {
+                    let index = usize::try_from(event.parameter().get())
+                        .expect("validated dense index fits usize");
+                    let plain = self.bindings[index]
+                        .plain_value(value)
+                        .expect("normalized value belongs to this binding");
+                    self.publication.try_publish_value(index, plain);
+                }
+                ParameterEventChange::Modulate { amount } => {
+                    self.modulation.set(event.parameter(), amount);
+                }
+                ParameterEventChange::Linear { .. } => {
+                    unreachable!("CLAP input events cannot encode a linear endpoint")
+                }
             }
-            let Some(id) = event.param_id() else {
-                continue;
-            };
-            let _ = self.try_apply_plain_value(id, event.value());
         }
     }
 
@@ -448,13 +476,7 @@ impl ClapStateProjection {
         self.publication.publish_value_control(index, value).is_ok()
     }
 
-    fn try_apply_plain_value(&self, id: ClapId, value: f64) -> bool {
-        let Some((index, value)) = self.validated_plain_value(id, value) else {
-            return false;
-        };
-        self.publication.try_publish_value(index, value)
-    }
-
+    #[cfg(test)]
     fn validated_plain_value(&self, id: ClapId, value: f64) -> Option<(usize, f64)> {
         let index = self.index_for_id(id)?;
         let value = self.bindings[index].normalize_host_plain(value)?;
@@ -558,19 +580,58 @@ impl fmt::Display for ParameterSyncError {
 
 impl std::error::Error for ParameterSyncError {}
 
-pub(crate) fn normalized_event(
+fn normalize_input_event(
     state: &ClapStateProjection,
-    id: ClapId,
-    time: u32,
-    value: f64,
-) -> Option<ParameterEvent> {
-    let index = state.index_for_id(id)?;
+    event: &UnknownEvent,
+) -> Result<Option<ParameterEvent>, &'static str> {
+    let header = event.header().as_raw();
+    if header.space_id != 0 {
+        return Ok(None);
+    }
+    let (id, time, value, is_modulation, global) = match header.type_ {
+        ParamValueEvent::TYPE_ID => {
+            let event = event
+                .as_event::<ParamValueEvent>()
+                .ok_or("Malformed CLAP parameter value event")?;
+            let raw = event.as_raw();
+            let global =
+                raw.note_id == -1 && raw.port_index == -1 && raw.channel == -1 && raw.key == -1;
+            (event.param_id(), event.time(), event.value(), false, global)
+        }
+        ParamModEvent::TYPE_ID => {
+            let event = event
+                .as_event::<ParamModEvent>()
+                .ok_or("Malformed CLAP parameter modulation event")?;
+            let raw = event.as_raw();
+            let global =
+                raw.note_id == -1 && raw.port_index == -1 && raw.channel == -1 && raw.key == -1;
+            (event.param_id(), event.time(), event.amount(), true, global)
+        }
+        _ => return Ok(None),
+    };
+    let Some(index) = id.and_then(|id| state.index_for_id(id)) else {
+        return Ok(None);
+    };
+    if !global {
+        return Err("CLAP targeted parameter events are unsupported");
+    }
     let binding = &state.bindings[index];
-    Some(ParameterEvent::set(
-        time,
-        binding.index(),
-        binding.event_value(value)?,
-    ))
+    if is_modulation {
+        binding
+            .descriptor
+            .validate_modulation_amount(value)
+            .map_err(|_| "Invalid CLAP global modulation amount")?;
+        Ok(Some(ParameterEvent::modulation(
+            time,
+            binding.index(),
+            value,
+        )))
+    } else {
+        let value = binding
+            .event_value(value)
+            .ok_or("Invalid CLAP parameter value")?;
+        Ok(Some(ParameterEvent::set(time, binding.index(), value)))
+    }
 }
 
 pub(crate) fn normalized_events(
@@ -583,16 +644,7 @@ pub(crate) fn normalized_events(
         return Err("CLAP input event count exceeds the activation bound");
     }
     for event in input {
-        let Some(event) = event.as_event::<ParamValueEvent>() else {
-            continue;
-        };
-        if !event.pckn().matches_all() {
-            return Err("CLAP targeted parameter events are unsupported");
-        }
-        let Some(id) = event.param_id() else {
-            continue;
-        };
-        let Some(normalized) = normalized_event(state, id, event.time(), event.value()) else {
+        let Some(normalized) = normalize_input_event(state, event)? else {
             continue;
         };
         if output.len() == output.capacity() {
@@ -1092,7 +1144,7 @@ mod tests {
             ParameterEventChange::Set(ParameterEventValue::Choice(ChoiceIndex::new(0)))
         );
 
-        // Out-of-range option indices are dropped before core validation.
+        // Known invalid controls reject the batch rather than disappearing.
         let bad = [ParamValueEvent::new(
             0,
             ClapId::new(2),
@@ -1101,7 +1153,10 @@ mod tests {
         )];
         let bad_input = InputEvents::from_buffer(&bad);
         let mut bad_normalized = Vec::with_capacity(1);
-        normalized_events(&state, &bad_input, &mut bad_normalized).expect("events normalize");
+        assert_eq!(
+            normalized_events(&state, &bad_input, &mut bad_normalized),
+            Err("Invalid CLAP parameter value")
+        );
         assert_eq!(bad_normalized, []);
     }
 

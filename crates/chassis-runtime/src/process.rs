@@ -558,6 +558,7 @@ where
     frame_count: u32,
     context: ProcessContext<'context>,
     parameters: &'parameters ParameterStore,
+    modulation: &'parameters [f64],
     source: &'source mut B,
     sample: PhantomData<fn() -> S>,
 }
@@ -569,6 +570,7 @@ where
     pub(crate) fn new(
         config: &ActivationConfig<'_>,
         parameters: &'parameters ParameterStore,
+        modulation: &'parameters [f64],
         frame_count: u32,
         context: ProcessContext<'context>,
         source: &'source mut B,
@@ -579,6 +581,7 @@ where
             frame_count,
             context,
             parameters,
+            modulation,
             source,
             sample: PhantomData,
         })
@@ -676,6 +679,17 @@ where
     #[must_use]
     pub const fn parameters(&self) -> &'parameters ParameterStore {
         self.parameters
+    }
+
+    /// Return the consumed held amount at block start, before timed events.
+    ///
+    /// This is the frozen signal when custom resources await reactivation,
+    /// not an independently sampled desired control value.
+    #[must_use]
+    pub fn modulation(&self, parameter: crate::parameters::ParameterIndex) -> Option<f64> {
+        self.modulation
+            .get(usize::try_from(parameter.get()).ok()?)
+            .copied()
     }
 
     /// Start an allocation-free traversal over all safe channel views.
@@ -948,7 +962,7 @@ mod tests {
             TransportSnapshot::unknown(),
             ParameterEvents::empty_for_block(2),
         );
-        let mut block = ProcessBlock::new(&activation, &parameters, 2, context, &mut source)
+        let mut block = ProcessBlock::new(&activation, &parameters, &[], 2, context, &mut source)
             .expect("split source forms a valid process block");
 
         for channel in block.channels() {
@@ -990,7 +1004,7 @@ mod tests {
             ParameterEvents::empty_for_block(2),
         );
         assert!(matches!(
-            ProcessBlock::new(&activation, &parameters, 2, context, &mut source),
+            ProcessBlock::new(&activation, &parameters, &[], 2, context, &mut source),
             Err(ProcessBlockError::BufferFrameCountMismatch { .. })
         ));
     }
@@ -1066,7 +1080,7 @@ mod tests {
         );
         let mut buffers: [ChannelBuffer<'_, f32>; 0] = [];
         let mut source = ChannelBufferSlice::new(&mut buffers);
-        let block = ProcessBlock::new(&activation, &parameters, 2, context, &mut source)
+        let block = ProcessBlock::new(&activation, &parameters, &[], 2, context, &mut source)
             .expect("bounded note-event context is valid");
 
         assert_eq!(block.note_events().len(), 1);
@@ -1089,7 +1103,7 @@ mod tests {
         let mut source = ChannelBufferSlice::new(&mut buffers);
 
         assert!(matches!(
-            ProcessBlock::new(&activation, &parameters, 2, context, &mut source),
+            ProcessBlock::new(&activation, &parameters, &[], 2, context, &mut source),
             Err(ProcessBlockError::ParameterEventFrameCountMismatch {
                 expected: 2,
                 actual: 1,
@@ -1105,7 +1119,7 @@ mod tests {
         let context =
             ProcessContext::new(ProcessMode::Realtime, TransportSnapshot::unknown(), events);
         assert!(matches!(
-            ProcessBlock::new(&activation, &parameters, 2, context, &mut source),
+            ProcessBlock::new(&activation, &parameters, &[], 2, context, &mut source),
             Err(ProcessBlockError::ParameterEventCountTooLarge {
                 actual: 1,
                 maximum: 0,
@@ -1138,7 +1152,7 @@ mod tests {
         let mut source = ChannelBufferSlice::new(&mut buffers);
 
         assert!(matches!(
-            ProcessBlock::new(&activation, &parameters, 2, context, &mut source),
+            ProcessBlock::new(&activation, &parameters, &[], 2, context, &mut source),
             Err(ProcessBlockError::NoteEventFrameCountMismatch {
                 expected: 2,
                 actual: 1,
@@ -1153,7 +1167,7 @@ mod tests {
             notes,
         );
         assert!(matches!(
-            ProcessBlock::new(&activation, &parameters, 2, context, &mut source),
+            ProcessBlock::new(&activation, &parameters, &[], 2, context, &mut source),
             Err(ProcessBlockError::NoteEventCountTooLarge {
                 actual: 1,
                 maximum: 0,

@@ -20,7 +20,7 @@ use chassis_runtime::{
 };
 
 struct Effect;
-struct Gain;
+struct Gain(chassis_runtime::modulation::GlobalFloatModulation);
 
 impl Component for Effect {
     type Processor = Gain;
@@ -31,7 +31,10 @@ impl Component for Effect {
             ComponentId::new("org.nijaru.chassis.automation-test").expect("valid identity"),
             StateSchemaVersion::new(1),
             vec![
-                ParameterDescriptor::float("gain", "Gain", 0.0, 2.0, 1.0).unwrap(),
+                ParameterDescriptor::float("gain", "Gain", 0.0, 2.0, 1.0)
+                    .unwrap()
+                    .with_global_modulation()
+                    .unwrap(),
                 ParameterDescriptor::integer("count", "Count", 0, 8, 0).unwrap(),
                 ParameterDescriptor::boolean("mute", "Mute", false).unwrap(),
                 ParameterDescriptor::choice(
@@ -51,10 +54,16 @@ impl Component for Effect {
     fn activate(
         &self,
         _: &ActivationConfig<'_>,
-        _: &chassis_runtime::parameters::ParameterStore,
+        parameters: &chassis_runtime::parameters::ParameterStore,
         _: &[chassis_runtime::state::StateEntry],
     ) -> Result<Gain, Infallible> {
-        Ok(Gain)
+        Ok(Gain(
+            parameters
+                .descriptor(ParameterIndex::new(0))
+                .unwrap()
+                .global_modulation()
+                .unwrap(),
+        ))
     }
 }
 
@@ -74,9 +83,11 @@ impl Process<f64> for Gain {
         };
         let initial = *initial;
         let events = block.parameter_events();
+        let amount = block.modulation(ParameterIndex::new(0)).unwrap();
         for mut channel in block.channels() {
-            let mut cursor = events
-                .float_cursor(ParameterIndex::new(0), initial)
+            let mut cursor = self
+                .0
+                .cursor(events, ParameterIndex::new(0), initial, amount)
                 .unwrap();
             for (offset, sample) in channel
                 .copy_input_to_output()
@@ -119,6 +130,82 @@ fn render(runtime: &mut InstanceRuntime<Gain>, events: &[ParameterEvent]) -> [f6
 }
 
 #[test]
+fn mixed_modulation_preserves_base_ramps_and_instance_lifetime_signal() {
+    let index = ParameterIndex::new(0);
+    let component = Effect;
+    let config =
+        ProcessConfig::new(48_000.0, NonZeroU32::new(1), NonZeroU32::new(4).unwrap(), 8).unwrap();
+    let mut runtime = InstanceRuntime::for_component(&component).unwrap();
+    runtime
+        .activate(&component, config, DEFAULT_EFFECT_CONFIGURATION)
+        .unwrap();
+    // The modulation point between the implicit base and the linear endpoint
+    // must not stop base lookahead. Equal-offset amount sets retain source order.
+    let events = [
+        ParameterEvent::modulation(2, index, 0.5),
+        ParameterEvent::modulation(2, index, -0.25),
+        ParameterEvent::linear(3, index, 0.25),
+    ];
+    assert_eq!(
+        render(&mut runtime, &events).map(f64::to_bits),
+        [1.0, 0.75, 0.25, 0.0].map(f64::to_bits)
+    );
+    assert_eq!(
+        runtime.parameters().get("gain"),
+        Some(&ParameterValue::Float(0.25))
+    );
+    assert_eq!(runtime.modulation(index), Some(-0.25));
+    let saved = runtime.encode_state(StateLimits::default()).unwrap();
+    runtime.reset().unwrap();
+    assert_eq!(
+        render(&mut runtime, &[]).map(f64::to_bits),
+        [0.0; 4].map(f64::to_bits)
+    );
+    runtime.deactivate().unwrap();
+    runtime
+        .activate(&component, config, DEFAULT_EFFECT_CONFIGURATION)
+        .unwrap();
+    assert_eq!(
+        render(&mut runtime, &[]).map(f64::to_bits),
+        [0.0; 4].map(f64::to_bits)
+    );
+    runtime.set_modulation(index, 10.0).unwrap();
+    runtime
+        .apply_state_bytes(&component, &saved, StateLimits::default())
+        .unwrap();
+    assert_eq!(
+        render(&mut runtime, &[]).map(f64::to_bits),
+        [2.0; 4].map(f64::to_bits)
+    );
+    assert_eq!(runtime.modulation(index), Some(10.0));
+    assert_eq!(runtime.encode_state(StateLimits::default()).unwrap(), saved);
+    let mut reopened = InstanceRuntime::for_component(&component).unwrap();
+    reopened
+        .apply_state_bytes(&component, &saved, StateLimits::default())
+        .unwrap();
+    reopened
+        .activate(&component, config, DEFAULT_EFFECT_CONFIGURATION)
+        .unwrap();
+    assert_eq!(
+        render(&mut reopened, &[]).map(f64::to_bits),
+        [0.25; 4].map(f64::to_bits)
+    );
+    runtime.set_modulation(index, 0.0).unwrap();
+    assert_eq!(
+        render(&mut runtime, &[]).map(f64::to_bits),
+        [0.25; 4].map(f64::to_bits)
+    );
+    for (parameter, amount) in [
+        (index, f64::NAN),
+        (ParameterIndex::new(1), 0.5),
+        (ParameterIndex::new(u32::MAX), 0.0),
+    ] {
+        assert!(runtime.set_modulation(parameter, amount).is_err());
+        assert_eq!(runtime.modulation(index), Some(0.0));
+    }
+}
+
+#[test]
 fn invalid_batch_cannot_partially_retain_valid_endpoints() {
     let component = Effect;
     let config =
@@ -149,6 +236,7 @@ fn invalid_batch_cannot_partially_retain_valid_endpoints() {
     ] {
         let events = [
             ParameterEvent::set(0, ParameterIndex::new(0), ParameterEventValue::Float(0.25)),
+            ParameterEvent::modulation(0, ParameterIndex::new(0), 0.5),
             ParameterEvent::set(1, parameter, value),
         ];
         let mut samples = [1.0_f64; 4];
@@ -178,7 +266,7 @@ fn invalid_batch_cannot_partially_retain_valid_endpoints() {
             runtime.process(4, context, &mut channels),
             Err(InstanceProcessError::InvalidBlock(
                 ProcessBlockError::InvalidParameterEvents(ParameterAutomationError::InvalidValue {
-                    index: 1,
+                    index: 2,
                     error
                 },),
             )),
@@ -188,6 +276,7 @@ fn invalid_batch_cannot_partially_retain_valid_endpoints() {
             [1.0_f64.to_bits(); 4],
             "invalid events must prevent DSP"
         );
+        assert_eq!(runtime.modulation(ParameterIndex::new(0)), Some(0.0));
         assert_eq!(
             runtime.encode_state(StateLimits::default()).unwrap(),
             before

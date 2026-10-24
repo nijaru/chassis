@@ -13,12 +13,15 @@ use crate::{
         AudioPortDescriptor, AudioPortIndex, ConfiguredAudioPort, PortKey,
         ResolvedAudioIoConfiguration,
     },
-    automation::ParameterEvents,
+    automation::{ParameterEventChange, ParameterEvents},
     buffer::ChannelBuffer,
     events::{
         EventPortDescriptor, EventPortIndex, EventPortKey, EventPortSchemaError, NoteEventPortError,
     },
-    parameters::{ParameterStore, ParameterStoreError, ParameterValuesMut},
+    parameters::{
+        ParameterEventValueError, ParameterIndex, ParameterStore, ParameterStoreError,
+        ParameterValuesMut,
+    },
     process::{
         ActivationConfig, ChannelBufferSlice, ProcessBlock, ProcessBlockError, ProcessBufferSource,
         ProcessConfig, ProcessContext,
@@ -374,13 +377,18 @@ impl std::error::Error for InstanceProcessError {
     }
 }
 
+struct FrozenControls {
+    parameters: ParameterStore,
+    modulation: Vec<f64>,
+}
+
 struct ActiveRuntime<P> {
     process: ProcessConfig,
     audio_ports: Vec<ConfiguredAudioPort>,
     resolved_audio: ResolvedAudioIoConfiguration,
     audio_buffers: AudioBufferValidation,
     latency: LatencySamples,
-    frozen_parameters: Option<ParameterStore>,
+    frozen_controls: Option<FrozenControls>,
     processor: P,
 }
 
@@ -398,7 +406,7 @@ impl<P> ActiveRuntime<P> {
 ///
 /// The runtime owns one validated immutable [`ComponentSchema`], canonical base
 /// parameter state derived from that schema, validated custom semantic state,
-/// and optionally an active processor/configuration. The component definition
+/// instance-lifetime held modulation input, and optionally an active processor/configuration. The component definition
 /// itself remains outside this object and is borrowed for construction,
 /// complete state admission, and activation.
 pub struct InstanceRuntime<P>
@@ -407,6 +415,7 @@ where
 {
     schema: ComponentSchema,
     parameters: ParameterStore,
+    modulation: Vec<f64>,
     custom_state: Vec<StateEntry>,
     active: Option<ActiveRuntime<P>>,
 }
@@ -429,7 +438,9 @@ where
         let schema = component.schema().map_err(runtime_schema_error)?;
         let parameters = ParameterStore::new(schema.parameters())
             .map_err(InstanceRuntimeError::InvalidParameters)?;
+        let modulation = vec![0.0; schema.parameters().len()];
         let mut runtime = Self {
+            modulation,
             schema,
             parameters,
             custom_state: Vec::new(),
@@ -439,6 +450,42 @@ where
             .initialize_state(component)
             .map_err(InstanceRuntimeError::InvalidState)?;
         Ok(runtime)
+    }
+
+    /// Return the desired held global amount, independently of durable base state.
+    ///
+    /// Amounts survive reset, reactivation, and state load, but are never saved.
+    #[must_use]
+    pub fn modulation(&self, parameter: ParameterIndex) -> Option<f64> {
+        let position = usize::try_from(parameter.get()).ok()?;
+        self.modulation.get(position).copied()
+    }
+
+    /// Replace a desired external modulation amount, active or inactive.
+    ///
+    /// Pending custom resources keep their frozen consumed controls until
+    /// reactivation; this updates only the desired signal in that case.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParameterEventValueError`] for unknown indices, parameters that
+    /// did not opt in, or non-finite amounts. The signal is unchanged on failure.
+    pub fn set_modulation(
+        &mut self,
+        parameter: ParameterIndex,
+        amount: f64,
+    ) -> Result<(), ParameterEventValueError> {
+        let descriptor = self
+            .parameters
+            .descriptor(parameter)
+            .ok_or(ParameterEventValueError::UnknownParameter(parameter))?;
+        descriptor
+            .validate_modulation_amount(amount)
+            .map_err(ParameterEventValueError::InvalidValue)?;
+        let position = usize::try_from(parameter.get())
+            .map_err(|_| ParameterEventValueError::UnknownParameter(parameter))?;
+        self.modulation[position] = amount;
+        Ok(())
     }
 
     /// Return the immutable validated component schema owned by this instance.
@@ -556,7 +603,7 @@ where
     #[must_use]
     pub fn restart_requested(&self) -> bool {
         self.active.as_ref().is_some_and(|active| {
-            active.frozen_parameters.is_some() || active.processor.restart_requested()
+            active.frozen_controls.is_some() || active.processor.restart_requested()
         })
     }
 
@@ -636,7 +683,7 @@ where
             resolved_audio,
             audio_buffers,
             latency,
-            frozen_parameters: None,
+            frozen_controls: None,
             processor,
         });
         Ok(())
@@ -686,8 +733,9 @@ where
     /// specific raw-pointer/alias proofs still belong to adapters/embeddings.
     /// Outside the pending custom-state gate, successful processing retains final
     /// automation endpoints for the next block, state export, and reactivation.
-    /// While gated, DSP uses frozen base values and no parameter trajectories;
-    /// incoming events are still validated but never retained. Validation
+    /// While gated, DSP uses frozen base/modulation controls and no parameter
+    /// trajectories. Valid modulation endpoints still update the desired held
+    /// signal for reactivation; base endpoints are withheld. Validation
     /// failure or a processor panic retains no endpoints. Control edits require
     /// exclusive runtime access; a subsequent edit overrides completed automation.
     ///
@@ -698,6 +746,11 @@ where
     /// mismatches, [`InstanceProcessError::InvalidBlock`] for callback
     /// shape/parameter failures, or [`InstanceProcessError::InvalidNoteEvents`]
     /// for incompatible note-event port capabilities.
+    ///
+    /// # Panics
+    ///
+    /// Product processor panics propagate to the caller without retaining endpoints.
+    /// A deployment must contain them at its foreign-function boundary.
     pub fn process_source<S, B>(
         &mut self,
         frame_count: u32,
@@ -712,6 +765,7 @@ where
             schema,
             parameters,
             custom_state: _,
+            modulation,
             active,
         } = self;
         let active = active.as_mut().ok_or(InstanceProcessError::NotActive)?;
@@ -721,7 +775,7 @@ where
             resolved_audio,
             audio_buffers,
             latency: _,
-            frozen_parameters,
+            frozen_controls,
             processor,
         } = active;
 
@@ -744,7 +798,7 @@ where
         // While custom resources are stale, even otherwise-valid automation can
         // refer to the replacement resources. Keep the first pre-load base state
         // and withhold trajectories; do not let old DSP complete into pending state.
-        let dsp_context = if frozen_parameters.is_some() {
+        let dsp_context = if frozen_controls.is_some() {
             ProcessContext::with_note_events(
                 context.mode(),
                 context.transport(),
@@ -754,22 +808,40 @@ where
         } else {
             context
         };
-        let dsp_parameters = frozen_parameters.as_ref().unwrap_or(parameters);
-        let mut block =
-            ProcessBlock::new(&config, dsp_parameters, frame_count, dsp_context, source)
-                .map_err(InstanceProcessError::InvalidBlock)?;
+        let (dsp_parameters, dsp_modulation) = match frozen_controls {
+            Some(frozen) => (&frozen.parameters, frozen.modulation.as_slice()),
+            None => (&*parameters, modulation.as_slice()),
+        };
+        let mut block = ProcessBlock::new(
+            &config,
+            dsp_parameters,
+            dsp_modulation,
+            frame_count,
+            dsp_context,
+            source,
+        )
+        .map_err(InstanceProcessError::InvalidBlock)?;
         processor.process(&mut block);
-        if frozen_parameters.is_none() {
+        if frozen_controls.is_none() {
             parameters.retain_automation_endpoints(context.parameter_events());
+        }
+        // Held external input is not superseded by a custom-state load. Keep
+        // its desired endpoint even while old DSP consumes a frozen snapshot.
+        for event in context.parameter_events().iter() {
+            if let ParameterEventChange::Modulate { amount } = event.change() {
+                let position = usize::try_from(event.parameter().get())
+                    .expect("validated parameter index fits usize");
+                modulation[position] = amount;
+            }
         }
         Ok(())
     }
 
-    /// Deactivate this instance while preserving durable base/control state.
+    /// Deactivate while preserving durable state and held external modulation.
     ///
     /// The processor is destroyed in the caller's domain only after the caller
     /// has ended all process/reset borrows. The owned inactive I/O configuration
-    /// activation-scoped latency, and frozen parameter projection are dropped
+    /// activation-scoped latency, and frozen control projection are dropped
     /// with the active resources and can be replaced on reactivation.
     ///
     /// # Errors

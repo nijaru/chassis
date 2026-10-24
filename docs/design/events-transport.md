@@ -1,6 +1,6 @@
 # Events, Notes, MIDI, and Transport
 
-Status: bounded semantic note input, event-port schemas/dense indices, and parameter automation are implemented in core. CLAP projects parameter automation, not note ports/events. Expression, MIDI/SysEx/UMP, output sinks, modulation, and span processing remain design direction; public API is not frozen.
+Status: bounded semantic note input, event-port schemas/dense indices, and parameter automation/global float modulation are implemented in core. CLAP projects these parameter controls, not note ports/events. Expression, MIDI/SysEx/UMP, output sinks, per-note modulation, and span processing remain design direction; public API is not frozen.
 
 ## Goal
 
@@ -135,6 +135,12 @@ Never expand ramps into one allocated event per sample. Parameter cursors evalua
 
 Host trajectory reconstruction and product smoothing remain separate. Chassis adds no product smoothing by default.
 
+## Global parameter modulation
+
+Base sets, linear endpoints, and opted-in global float modulation share one `ParameterEvents` sequence and activation budget, preserving stronger source order such as CLAP's mixed list. Modulation events replace finite held plain-unit additive amounts without overwriting base values. Effective cursors add and clamp; base interpolation ignores modulation points. Reset/reactivation/state load preserve this external signal; saves exclude it. [Parameters/state](parameters-state.md#global-additive-float-modulation) owns the full contract.
+
+CLAP accepts exact global addressing only: each raw note/port/channel/key field must equal `-1`. Unsupported targeting, non-finite amounts, and malformed recognized records fail processing before DSP; void flush rejects the invalid recognized batch before mutation. Do not flatten targeting or split the source list in ways that invent ordering. Per-note/expression capabilities remain unsupported.
+
 ## Span processing
 
 A common ergonomic view can expose contiguous audio ranges bounded by any relevant change:
@@ -192,4 +198,4 @@ Core has bounded borrowed parameter trajectories and semantic note streams, stab
 
 CLAP already translates/publishes scalar parameter events and exposes its limited block-start transport snapshot. It rejects schemas with event ports until faithful note-port/event translation exists.
 
-Remaining work is note input/output projection, expression/MIDI families, modulation, product gestures, and span processing. Qualify these through actual exported clients; do not repeat the completed core event-identity/instrument proof.
+Remaining work is note input/output projection, expression/MIDI families, per-note modulation, product gestures, and span processing. Qualify these through actual exported clients; do not repeat the completed core event-identity/instrument proof.

@@ -1,6 +1,6 @@
 //! Complete semantic state admission and non-realtime component policy.
 
-use super::{Component, InstanceRuntime, Processor};
+use super::{Component, FrozenControls, InstanceRuntime, Processor};
 use crate::{
     parameters::{ParameterStateError, ParameterStore, ParameterStoreError},
     schema::ComponentSchemaError,
@@ -319,13 +319,14 @@ impl<P: Processor> InstanceRuntime<P> {
             .map_err(InstanceSemanticStateError::Product)?;
 
         if let Some(active) = &mut self.active {
-            if active.frozen_parameters.is_none() && self.custom_state != candidate_custom {
-                // Move, rather than clone, the first pre-load generation. Further
-                // loads cannot retarget DSP until the active resources are dropped.
-                active.frozen_parameters = Some(core::mem::replace(
-                    &mut self.parameters,
-                    candidate_parameters,
-                ));
+            if active.frozen_controls.is_none() && self.custom_state != candidate_custom {
+                // Snapshot the consumed signal off-thread and move the first
+                // pre-load base generation. Later loads cannot retarget old DSP.
+                let modulation = self.modulation.clone();
+                active.frozen_controls = Some(FrozenControls {
+                    parameters: core::mem::replace(&mut self.parameters, candidate_parameters),
+                    modulation,
+                });
             } else {
                 self.parameters = candidate_parameters;
             }

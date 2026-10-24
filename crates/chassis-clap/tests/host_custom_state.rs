@@ -4,6 +4,7 @@
 use chassis_clap::{ClapComponent, SingleComponentEntry};
 use chassis_runtime::{
     automation::ParameterEventValue,
+    modulation::GlobalFloatModulation,
     parameters::{ParameterDescriptor, ParameterIndex, ParameterStore},
     process::{ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessChannel},
     runtime::{Component, ComponentStateError, Process, Processor},
@@ -12,7 +13,9 @@ use chassis_runtime::{
 };
 use clack_extensions::{params::PluginParams, state::PluginState};
 use clack_host::{
-    events::event_types::ParamValueEvent, factory::plugin::PluginFactory, prelude::*,
+    events::event_types::{ParamModEvent, ParamValueEvent},
+    factory::plugin::PluginFactory,
+    prelude::*,
 };
 use std::{
     alloc::{GlobalAlloc, Layout, System},
@@ -108,7 +111,12 @@ impl<const RACE: bool> Component for Table<RACE> {
         ComponentSchema::stereo_effect_with_state(
             ComponentId::new(ID).unwrap(),
             StateSchemaVersion::new(2),
-            vec![ParameterDescriptor::float("index", "Index", 0.0, 1.0, 0.0).unwrap()],
+            vec![
+                ParameterDescriptor::float("index", "Index", 0.0, 1.0, 0.0)
+                    .unwrap()
+                    .with_global_modulation()
+                    .unwrap(),
+            ],
         )
     }
     fn default_custom_state(&self) -> Vec<StateEntry> {
@@ -141,13 +149,20 @@ impl<const RACE: bool> Component for Table<RACE> {
     fn activate(
         &self,
         _: &ActivationConfig<'_>,
-        _: &ParameterStore,
+        parameters: &ParameterStore,
         custom: &[StateEntry],
     ) -> Result<Self::Processor, Infallible> {
-        Ok(TableDsp(table(custom).unwrap().to_vec()))
+        Ok(TableDsp(
+            table(custom).unwrap().to_vec(),
+            parameters
+                .descriptor(ParameterIndex::new(0))
+                .unwrap()
+                .global_modulation()
+                .unwrap(),
+        ))
     }
 }
-struct TableDsp<const RACE: bool>(Vec<u8>);
+struct TableDsp<const RACE: bool>(Vec<u8>, GlobalFloatModulation);
 impl<const RACE: bool> Drop for TableDsp<RACE> {
     fn drop(&mut self) {
         DROPS[usize::from(RACE)].fetch_add(1, Ordering::Relaxed);
@@ -172,11 +187,15 @@ impl<const RACE: bool> Process<f32> for TableDsp<RACE> {
             unreachable!()
         };
         let events = block.parameter_events();
+        let amount = block.modulation(ParameterIndex::new(0)).unwrap();
         for mut channel in block.channels() {
             let Some(output) = channel.output_mut() else {
                 continue;
             };
-            let mut cursor = events.float_cursor(ParameterIndex::new(0), base).unwrap();
+            let mut cursor = self
+                .1
+                .cursor(events, ParameterIndex::new(0), base, amount)
+                .unwrap();
             for (offset, sample) in output.iter_mut().enumerate() {
                 let index =
                     usize::from(cursor.value_at(u32::try_from(offset).unwrap()).unwrap() >= 0.5);
@@ -282,6 +301,16 @@ fn event(time: u32, value: f64) -> EventBuffer {
     ));
     events
 }
+fn modulated_event(value: f64, amount: f64) -> EventBuffer {
+    let mut events = event(0, value);
+    events.push(&ParamModEvent::new(
+        0,
+        ClapId::new(11),
+        Pckn::match_all(),
+        amount,
+    ));
+    events
+}
 fn input_channel(samples: &mut [f32; 4]) -> InputChannel<'_, f32> {
     InputChannel::variable(samples.as_mut_slice())
 }
@@ -374,7 +403,7 @@ fn custom_defaults_migration_deferred_restart_and_reopen_are_complete() {
     ALLOC.store(0, Ordering::Relaxed);
     DEALLOC.store(0, Ordering::Relaxed);
     let mut output;
-    (processor, output) = run(processor, &event(0, 1.0), 1000, true);
+    (processor, output) = run(processor, &modulated_event(1.0, 1.0), 1000, true);
     assert_eq!(output.to_bits(), 2.0_f32.to_bits());
     assert_eq!(ALLOC.load(Ordering::Relaxed), 0);
     assert_eq!(DEALLOC.load(Ordering::Relaxed), 0);
@@ -386,7 +415,7 @@ fn custom_defaults_migration_deferred_restart_and_reopen_are_complete() {
         .unwrap();
     params.flush_active(
         &mut processor.plugin_handle(),
-        &event(0, 0.25).as_input(),
+        &modulated_event(0.25, 0.75).as_input(),
         &mut EventBuffer::new().as_output(),
     );
     assert_eq!(save(&mut plugin, state), document(2, 0.25, Some(&[7, 9])));
@@ -394,7 +423,7 @@ fn custom_defaults_migration_deferred_restart_and_reopen_are_complete() {
     load(&mut plugin, state, &initial);
     (processor, output) = run(processor, &event(0, 1.0), 1, false);
     assert_eq!(output.to_bits(), 2.0_f32.to_bits());
-    let desired = document(2, 1.0, Some(&[11, 13]));
+    let desired = document(2, 0.0, Some(&[11, 13]));
     load(&mut plugin, state, &desired);
     (processor, output) = run(processor, &event(0, 1.0), 1, false);
     assert_eq!(output.to_bits(), 2.0_f32.to_bits());
@@ -414,7 +443,7 @@ fn custom_defaults_migration_deferred_restart_and_reopen_are_complete() {
     load(&mut reopened, state, &desired);
     let processor = activate(&mut reopened);
     let (processor, output) = run(processor, &EventBuffer::new(), 1, false);
-    assert_eq!(output.to_bits(), 13.0_f32.to_bits());
+    assert_eq!(output.to_bits(), 11.0_f32.to_bits());
     assert_eq!(save(&mut reopened, state), desired);
     reopened.deactivate(processor);
 }
@@ -431,13 +460,13 @@ fn load_during_dsp_defeats_old_completion_and_freezes_last_old_block() {
         .get_extension::<PluginState>()
         .unwrap();
     let processor = activate(&mut plugin);
-    let desired = document(2, 0.0, Some(&[7]));
+    let desired = document(2, 0.0, Some(&[7, 9]));
     BLOCK_ONCE.store(true, Ordering::Relaxed);
     let processor = std::thread::scope(|scope| {
         // Own the sender inside the scope closure: unwinding drops it before
         // scope joins, so a failed load/save assertion cannot strand the worker.
         let unblock = release;
-        let worker = scope.spawn(move || run(processor, &event(0, 1.0), 1, false));
+        let worker = scope.spawn(move || run(processor, &modulated_event(1.0, 1.0), 1, false));
         ready.recv_timeout(Duration::from_secs(10)).unwrap();
         assert_eq!(save(&mut plugin, state), document(2, 0.0, Some(&[2, 3])));
         load(&mut plugin, state, &desired);
@@ -459,6 +488,6 @@ fn load_during_dsp_defeats_old_completion_and_freezes_last_old_block() {
     plugin.deactivate(processor);
     let processor = activate(&mut plugin);
     let (processor, output) = run(processor, &EventBuffer::new(), 1, false);
-    assert_eq!(output.to_bits(), 7.0_f32.to_bits());
+    assert_eq!(output.to_bits(), 9.0_f32.to_bits());
     plugin.deactivate(processor);
 }

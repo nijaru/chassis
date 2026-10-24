@@ -21,6 +21,7 @@ InstanceRuntime<P>
   owned validated ComponentSchema
   durable ParameterStore derived from that schema
   durable validated custom semantic state
+  instance-lifetime held external modulation (not persisted)
   active/inactive lifecycle
   accepted active I/O configuration
   activation-scoped LatencySamples
@@ -130,7 +131,7 @@ Any failure leaves live parameter/custom state and restart status unchanged. Typ
 
 Complete loads borrow the component and reject schema drift; `state_migrations()` supplies adjacent migrations rather than the loader supplying a separate policy. Defaults are construction input, not missing-field recovery: a current-schema load must remain complete, and migrations explicitly introduce new required fields.
 
-An accepted active custom-state change moves the first pre-load parameter store into an activation-owned frozen projection and requests reactivation. Until deactivation, `ProcessBlock` receives that projection and no parameter trajectories. Original event bounds/domains are still checked; notes, transport, and audio continue. Parameter events are discarded without durable endpoint completion. Later loads and direct control edits affect saveable desired state only. Reset, repeated loads, and state reversion cannot refresh or release the frozen projection. Deactivation reclaims it with the old resources off-callback; reactivation validates/prepares the latest desired state.
+An accepted active custom-state change moves the first pre-load parameter store and snapshots its consumed modulation off-thread into one activation-owned frozen control projection, then requests reactivation. Until deactivation, `ProcessBlock` receives that projection and no parameter trajectories. Original event bounds/domains are still checked; notes, transport, and audio continue. Base events are discarded without durable endpoint completion; accepted modulation endpoints update only the desired held signal for reactivation. Later loads and direct control edits affect saveable desired state only. Reset, repeated loads, and state reversion cannot refresh or release the frozen projection. Deactivation reclaims it with the old resources off-callback; reactivation validates/prepares the latest desired state.
 
 This intentionally ignores parameter automation for as long as the environment defers restart. Merely freezing base values while forwarding automation is unsafe for coupled resource bounds. Parameter-only loads before this gate remain block-visible without an automatic runtime restart. Processor-originated restart requests retain their existing parameter/automation behavior; they do not activate the custom-state gate.
 
@@ -180,7 +181,7 @@ A source must repeat the same finite topology and dimensions across traversals. 
 `ProcessBlock<S>` borrows:
 
 - callback frame count and process mode;
-- canonical base parameter state;
+- canonical consumed base parameter state and held modulation baseline;
 - sample-accurate bounded parameter/note/event sources;
 - transport/process context;
 - a safe `ProcessBufferSource<S>`.
@@ -199,13 +200,15 @@ CLAP host lifetimes split durable shared/main-thread desired state from the acti
 
 The bridge publishes scalars and a custom-resource epoch in one transaction. Custom payload ownership stays behind a control-only mutex; the callback reads only fixed-width metadata and never adopts or reclaims custom payloads. Realtime publication is one-shot/nonblocking; realtime snapshots have a fixed retry bound. Non-realtime save/activation capture a coherent completed parameter/custom generation before encoding or preparing resources.
 
+A separate bounded scalar projection retains global modulation across CLAP runtime lifetimes; it is excluded from state publication and survives a failed base CAS. It is seeded only after a matching readable base/custom generation, so old resources cannot consume newer desired modulation. Flush updates that desired projection without directly mutating active DSP.
+
 CLAP projects the runtime's completed store rather than replaying automation. Publication uses the generation actually synchronized before processing, so newer control/state publication defeats stale completion. A changed custom epoch gates parameter synchronization and automation until deactivation; desired replacements remain saveable while old resources continue. An already-running old-generation block may finish and establish the frozen local baseline, but cannot overwrite the replacement. Snapshot contention withholds trajectories for that block without permanently latching the gate. [Parameters/state](parameters-state.md#complete-clap-state-publication) owns the full concurrency contract.
 
 CLAP load runs component-owned migrations/complete validation before publishing a candidate. Shared creation validates original defaults against deployment wire bounds; the separately retained definition must admit those defaults rather than substitute its own. Activation and load reject component schema drift. Unsupported event ports still fail explicitly.
 
 ## Deactivation and teardown
 
-Deactivation removes and destroys active processor/resources only after the deployment contract has ended process/reset access. Durable semantic state and immutable schema remain for later activation. Active I/O and latency disappear with the active child and are recomputed on the next activation.
+Deactivation removes and destroys active processor/resources only after the deployment contract has ended process/reset access. Durable semantic state, held external modulation, and immutable schema remain for later activation. Active I/O and latency disappear with the active child and are recomputed on the next activation.
 
 Future background tasks, callbacks, editors, deferred reclamation, devices, graphs, and module unload require explicit fencing/shutdown owners before they enter common runtime infrastructure.
 
@@ -224,7 +227,7 @@ Future background tasks, callbacks, editors, deferred reclamation, devices, grap
 
 The ownership/schema/identity migration is no longer the blocker. Remaining core work should be driven by concrete audio semantics:
 
-1. finish parameter formatting/value mapping and explicit sample-accurate modulation without conflating it with durable/base state;
+1. extend the qualified global float modulation subset only when a client needs per-note/expression or other domains; keep external signals separate from durable state;
 2. define common tail and bypass semantics only where deployments can map them faithfully;
 3. finish the event/output/expression/MIDI contracts needed by real instruments and event processors;
 4. add bounded control -> DSP non-parameter publication and background-work/reclamation lifecycle;

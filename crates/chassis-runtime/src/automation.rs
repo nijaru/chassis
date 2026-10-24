@@ -1,4 +1,4 @@
-//! Borrowed, bounded process-time parameter automation.
+//! Borrowed, bounded process-time base automation and global modulation.
 //!
 //! [`ParameterEvents`] validates a backend-normalized event slice without
 //! copying it. Events are globally sample-sorted, retain equal-offset source
@@ -9,6 +9,8 @@
 //! retains each parameter's last point as its next base value. All points lie
 //! inside the block; a source ramp spanning blocks must supply clipped local
 //! points, including the next block's offset-zero value when its slope continues.
+//! Modulation shares source order and the event budget, but sets a separate held
+//! amount. Base cursors ignore it; effective composition lives in [`crate::modulation`].
 
 use core::fmt;
 
@@ -30,8 +32,13 @@ pub enum ParameterEventValue {
 /// The change represented by one parameter event.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ParameterEventChange {
-    /// Set the value at the event's sample offset.
+    /// Set the base value at the event's sample offset.
     Set(ParameterEventValue),
+    /// Replace the held global additive amount without changing base state.
+    Modulate {
+        /// Finite plain-unit delta, not a normalized position or increment.
+        amount: f64,
+    },
     /// Linearly reach the floating-point endpoint at the event's offset.
     ///
     /// The segment starts at the preceding point for this parameter. If no
@@ -73,6 +80,16 @@ impl ParameterEvent {
             offset,
             parameter,
             change: ParameterEventChange::Linear { value },
+        }
+    }
+
+    /// Replace the held global modulation amount at this sample offset.
+    #[must_use]
+    pub const fn modulation(offset: u32, parameter: ParameterIndex, amount: f64) -> Self {
+        Self {
+            offset,
+            parameter,
+            change: ParameterEventChange::Modulate { amount },
         }
     }
 
@@ -154,7 +171,8 @@ impl<'a> ParameterEvents<'a> {
 
             match event.change {
                 ParameterEventChange::Set(ParameterEventValue::Float(value))
-                | ParameterEventChange::Linear { value } => {
+                | ParameterEventChange::Linear { value }
+                | ParameterEventChange::Modulate { amount: value } => {
                     if !value.is_finite() {
                         return Err(ParameterEventsError::NonFiniteValue { index });
                     }
@@ -229,10 +247,36 @@ impl<'a> ParameterEvents<'a> {
         parameter: ParameterIndex,
         initial: f64,
     ) -> Result<FloatParameterCursor<'a>, ParameterCursorError> {
+        self.cursor(parameter, initial, CursorKind::Base)
+    }
+
+    /// Create a step cursor over held global modulation amounts.
+    ///
+    /// Base sets and linear points are ignored. The caller supplies the held
+    /// amount at block start, independently of the parameter's base value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParameterCursorError::NonFiniteInitial`] for a non-finite amount.
+    pub fn modulation_cursor(
+        self,
+        parameter: ParameterIndex,
+        initial: f64,
+    ) -> Result<FloatParameterCursor<'a>, ParameterCursorError> {
+        self.cursor(parameter, initial, CursorKind::Modulation)
+    }
+
+    fn cursor(
+        self,
+        parameter: ParameterIndex,
+        initial: f64,
+        kind: CursorKind,
+    ) -> Result<FloatParameterCursor<'a>, ParameterCursorError> {
         if !initial.is_finite() {
             return Err(ParameterCursorError::NonFiniteInitial);
         }
         Ok(FloatParameterCursor {
+            kind,
             events: self.events,
             frame_count: self.frame_count,
             parameter,
@@ -244,11 +288,18 @@ impl<'a> ParameterEvents<'a> {
     }
 }
 
-/// Lazy cursor over one floating-point parameter's sample trajectory.
+#[derive(Clone, Copy)]
+enum CursorKind {
+    Base,
+    Modulation,
+}
+
+/// Lazy cursor over a floating-point base trajectory or held modulation.
 ///
 /// The cursor performs no allocation. It consumes only events for its target
 /// while preserving the source order of equal-offset events.
 pub struct FloatParameterCursor<'events> {
+    kind: CursorKind,
     events: &'events [ParameterEvent],
     frame_count: u32,
     parameter: ParameterIndex,
@@ -289,7 +340,7 @@ impl FloatParameterCursor<'_> {
         let mut index = self.next_event;
         while index < self.events.len() {
             let event = &self.events[index];
-            if event.parameter != self.parameter {
+            if !self.accepts(event) {
                 index += 1;
                 continue;
             }
@@ -302,11 +353,9 @@ impl FloatParameterCursor<'_> {
         self.next_event = index;
         self.last_query_offset = Some(offset);
 
-        let mut next = index;
-        while next < self.events.len() && self.events[next].parameter != self.parameter {
-            next += 1;
-        }
-        let Some(event) = self.events.get(next) else {
+        // Consumption stops at the next point in this cursor's own family;
+        // intervening modulation/other parameters have already been skipped.
+        let Some(event) = self.events.get(index) else {
             return Ok(self.point_value);
         };
         let ParameterEventChange::Linear { value } = event.change else {
@@ -328,6 +377,20 @@ impl FloatParameterCursor<'_> {
         }
     }
 
+    fn accepts(&self, event: &ParameterEvent) -> bool {
+        event.parameter == self.parameter
+            && matches!(
+                (self.kind, event.change),
+                (
+                    CursorKind::Base,
+                    ParameterEventChange::Set(_) | ParameterEventChange::Linear { .. }
+                ) | (
+                    CursorKind::Modulation,
+                    ParameterEventChange::Modulate { .. }
+                )
+            )
+    }
+
     fn apply_point(
         &mut self,
         index: usize,
@@ -335,7 +398,8 @@ impl FloatParameterCursor<'_> {
     ) -> Result<(), ParameterCursorError> {
         let value = match event.change {
             ParameterEventChange::Set(ParameterEventValue::Float(value))
-            | ParameterEventChange::Linear { value } => value,
+            | ParameterEventChange::Linear { value }
+            | ParameterEventChange::Modulate { amount: value } => value,
             ParameterEventChange::Set(_) => {
                 return Err(ParameterCursorError::NonFloatValue { index });
             }
@@ -376,7 +440,7 @@ pub enum ParameterEventsError {
         /// Current event offset.
         actual: u32,
     },
-    /// A float or linear endpoint was not finite.
+    /// A float base value, linear endpoint, or modulation amount was not finite.
     NonFiniteValue {
         /// Zero-based event index.
         index: usize,
@@ -423,7 +487,7 @@ impl std::error::Error for ParameterEventsError {}
 /// Failure while evaluating a floating-point trajectory cursor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParameterCursorError {
-    /// Cursor base value was not finite.
+    /// Cursor's initial base value or held amount was not finite.
     NonFiniteInitial,
     /// Query offset was outside the validated block.
     OffsetOutOfRange {

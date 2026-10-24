@@ -70,6 +70,62 @@ fn activate(runtime: &mut InstanceRuntime<TableProcessor>, component: &TableComp
 }
 
 #[test]
+fn pending_resources_freeze_consumed_modulation_but_keep_desired_signal() {
+    let component = TableComponent::default();
+    let index = ParameterIndex::new(0);
+    let mut runtime = InstanceRuntime::for_component(&component).unwrap();
+    activate(&mut runtime, &component);
+    runtime
+        .apply_state(&component, &document(0.0, &[3, 5]))
+        .unwrap();
+    let events = [
+        ParameterEvent::set(0, index, ParameterEventValue::Float(1.0)),
+        ParameterEvent::modulation(0, index, 1.0),
+    ];
+    assert_eq!(
+        render(&mut runtime, &events).unwrap().map(f64::to_bits),
+        [2.0; 4].map(f64::to_bits)
+    );
+    assert_eq!(runtime.modulation(index), Some(1.0));
+    assert_eq!(
+        runtime.parameters().get("index"),
+        Some(&ParameterValue::Float(0.0))
+    );
+    runtime.reset().unwrap();
+    assert_eq!(
+        render(&mut runtime, &[]).unwrap().map(f64::to_bits),
+        [2.0; 4].map(f64::to_bits)
+    );
+    runtime
+        .apply_state(&component, &document(0.0, &[2]))
+        .unwrap();
+    assert_eq!(
+        render(&mut runtime, &[]).unwrap().map(f64::to_bits),
+        [2.0; 4].map(f64::to_bits)
+    );
+    runtime
+        .apply_state(&component, &document(0.0, &[3, 5]))
+        .unwrap();
+    let saved = runtime.encode_state(StateLimits::default()).unwrap();
+    assert_eq!(component.incompatible_controls.load(Ordering::Relaxed), 0);
+    runtime.deactivate().unwrap();
+    activate(&mut runtime, &component);
+    assert_eq!(
+        render(&mut runtime, &[]).unwrap().map(f64::to_bits),
+        [5.0; 4].map(f64::to_bits)
+    );
+    let mut reopened = InstanceRuntime::for_component(&component).unwrap();
+    reopened
+        .apply_state_bytes(&component, &saved, StateLimits::default())
+        .unwrap();
+    activate(&mut reopened, &component);
+    assert_eq!(
+        render(&mut reopened, &[]).unwrap().map(f64::to_bits),
+        [3.0; 4].map(f64::to_bits)
+    );
+}
+
+#[test]
 fn defaults_are_complete_validated_and_do_not_require_persistence_identity() {
     let component = TableComponent {
         identified: false,

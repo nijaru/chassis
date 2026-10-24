@@ -369,6 +369,7 @@ pub struct ParameterDescriptor {
     name: String,
     kind: ParameterKind,
     control: Option<control::ControlPolicy>,
+    global_modulation: bool,
 }
 
 impl ParameterDescriptor {
@@ -393,9 +394,51 @@ impl ParameterDescriptor {
             name,
             kind,
             control: None,
+            global_modulation: false,
         };
         descriptor.validate()?;
         Ok(descriptor)
+    }
+
+    /// Opt this float parameter into global additive plain-unit modulation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParameterDefinitionError::UnsupportedModulation`] for non-float domains.
+    pub fn with_global_modulation(mut self) -> Result<Self, ParameterDefinitionError> {
+        if !matches!(self.kind, ParameterKind::Float { .. }) {
+            return Err(ParameterDefinitionError::UnsupportedModulation(self.key));
+        }
+        self.global_modulation = true;
+        Ok(self)
+    }
+
+    /// Resolve the opted-in modulation domain for caching during setup.
+    #[must_use]
+    pub fn global_modulation(&self) -> Option<crate::modulation::GlobalFloatModulation> {
+        match self.kind {
+            ParameterKind::Float {
+                minimum, maximum, ..
+            } if self.global_modulation => Some(crate::modulation::GlobalFloatModulation::new(
+                minimum, maximum,
+            )),
+            _ => None,
+        }
+    }
+
+    /// Validate a held amount independently of the base value's range.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParameterValueError`] for unsupported modulation or a non-finite amount.
+    pub fn validate_modulation_amount(&self, amount: f64) -> Result<(), ParameterValueError> {
+        if !self.global_modulation {
+            return Err(ParameterValueError::ModulationNotSupported);
+        }
+        if !amount.is_finite() {
+            return Err(ParameterValueError::NonFiniteFloat);
+        }
+        Ok(())
     }
 
     /// Construct a finite floating-point parameter.
@@ -846,6 +889,8 @@ pub enum ParameterDefinitionError {
         /// Policy rejection reason.
         reason: ParameterControlError,
     },
+    /// Global additive modulation was requested for a non-float domain.
+    UnsupportedModulation(ParameterKey),
     /// Two descriptors used one stable parameter key.
     DuplicateParameter(ParameterKey),
 }
@@ -890,6 +935,10 @@ impl fmt::Display for ParameterDefinitionError {
                 formatter,
                 "parameter {parameter} has an invalid control policy: {reason}"
             ),
+            Self::UnsupportedModulation(key) => write!(
+                formatter,
+                "parameter {key} does not support global float modulation"
+            ),
             Self::DuplicateParameter(key) => write!(formatter, "parameter key {key} is duplicated"),
         }
     }
@@ -907,7 +956,9 @@ pub enum ParameterValueError {
         /// Proposed value type.
         actual: ParameterType,
     },
-    /// Float value was not finite.
+    /// Parameter did not opt into global additive float modulation.
+    ModulationNotSupported,
+    /// Float value or modulation amount was not finite.
     NonFiniteFloat,
     /// Float value was outside its inclusive range.
     FloatOutOfRange,
@@ -924,6 +975,9 @@ impl fmt::Display for ParameterValueError {
         match self {
             Self::WrongType { expected, actual } => {
                 write!(formatter, "parameter expects {expected}, received {actual}")
+            }
+            Self::ModulationNotSupported => {
+                formatter.write_str("parameter does not support global modulation")
             }
             Self::NonFiniteFloat => formatter.write_str("parameter float must be finite"),
             Self::FloatOutOfRange => formatter.write_str("parameter float is outside its range"),
@@ -1027,7 +1081,7 @@ impl fmt::Display for ParameterStoreError {
 
 impl std::error::Error for ParameterStoreError {}
 
-/// Failure to replace a durable value using a dense process-domain payload.
+/// Failure to replace a base value or held modulation amount using dense identity.
 ///
 /// Unlike control/state errors, this carries no allocated parameter key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1403,6 +1457,15 @@ impl ParameterStore {
             let value = match event.change() {
                 ParameterEventChange::Set(value) => value,
                 ParameterEventChange::Linear { value } => ParameterEventValue::Float(value),
+                ParameterEventChange::Modulate { amount } => {
+                    descriptor
+                        .validate_modulation_amount(amount)
+                        .map_err(|error| ParameterAutomationError::InvalidValue {
+                            index: event_index,
+                            error,
+                        })?;
+                    continue;
+                }
             };
             descriptor.validate_event_value(&value).map_err(|error| {
                 ParameterAutomationError::InvalidValue {
@@ -1426,6 +1489,7 @@ impl ParameterStore {
             let value = match event.change() {
                 ParameterEventChange::Linear { value } => ParameterEventValue::Float(value),
                 ParameterEventChange::Set(value) => value,
+                ParameterEventChange::Modulate { .. } => continue,
             };
             self.values[position] = self.descriptors[position].value_from_validated_event(value);
         }

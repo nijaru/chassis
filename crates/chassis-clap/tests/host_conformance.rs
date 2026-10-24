@@ -15,7 +15,9 @@ use std::{
 use chassis_clap::{ClapComponent, F32AndF64, SingleComponentEntry};
 use chassis_runtime::{
     audio::{AudioPortIndex, MAIN_INPUT, MAIN_OUTPUT},
-    parameters::{ChoiceOption, ParameterDescriptor, ParameterValue},
+    automation::ParameterEventValue,
+    modulation::GlobalFloatModulation,
+    parameters::{ChoiceOption, ParameterDescriptor, ParameterIndex},
     process::{ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessChannel},
     runtime::{Component, LatencySamples, Process, Processor},
 };
@@ -25,8 +27,13 @@ use clack_extensions::{
     params::PluginParams,
 };
 use clack_host::{
-    events::event_types::ParamValueEvent, factory::plugin::PluginFactory, prelude::*,
+    events::event_types::{ParamModEvent, ParamValueEvent},
+    factory::plugin::PluginFactory,
+    prelude::*,
 };
+
+#[path = "support/modulation.rs"]
+mod modulation;
 
 const TRIM_CLAP_ID: u32 = 7;
 const MAX_PARAMETER_EVENTS: u32 = 64;
@@ -98,6 +105,8 @@ impl Default for ProbeComponent {
                 ParameterDescriptor::float("trim", "Trim", 0.0, 1.0, 1.0)
                     .expect("probe parameter is valid")
                     .with_control_policy(trim_control::TrimControl { precision: 1 })
+                    .unwrap()
+                    .with_global_modulation()
                     .unwrap(),
                 ParameterDescriptor::integer("steps", "Steps", -4, 4, 0).unwrap(),
                 ParameterDescriptor::boolean("bypass", "Bypass", true).unwrap(),
@@ -138,7 +147,7 @@ impl Component for ProbeComponent {
     fn activate(
         &self,
         config: &ActivationConfig<'_>,
-        _parameters: &chassis_runtime::parameters::ParameterStore,
+        parameters: &chassis_runtime::parameters::ParameterStore,
         _custom_state: &[chassis_runtime::state::StateEntry],
     ) -> Result<Self::Processor, Self::ActivationError> {
         let latency = if config.process().sample_rate() >= 88_200.0 {
@@ -146,7 +155,14 @@ impl Component for ProbeComponent {
         } else {
             64
         };
+        let trim = parameters.index("trim").unwrap();
         Ok(ProbeProcessor {
+            trim,
+            modulation: parameters
+                .descriptor(trim)
+                .unwrap()
+                .global_modulation()
+                .unwrap(),
             latency: LatencySamples::new(latency),
             main_input: config
                 .schema()
@@ -161,6 +177,8 @@ impl Component for ProbeComponent {
 }
 
 struct ProbeProcessor {
+    trim: ParameterIndex,
+    modulation: GlobalFloatModulation,
     latency: LatencySamples,
     main_input: AudioPortIndex,
     main_output: AudioPortIndex,
@@ -172,17 +190,17 @@ impl Processor for ProbeProcessor {
     }
 }
 
-impl Process<f32> for ProbeProcessor {
-    #[allow(clippy::cast_possible_truncation)]
-    fn process<B>(&mut self, block: &mut ProcessBlock<'_, '_, '_, f32, B>)
-    where
-        B: ProcessBufferSource<f32> + ?Sized,
-    {
-        let trim_index = block.parameters().index("trim").expect("trim exists");
-        let base = match block.parameters().get("trim") {
-            Some(ParameterValue::Float(value)) => *value,
-            _ => 1.0,
+impl ProbeProcessor {
+    fn process_trim<S: Copy, B: ProcessBufferSource<S> + ?Sized>(
+        &self,
+        block: &mut ProcessBlock<'_, '_, '_, S, B>,
+        apply: impl Fn(&mut S, f64),
+    ) {
+        let Some(ParameterEventValue::Float(base)) = block.parameters().get_event_value(self.trim)
+        else {
+            panic!("trim is a float");
         };
+        let amount = block.modulation(self.trim).unwrap();
         let events = block.parameter_events();
         for mut channel in block.channels() {
             if channel
@@ -192,58 +210,40 @@ impl Process<f32> for ProbeProcessor {
                     .output_endpoint()
                     .is_some_and(|endpoint| endpoint.port_index() == self.main_output)
             {
-                let mut trim = events
-                    .float_cursor(trim_index, base)
-                    .expect("trim cursor is valid");
+                let mut trim = self
+                    .modulation
+                    .cursor(events, self.trim, base, amount)
+                    .unwrap();
                 for (offset, sample) in channel
                     .copy_input_to_output()
-                    .expect("main channel has input and output")
+                    .unwrap()
                     .iter_mut()
                     .enumerate()
                 {
-                    *sample *= trim
-                        .value_at(u32::try_from(offset).expect("test block fits in u32"))
-                        .expect("offset is inside the block") as f32;
+                    apply(
+                        sample,
+                        trim.value_at(u32::try_from(offset).unwrap()).unwrap(),
+                    );
                 }
             }
         }
     }
 }
-
+impl Process<f32> for ProbeProcessor {
+    #[allow(clippy::cast_possible_truncation)]
+    fn process<B: ProcessBufferSource<f32> + ?Sized>(
+        &mut self,
+        block: &mut ProcessBlock<'_, '_, '_, f32, B>,
+    ) {
+        self.process_trim(block, |sample, gain| *sample *= gain as f32);
+    }
+}
 impl Process<f64> for ProbeProcessor {
-    fn process<B>(&mut self, block: &mut ProcessBlock<'_, '_, '_, f64, B>)
-    where
-        B: ProcessBufferSource<f64> + ?Sized,
-    {
-        let trim_index = block.parameters().index("trim").expect("trim exists");
-        let base = match block.parameters().get("trim") {
-            Some(ParameterValue::Float(value)) => *value,
-            _ => 1.0,
-        };
-        let events = block.parameter_events();
-        for mut channel in block.channels() {
-            if channel
-                .input_endpoint()
-                .is_some_and(|endpoint| endpoint.port_index() == self.main_input)
-                && channel
-                    .output_endpoint()
-                    .is_some_and(|endpoint| endpoint.port_index() == self.main_output)
-            {
-                let mut trim = events
-                    .float_cursor(trim_index, base)
-                    .expect("trim cursor is valid");
-                for (offset, sample) in channel
-                    .copy_input_to_output()
-                    .expect("main channel has input and output")
-                    .iter_mut()
-                    .enumerate()
-                {
-                    *sample *= trim
-                        .value_at(u32::try_from(offset).expect("test block fits in u32"))
-                        .expect("offset is inside the block");
-                }
-            }
-        }
+    fn process<B: ProcessBufferSource<f64> + ?Sized>(
+        &mut self,
+        block: &mut ProcessBlock<'_, '_, '_, f64, B>,
+    ) {
+        self.process_trim(block, |sample, gain| *sample *= gain);
     }
 }
 
@@ -656,6 +656,27 @@ fn full_adapter_process_path_is_allocation_free_at_event_bound_for_f32_and_f64()
             Some(expected)
         );
     }
+    let mut mixed = EventBuffer::with_capacity(64);
+    for offset in 0..32 {
+        mixed.push(&ParamValueEvent::new(
+            offset,
+            ClapId::new(TRIM_CLAP_ID),
+            Pckn::match_all(),
+            0.25,
+        ));
+        mixed.push(&ParamModEvent::new(
+            offset,
+            ClapId::new(TRIM_CLAP_ID),
+            Pckn::match_all(),
+            0.25,
+        ));
+    }
+    measure_f32_adapter_path(&mut processor, &mixed, &mut output_events);
+    measure_f64_adapter_path(&mut processor, &mixed, &mut output_events);
+    assert_eq!(
+        params.get_value(&plugin.plugin_handle(), ClapId::new(TRIM_CLAP_ID)),
+        Some(0.25)
+    );
     // Rejection terminates the run, so perform this probe last.
     exercise_raw_aliases(&mut processor);
     assert_eq!(REALTIME_LOG_CALLS.load(Ordering::Relaxed), 0);

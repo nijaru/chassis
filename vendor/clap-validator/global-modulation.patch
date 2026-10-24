@@ -1,0 +1,73 @@
+diff --git i/src/tests/rng.rs w/src/tests/rng.rs
+index bcb91cf..46bc3f4 100644
+--- i/src/tests/rng.rs
++++ w/src/tests/rng.rs
+@@ -868,12 +868,12 @@ impl<'a> ParamFuzzer<'a> {
+             .choose(prng)?;
+ 
+         if !self.snap_to_bounds && param_info.is_modulatable() && prng.random_bool(0.5) {
+-            Some(Event::ParamValue(clap_event_param_value {
++            Some(Event::ParamMod(clap_event_param_mod {
+                 header: clap_event_header {
+-                    size: std::mem::size_of::<clap_event_param_value>() as u32,
++                    size: std::mem::size_of::<clap_event_param_mod>() as u32,
+                     time: 0,
+                     space_id: CLAP_CORE_EVENT_SPACE_ID,
+-                    type_: CLAP_EVENT_PARAM_VALUE,
++                    type_: CLAP_EVENT_PARAM_MOD,
+                     flags: 0,
+                 },
+                 param_id: *param_id,
+@@ -885,7 +885,7 @@ impl<'a> ParamFuzzer<'a> {
+                 port_index: -1,
+                 channel: -1,
+                 key: -1,
+-                value: ParamFuzzer::random_modulation(param_info, prng),
++                amount: ParamFuzzer::random_modulation(param_info, prng),
+             }))
+         } else {
+             Some(Event::ParamValue(clap_event_param_value {
+@@ -982,6 +982,43 @@ impl<'a> ParamFuzzer<'a> {
+     }
+ }
+ 
++#[cfg(test)]
++mod global_modulation_tests {
++    use super::*;
++
++    #[test]
++    fn global_modulation_is_not_a_base_value() {
++        let params = ParamInfo::from([(1, Param {
++            name: String::from("Gain"),
++            module: String::new(),
++            cookie: None,
++            range: 0.0..=1.0,
++            default: 0.5,
++            flags: clap_sys::ext::params::CLAP_PARAM_IS_MODULATABLE,
++        })]);
++        let fuzzer = ParamFuzzer::new(&params);
++        let mut rng = new_prng();
++        let mut saw_modulation = false;
++        let mut saw_base = false;
++        for _ in 0..64 {
++            match fuzzer.generate_event(&mut rng).unwrap() {
++                Event::ParamMod(event) => {
++                    assert_eq!(event.header.type_, CLAP_EVENT_PARAM_MOD);
++                    assert_eq!(event.header.size as usize, std::mem::size_of::<clap_event_param_mod>());
++                    assert!((-0.5..=0.5).contains(&event.amount));
++                    saw_modulation = true;
++                }
++                Event::ParamValue(event) => {
++                    assert!((0.0..=1.0).contains(&event.value));
++                    saw_base = true;
++                }
++                _ => panic!("unexpected parameter event family"),
++            }
++        }
++        assert!(saw_modulation && saw_base);
++    }
++}
++
+ impl TransportFuzzer {
+     /// Create a new transport fuzzer.
+     pub fn new() -> Self {

@@ -44,15 +44,19 @@ Descriptors now own immutable normalized-control and formatting/parsing policy. 
 
 [Parameters/state](design/parameters-state.md#control-mapping-and-presentation) owns this contract; [validation](design/validation.md) owns revision-scoped evidence. No macros, new crate, or unit/curve catalog is needed.
 
-## Next — modulation
+## Closed — global additive float modulation
 
-Define modulation separately from base state/automation, with explicit domain, timing, addressing, combination, ordering, and reset policy. Deliver the contract with its deployment projection and a focused fixture; preserve information or reject unsupported capabilities rather than overwrite persistent values.
+Explicitly opted-in floats now accept global held plain-unit amounts in the same bounded ordered stream as base automation. Cached effective cursors add/clamp without changing base or saved state. Held external signals survive reset, reactivation, and state loads. Custom transitions freeze both consumed base and modulation while retaining desired signals for reactivation; CLAP's separate transient projection preserves accepted modulation even when a newer state load defeats base completion.
+
+Core and actual-entry fixtures exercise mixed trajectories, lifecycle/state exclusion, resource gating, malformed/targeted rejection, and allocation bounds. Per-note/expression and non-float modulation remain unsupported rather than flattened. [Parameters/state](design/parameters-state.md#global-additive-float-modulation) owns the contract; [validation](design/validation.md) owns revision-scoped evidence.
+
+## Next — tail and bypass
+
+Define tail independently of activation latency, then host-bypass identity/timing with explicit product DSP policy. Deliver each through its deployment projection and a focused fixture, without prescribing one dry/wet or crossfade algorithm.
 
 ## Following audio contracts
 
 Deliver each contract with its deployment projection and focused fixture:
-- tail separate from latency;
-- host bypass identity/timing and product DSP policy, not a generic dry/wet control;
 - note-port/input CLAP projection and a non-effect export with honest descriptor features;
 - bounded output events, expression, MIDI 1/SysEx, and MIDI 2/UMP with explicit rejection rather than destructive translation.
 

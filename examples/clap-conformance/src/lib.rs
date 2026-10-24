@@ -6,8 +6,10 @@ use core::convert::Infallible;
 
 use chassis_clap::{ClapComponent, F32AndF64, SingleComponentEntry, clack_export_entry};
 use chassis_runtime::{
+    automation::ParameterEventValue,
     buffer::BufferRelationship,
-    parameters::{ChoiceOption, ParameterDescriptor, ParameterValue},
+    modulation::GlobalFloatModulation,
+    parameters::{ChoiceOption, ParameterDescriptor, ParameterIndex},
     process::{ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessChannel},
     runtime::{Component, Process, Processor},
 };
@@ -37,7 +39,9 @@ impl ConformanceEffect {
         let trim = ParameterDescriptor::float("trim", "Trim", 0.0, 1.0, 0.5)
             .expect("float parameter is valid")
             .with_control_policy(trim_control::TrimControl { precision: 1 })
-            .expect("trim control policy is valid");
+            .expect("trim control policy is valid")
+            .with_global_modulation()
+            .expect("trim is a float");
         Self {
             parameters: vec![mode, trim],
         }
@@ -67,10 +71,18 @@ impl Component for ConformanceEffect {
     fn activate(
         &self,
         _config: &ActivationConfig<'_>,
-        _parameters: &chassis_runtime::parameters::ParameterStore,
+        parameters: &chassis_runtime::parameters::ParameterStore,
         _custom_state: &[chassis_runtime::state::StateEntry],
     ) -> Result<Self::Processor, Self::ActivationError> {
-        Ok(ConformanceProcessor)
+        let trim = parameters.index("trim").expect("conformance trim exists");
+        Ok(ConformanceProcessor {
+            trim,
+            modulation: parameters
+                .descriptor(trim)
+                .expect("trim descriptor exists")
+                .global_modulation()
+                .expect("trim opts into modulation"),
+        })
     }
 }
 
@@ -82,31 +94,34 @@ impl ClapComponent for ConformanceEffect {
     const CLAP_MAX_PARAMETER_EVENTS: u32 = 512;
 }
 
-struct ConformanceProcessor;
+struct ConformanceProcessor {
+    trim: ParameterIndex,
+    modulation: GlobalFloatModulation,
+}
 
 impl Processor for ConformanceProcessor {}
 
-impl Process<f32> for ConformanceProcessor {
-    fn process<B>(&mut self, block: &mut ProcessBlock<'_, '_, '_, f32, B>)
-    where
-        B: ProcessBufferSource<f32> + ?Sized,
+impl ConformanceProcessor {
+    fn process_trim<S: Copy, B>(
+        &self,
+        block: &mut ProcessBlock<'_, '_, '_, S, B>,
+        apply: impl Fn(&mut S, f64),
+    ) where
+        B: ProcessBufferSource<S> + ?Sized,
     {
-        let trim_index = block
-            .parameters()
-            .index("trim")
-            .expect("conformance trim parameter exists");
-        let base_trim = match block.parameters().get("trim") {
-            Some(ParameterValue::Float(value)) => *value,
-            _ => panic!("conformance trim parameter is a float"),
+        let Some(ParameterEventValue::Float(base)) = block.parameters().get_event_value(self.trim)
+        else {
+            panic!("conformance trim is a float");
         };
+        let amount = block.modulation(self.trim).expect("trim has a held signal");
         let events = block.parameter_events();
-
         for mut buffer in block.channels() {
             match buffer.relationship() {
                 BufferRelationship::InPlace | BufferRelationship::Separate => {
-                    let mut trim = events
-                        .float_cursor(trim_index, base_trim)
-                        .expect("conformance trim base is finite");
+                    let mut trim = self
+                        .modulation
+                        .cursor(events, self.trim, base, amount)
+                        .expect("consumed trim controls are finite");
                     for (offset, sample) in buffer
                         .copy_input_to_output()
                         .expect("paired main channel has input and output")
@@ -116,15 +131,24 @@ impl Process<f32> for ConformanceProcessor {
                         let gain = trim
                             .value_at(u32::try_from(offset).expect("callback offset fits u32"))
                             .expect("callback offset is within the process block");
-                        apply_trim_f32(sample, gain);
+                        apply(sample, gain);
                     }
                 }
                 BufferRelationship::InputOnly => {}
                 BufferRelationship::OutputOnly => {
-                    panic!("conformance effect does not declare output-only channels");
+                    panic!("conformance effect has no output-only channels")
                 }
             }
         }
+    }
+}
+
+impl Process<f32> for ConformanceProcessor {
+    fn process<B>(&mut self, block: &mut ProcessBlock<'_, '_, '_, f32, B>)
+    where
+        B: ProcessBufferSource<f32> + ?Sized,
+    {
+        self.process_trim(block, apply_trim_f32);
     }
 }
 
@@ -133,40 +157,7 @@ impl Process<f64> for ConformanceProcessor {
     where
         B: ProcessBufferSource<f64> + ?Sized,
     {
-        let trim_index = block
-            .parameters()
-            .index("trim")
-            .expect("conformance trim parameter exists");
-        let base_trim = match block.parameters().get("trim") {
-            Some(ParameterValue::Float(value)) => *value,
-            _ => panic!("conformance trim parameter is a float"),
-        };
-        let events = block.parameter_events();
-
-        for mut buffer in block.channels() {
-            match buffer.relationship() {
-                BufferRelationship::InPlace | BufferRelationship::Separate => {
-                    let mut trim = events
-                        .float_cursor(trim_index, base_trim)
-                        .expect("conformance trim base is finite");
-                    for (offset, sample) in buffer
-                        .copy_input_to_output()
-                        .expect("paired main channel has input and output")
-                        .iter_mut()
-                        .enumerate()
-                    {
-                        let gain = trim
-                            .value_at(u32::try_from(offset).expect("callback offset fits u32"))
-                            .expect("callback offset is within the process block");
-                        apply_trim_f64(sample, gain);
-                    }
-                }
-                BufferRelationship::InputOnly => {}
-                BufferRelationship::OutputOnly => {
-                    panic!("conformance effect does not declare output-only channels");
-                }
-            }
-        }
+        self.process_trim(block, apply_trim_f64);
     }
 }
 

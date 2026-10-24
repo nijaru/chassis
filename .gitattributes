@@ -1,0 +1,3 @@
+.github/scripts/install-clap-validator.sh text eol=lf
+# Unified diff context intentionally includes a space on empty source lines.
+vendor/clap-validator/global-modulation.patch text eol=lf whitespace=-blank-at-eol

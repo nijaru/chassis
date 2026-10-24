@@ -1,6 +1,6 @@
 # Parameters, Automation, and State
 
-Status: typed parameter schema/store, author-defined control mapping/text policy, dense realtime identity, borrowed sample-accurate automation, durable `InstanceRuntime` ownership, complete semantic state replacement, CLAP float/integer/boolean/choice projection, and generation-checked complete CLAP state publication are implemented. Public API and the CHSS wire format remain pre-alpha.
+Status: typed parameter schema/store, author-defined control mapping/text policy, dense realtime identity, borrowed sample-accurate automation/global float modulation, durable `InstanceRuntime` ownership, complete semantic state replacement, CLAP float/integer/boolean/choice projection, and generation-checked complete CLAP state publication are implemented. Public API and the CHSS wire format remain pre-alpha.
 
 ## Identity
 
@@ -25,11 +25,25 @@ Keep these distinct:
 3. **modulation** — process-time contribution that does not overwrite base state;
 4. **effective DSP value** — the result after combination/product policy.
 
-Base values and automation are implemented. Modulation and its combination contract remain pending.
+Base values, automation, and explicitly opted-in global additive float modulation are implemented. Per-note modulation and expression remain unsupported.
 
 `ParameterEvents` and trajectory cursors borrow fixed-width event slices, not choice text or another persistent state store. The accepted event count therefore bounds shape-validation work independently of identifier length.
 
 Explicit host ramps are reproduced without automatic extra smoothing. Smoothing remains product DSP policy unless real clients prove a common helper.
+
+## Global additive float modulation
+
+`ParameterDescriptor::with_global_modulation()` opts a float into one global plain-unit additive signal; it rejects integer, boolean, and choice domains. Cache the descriptor's `GlobalFloatModulation` and dense `ParameterIndex` during setup. Its cursor combines the consumed base trajectory and held amount as `(base + amount).clamp(minimum, maximum)`, including finite addition overflowing to an endpoint. Control taper/text policy is not a DSP combination hook.
+
+`ParameterEvent::modulation` replaces a finite held amount at a sample offset; it does not accumulate increments or constrain the amount to the base range. Only the effective sum is clamped. Base sets, linear endpoints, and modulation share `ParameterEvents`, source order, and one event budget. Base interpolation ignores modulation points, including during linear lookahead; amounts remain steps without invented smoothing or ramps.
+
+`InstanceRuntime` owns this external held input separately from persistent state. New instances start at zero; successful blocks retain the final amount. Reset, deactivate/reactivate, and accepted state loads preserve it. An explicit zero clears it. Save excludes modulation, so reopening state in a fresh instance starts with zero. `set_modulation` validates dense identity, opt-in, and finiteness without changing base values. Validation failure or DSP panic commits no endpoints.
+
+`ProcessBlock::modulation` supplies the consumed block-start amount. During a custom-resource transition, both consumed base and amount are frozen; admitted modulation still updates the desired held signal for the next activation without retargeting old resources. Do not sample a desired control view independently inside DSP.
+
+CLAP advertises only global `IS_MODULATABLE` for opted-in floats. Targeted modulation is rejected rather than flattened. Its instance-lifetime scalar projection is independent of base/custom publication: state load/save never touch it, and an accepted modulation endpoint survives a lost base-state CAS. Matching custom epoch and a readable base generation are required before reseeding consumed modulation. Inactive/active flush changes the desired projection, not the active runtime directly. Flush validates its entire recognized batch before mutation, ignores timestamps, and retains list order; invalid batches are ignored because flush has no status return. Process and flush ignore unknown IDs/types but reject malformed recognized records and invalid known controls. The total-input bound applies to both; the combined parameter-event bound additionally applies per process block.
+
+Preserving held modulation through state load is an explicit Chassis external-input policy, not a claimed CLAP mandate. The [pinned-source audit](../research/clack-pinned-adapter-audit.md#global-modulation-boundary--reviewed-2026-10-24) records the lifecycle evidence and boundary checks.
 
 ## Control mapping and presentation
 
@@ -82,7 +96,7 @@ Custom entries stay behind a control-only ownership mutex. Complete load prepare
 
 The adapter caches the generation its whole local store represents. Equal completed generations permit skipping an unchanged snapshot. The publication token comes from start-of-block synchronization, never from a new snapshot after DSP. Local completion invalidates that cache; a successful CAS establishes the new generation, while rejection leaves no token. End-of-block synchronization restores the whole newer scalar generation only if its custom epoch still matches this activation. Snapshot/CAS payload ordering remains Release/Acquire and is Loom-qualified. Active save reads the coherent desired projection, not partially completed local values.
 
-An epoch mismatch is checked before mutating runtime parameters and latches a resource-transition gate until deactivation. Subsequent controls/loads change saveable desired state only; reset and custom reversion cannot reopen the gate. DSP keeps old resources and their parameter projection, with parameter automation withheld and no endpoint publication. A block already in flight when a load publishes may finish its old-generation DSP and retain local endpoints; that last old block establishes the frozen DSP baseline, but its stale CAS cannot overwrite desired state.
+An epoch mismatch is checked before mutating runtime parameters and latches a resource-transition gate until deactivation. Subsequent controls/loads change saveable desired state only; reset and custom reversion cannot reopen the gate. DSP keeps old resources and their base/modulation projection, with timed controls withheld and no base endpoint publication. Accepted modulation updates only the desired external signal. A block already in flight when a load publishes may finish its old-generation DSP and retain local endpoints; that last old block establishes the frozen DSP baseline, but its stale CAS cannot overwrite desired state.
 
 If a bounded snapshot cannot establish a matching baseline, withhold parameter trajectories and completion for that block too: a custom load may have completed immediately before another writer acquired ownership. Contention alone does not latch the gate. Original event domains, shape, and bounds are checked before withholding events. Parameter-only changes remain live before a custom transition, and processor-originated restart requests do not impose this gate.
 
@@ -118,7 +132,7 @@ Invalid decode, migration, framework values, unknown parameters, incomplete snap
 
 `Component` supplies custom defaults, complete validation, and registered adjacent migrations. Construction validates descriptor/custom defaults together, even for identity-free components. Complete loads borrow that component, reject schema drift, and cannot substitute a caller-provided validator or migration list. Current-schema missing fields are errors, not requests to merge defaults or live state.
 
-The first accepted active custom-state change freezes the pre-load DSP parameter projection and requests reactivation. While the host/environment defers it, DSP keeps old resources and frozen base values; all parameter events are validated but discarded, with no endpoint completion. Desired parameter/custom state remains saveable. Later loads/control edits update desired state only; reset or state reversion cannot unfreeze DSP. Parameter-only changes remain live before this gate, and processor-originated restart requests do not impose it.
+The first accepted active custom-state change freezes the pre-load DSP base/modulation projection and requests reactivation. While the host/environment defers it, DSP keeps old resources and frozen controls; all parameter events are validated but withheld from DSP. Base endpoints are discarded; modulation endpoints update only the desired external signal. Desired parameter/custom state remains saveable. Later loads/control edits update desired state only; reset or state reversion cannot unfreeze DSP. Parameter-only changes remain live before this gate, and processor-originated restart requests do not impose it.
 
 Direct `parameters_mut()` edits and realtime automation validate descriptor domains, not arbitrary product cross-field invariants. Use complete state replacement for coupled control edits; activation checks complete component policy again. Processors must safely handle every admitted automation value with their current resources, requesting restart/retaining valid resources when necessary.
 
@@ -144,7 +158,7 @@ A dated REAPER active-save/render baseline exists in the [validation guide](vali
 
 The format-independent conformance processor already exercises sample-accurate float set/linear trajectories.
 
-The exported CLAP conformance component now makes its `trim` float parameter drive f32/f64 DSP sample by sample through the same trajectory cursor. This turns future validator/host automation runs into audible/differential semantic evidence instead of parameter-plumbing-only evidence.
+The exported CLAP conformance component now makes its `trim` float parameter drive f32/f64 DSP sample by sample through the same composed base/modulation cursor, with activation-cached dense identity and domain. This turns future validator/host automation runs into audible/differential semantic evidence instead of parameter-plumbing-only evidence.
 
 The `mode` choice remains process-inert until a stepped-DSP conformance case is useful.
 

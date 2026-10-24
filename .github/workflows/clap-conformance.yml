@@ -33,22 +33,17 @@ jobs:
           cp target/release/libchassis_clap_delayed_probe.so target/release/chassis-delayed-probe.clap
 
       - name: Build pinned clap-validator
-        run: >-
-          cargo +1.98.0 install
-          --git https://github.com/free-audio/clap-validator
-          --rev "$CLAP_VALIDATOR_REV"
-          --locked
-          clap-validator
+        run: bash .github/scripts/install-clap-validator.sh "$CLAP_VALIDATOR_REV"
 
       - name: Validate CLAPs
         run: |
-          clap-validator validate target/release/chassis-clap-conformance.clap
-          clap-validator validate target/release/chassis-delayed-probe.clap
+          target/clap-validator/bin/clap-validator validate target/release/chassis-clap-conformance.clap
+          target/clap-validator/bin/clap-validator validate target/release/chassis-delayed-probe.clap
 
       - name: Bounded CLAP fuzz
         run: |
-          clap-validator fuzz -j2 -d5s target/release/chassis-clap-conformance.clap
-          clap-validator fuzz -j2 -d5s target/release/chassis-delayed-probe.clap
+          target/clap-validator/bin/clap-validator fuzz -j2 -d5s target/release/chassis-clap-conformance.clap
+          target/clap-validator/bin/clap-validator fuzz -j2 -d5s target/release/chassis-delayed-probe.clap
 
   validate-macos:
     runs-on: macos-latest
@@ -106,22 +101,17 @@ jobs:
           PLIST
 
       - name: Build pinned clap-validator
-        run: >-
-          cargo +1.98.0 install
-          --git https://github.com/free-audio/clap-validator
-          --rev "$CLAP_VALIDATOR_REV"
-          --locked
-          clap-validator
+        run: bash .github/scripts/install-clap-validator.sh "$CLAP_VALIDATOR_REV"
 
       - name: Validate CLAPs
         run: |
-          clap-validator validate target/release/chassis-clap-conformance.clap
-          clap-validator validate target/release/chassis-delayed-probe.clap
+          target/clap-validator/bin/clap-validator validate target/release/chassis-clap-conformance.clap
+          target/clap-validator/bin/clap-validator validate target/release/chassis-delayed-probe.clap
 
       - name: Bounded CLAP fuzz
         run: |
-          clap-validator fuzz -j2 -d5s target/release/chassis-clap-conformance.clap
-          clap-validator fuzz -j2 -d5s target/release/chassis-delayed-probe.clap
+          target/clap-validator/bin/clap-validator fuzz -j2 -d5s target/release/chassis-clap-conformance.clap
+          target/clap-validator/bin/clap-validator fuzz -j2 -d5s target/release/chassis-delayed-probe.clap
 
   validate-windows:
     runs-on: windows-latest
@@ -145,21 +135,16 @@ jobs:
 
       - name: Build pinned clap-validator
         shell: bash
-        run: >-
-          cargo +1.98.0 install
-          --git https://github.com/free-audio/clap-validator
-          --rev "$CLAP_VALIDATOR_REV"
-          --locked
-          clap-validator
+        run: bash .github/scripts/install-clap-validator.sh "$CLAP_VALIDATOR_REV"
 
       - name: Validate CLAPs
         shell: bash
         run: |
-          clap-validator validate target/release/chassis-clap-conformance.clap
-          clap-validator validate target/release/chassis-delayed-probe.clap
+          target/clap-validator/bin/clap-validator validate target/release/chassis-clap-conformance.clap
+          target/clap-validator/bin/clap-validator validate target/release/chassis-delayed-probe.clap
 
       - name: Bounded CLAP fuzz
         shell: bash
         run: |
-          clap-validator fuzz -j2 -d5s target/release/chassis-clap-conformance.clap
-          clap-validator fuzz -j2 -d5s target/release/chassis-delayed-probe.clap
+          target/clap-validator/bin/clap-validator fuzz -j2 -d5s target/release/chassis-clap-conformance.clap
+          target/clap-validator/bin/clap-validator fuzz -j2 -d5s target/release/chassis-delayed-probe.clap

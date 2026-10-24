@@ -2,6 +2,7 @@
 
 use chassis_runtime::{
     automation::ParameterEventValue,
+    modulation::GlobalFloatModulation,
     parameters::{ChoiceOption, ParameterDescriptor, ParameterIndex, ParameterStore},
     process::{ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessChannel},
     runtime::{Component, ComponentStateError, Process, Processor},
@@ -86,7 +87,10 @@ impl Component for TableComponent {
     type ActivationError = Infallible;
     fn schema(&self) -> Result<ComponentSchema, ComponentSchemaError> {
         let params = vec![
-            ParameterDescriptor::float("index", "Index", 0.0, 1.0, 0.0).unwrap(),
+            ParameterDescriptor::float("index", "Index", 0.0, 1.0, 0.0)
+                .unwrap()
+                .with_global_modulation()
+                .unwrap(),
             ParameterDescriptor::choice(
                 "mode",
                 "Mode",
@@ -135,10 +139,15 @@ impl Component for TableComponent {
     fn activate(
         &self,
         _: &ActivationConfig<'_>,
-        _: &ParameterStore,
+        parameters: &ParameterStore,
         custom: &[StateEntry],
     ) -> Result<TableProcessor, Infallible> {
         Ok(TableProcessor {
+            modulation: parameters
+                .descriptor(ParameterIndex::new(0))
+                .unwrap()
+                .global_modulation()
+                .unwrap(),
             table: table(custom).unwrap().to_vec(),
             incompatible: Arc::clone(&self.incompatible_controls),
             restart: false,
@@ -147,6 +156,7 @@ impl Component for TableComponent {
 }
 
 pub struct TableProcessor {
+    modulation: GlobalFloatModulation,
     table: Vec<u8>,
     incompatible: Arc<AtomicUsize>,
     restart: bool,
@@ -167,9 +177,11 @@ impl Process<f64> for TableProcessor {
             unreachable!("float schema");
         };
         let events = block.parameter_events();
+        let amount = block.modulation(ParameterIndex::new(0)).unwrap();
         for mut channel in block.channels() {
-            let mut cursor = events
-                .float_cursor(ParameterIndex::new(0), initial)
+            let mut cursor = self
+                .modulation
+                .cursor(events, ParameterIndex::new(0), initial, amount)
                 .unwrap();
             for (offset, output) in channel.output_mut().unwrap().iter_mut().enumerate() {
                 let index =

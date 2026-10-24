@@ -35,7 +35,7 @@ Keep format, toolkit, device, codec, and OS concepts at their integration bounda
 | --- | --- |
 | `Component` | Immutable schema, complete-state defaults/validation/migrations, and activation factory |
 | `ComponentSchema` | Audio/event/parameter metadata, whole-audio-I/O policy, semantic state identity, stable-to-dense lookup |
-| `InstanceRuntime<P>` | Validated schema generation, durable parameter/custom state, accepted activation, lifecycle coordination |
+| `InstanceRuntime<P>` | Validated schema generation, durable parameter/custom state, held external modulation, accepted activation, lifecycle coordination |
 | `Processor` | Exclusive active DSP history and prepared resources |
 | Deployment/application layer | Host/device/editor/graph orchestration and faithful projections |
 | Shared handles | Explicit synchronized observations/publications, not independent semantic state |
@@ -58,9 +58,9 @@ Detailed owners: [runtime](design/runtime.md), [component schema](design/compone
 
 ## Parameters, events, and state
 
-Keep durable/base values, automation trajectories, modulation, and effective DSP values distinct. Explicit host ramps are not automatically smoothed. Timed streams preserve offsets and the ordering the source actually supplies; independent streams do not acquire a causal total order merely from equal timestamps.
+Keep durable/base values, automation trajectories, modulation, and effective DSP values distinct. Explicit host ramps are not automatically smoothed. Opted-in global float modulation adds a held plain-unit delta and clamps only the effective value; reset, reactivation, and state load preserve that external signal, while save excludes it. Timed streams preserve offsets and the ordering the source actually supplies; independent streams do not acquire a causal total order merely from equal timestamps.
 
-State load borrows component-owned policy and decodes, migrates, and validates a temporary complete candidate before publication. Typed documents are valid at construction, including migration output. Accepted active custom-state changes request reactivation. Once observed at the process boundary, old resources retain their parameter projection and parameter automation is checked but discarded until reactivation; an already-running old-generation block may finish without overwriting desired state. Desired complete state remains saveable while old resources continue processing. Active save captures one completed semantic generation. Newer control/state publication defeats stale realtime completion. Processor history is not persisted merely because it is serializable.
+State load borrows component-owned policy and decodes, migrates, and validates a temporary complete candidate before publication. Typed documents are valid at construction, including migration output. Accepted active custom-state changes request reactivation. Once observed at the process boundary, old resources retain their base/modulation projection and timed controls are checked but withheld until reactivation; desired external modulation still advances independently of saved state; an already-running old-generation block may finish without overwriting desired state. Desired complete state remains saveable while old resources continue processing. Active save captures one completed semantic generation. Newer control/state publication defeats stale realtime completion. Processor history is not persisted merely because it is serializable.
 
 Core note/event capabilities are broader than current CLAP projection. Each deployment must map them faithfully or reject unsupported use. Do not silently discard custom state, note identity, modulation, or labeled layout semantics. CHSS bytes and public APIs remain provisional.
 

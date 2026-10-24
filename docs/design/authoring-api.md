@@ -35,6 +35,7 @@ ComponentSchema
 InstanceRuntime<P>
   owns one validated ComponentSchema generation
   durable ParameterStore + custom semantic state
+  held external modulation, independent of saved state
   inactive/active lifecycle
   validated + policy-accepted audio configuration
   active Processor ownership
@@ -171,7 +172,7 @@ Processing distinguishes:
 3. modulation;
 4. effective DSP value after product policy.
 
-The first two are implemented; explicit sample-accurate modulation remains a pre-v1 completion item and must not be folded into durable state or automation merely for convenience.
+These are implemented for explicitly opted-in global additive float modulation. Declare `.with_global_modulation()?`, then cache the descriptor's `GlobalFloatModulation` and dense index during activation. Build its cursor from `block.parameter_events()`, the consumed base value, and `block.modulation(index)`; it adds/clamps without changing either source. Per-note and non-float modulation are unsupported, not silently approximated.
 
 Complete semantic state derives component identity/version from `ComponentSchema`. Runtime save/load has one identity authority:
 
@@ -182,7 +183,7 @@ runtime.apply_state_bytes(&component, &bytes, limits)?;
 
 `Component` supplies custom defaults, complete validation, and registered adjacent migrations; the default policy rejects custom fields. Descriptor defaults remain parameter authority. Loads are complete replacements, not merges with defaults/live state. Product custom fields remain semantic entries rather than arbitrary Rust-layout serialization.
 
-An accepted active custom-state replacement freezes the pre-load DSP parameters and discards parameter automation until reactivation; desired replacement state remains saveable. Use complete loads for coupled non-realtime edits. Direct parameter edits and automation enforce descriptor domains only; activation rechecks product relationships and processors must handle legal automation safely with current resources.
+An accepted active custom-state replacement freezes the pre-load DSP base/modulation controls and withholds trajectories until reactivation; base automation is discarded, while modulation updates only the desired external signal; desired replacement state remains saveable. Use complete loads for coupled non-realtime edits. Direct parameter edits and automation enforce descriptor domains only; activation rechecks product relationships and processors must handle legal automation safely with current resources.
 
 Attach an immutable, value-comparable `ParameterControlPolicy` to a descriptor when default linear mapping/plain text is insufficient:
 
@@ -221,7 +222,7 @@ Common tail and bypass semantics remain open and should be added only when their
 
 Explicit host/application ramps are reproduced without automatic extra smoothing. Smoothing is DSP policy; reusable ramp/smoother utilities may live in the DSP utility layer without changing automation semantics.
 
-Sample-accurate modulation needs a separate process-time contract from durable/base parameter state and ordinary automation.
+Global additive float modulation shares the ordered parameter-control stream but not durable base storage. Held amounts survive reset, reactivation, and state load, and are excluded from save. [Parameters/state](parameters-state.md#global-additive-float-modulation) owns the domain, combination, lifecycle, and custom-resource transition contract. Per-note expression remains a separate unsupported capability.
 
 Editor/application-originated parameter edits need typed begin/change/end gesture semantics, observation, and echo suppression. They must never expose unrestricted mutable processor access.
 
