@@ -184,7 +184,17 @@ runtime.apply_state_bytes(&component, &bytes, limits)?;
 
 An accepted active custom-state replacement freezes the pre-load DSP parameters and discards parameter automation until reactivation; desired replacement state remains saveable. Use complete loads for coupled non-realtime edits. Direct parameter edits and automation enforce descriptor domains only; activation rechecks product relationships and processors must handle legal automation safely with current resources.
 
-Parameter formatting/value mapping still needs a clear authoring contract with round-trip/domain tests.
+Attach an immutable, value-comparable `ParameterControlPolicy` to a descriptor when default linear mapping/plain text is insufficient:
+
+```rust,ignore
+let trim = ParameterDescriptor::float("trim", "Trim", 0.0, 1.0, 0.5)?
+    .with_control_policy(TrimControl { precision: 1 })?;
+let plain = trim.normalized_to_value(0.5)?; // Float(0.25)
+let mut text = String::new();
+trim.format_value(&plain, &mut text)?; // "25.0 %"
+```
+
+[TrimControl](../../examples/clap-conformance/src/trim_control.rs) is the executable example; [parameters/state](parameters-state.md#control-mapping-and-presentation) owns validation, rounding, configuration equality, and deployment limits. Policies run off the callback and never transform stored values or automation. CLAP shares policy text, not an arbitrary host-knob normalized taper.
 
 ## Sample representation
 

@@ -5,6 +5,10 @@
 //! state transactionally. Host event queues remain adapter-owned; normalized
 //! borrowed process events are validated here against the active schema.
 
+mod control;
+
+pub use control::{DefaultParameterControl, ParameterControlError, ParameterControlPolicy};
+
 use core::fmt;
 use std::{
     sync::Arc,
@@ -364,6 +368,7 @@ pub struct ParameterDescriptor {
     key: ParameterKey,
     name: String,
     kind: ParameterKind,
+    control: Option<control::ControlPolicy>,
 }
 
 impl ParameterDescriptor {
@@ -383,7 +388,12 @@ impl ParameterDescriptor {
         if name.trim().is_empty() {
             return Err(ParameterDefinitionError::EmptyName(key));
         }
-        let descriptor = Self { key, name, kind };
+        let descriptor = Self {
+            key,
+            name,
+            kind,
+            control: None,
+        };
         descriptor.validate()?;
         Ok(descriptor)
     }
@@ -514,12 +524,41 @@ impl ParameterDescriptor {
             .map(ChoiceIndex::new)
     }
 
+    /// Convert a fixed-width event value to a validated semantic control value.
+    ///
+    /// # Errors
+    ///
+    /// Rejects the wrong type, invalid domain, or unknown dense choice. This
+    /// control-side projection shares the schema's stable choice identity.
+    pub fn value_from_event(
+        &self,
+        value: ParameterEventValue,
+    ) -> Result<ParameterValue, ParameterValueError> {
+        self.validate_event_value(&value)?;
+        Ok(self.value_from_validated_event(value).value)
+    }
+
+    /// Resolve a typed control value to its fixed-width event projection.
+    ///
+    /// This may resolve stable choice text; use cached store projections on the
+    /// callback instead.
+    ///
+    /// # Errors
+    ///
+    /// Rejects the wrong type, invalid domain, or unknown stable choice.
+    pub fn event_from_value(
+        &self,
+        value: &ParameterValue,
+    ) -> Result<ParameterEventValue, ParameterValueError> {
+        Ok(self.canonical_value(value.clone())?.event_value())
+    }
+
     /// Validate this descriptor's complete domain and default.
     ///
     /// # Errors
     ///
-    /// Returns [`ParameterDefinitionError`] when a range, default, or choice
-    /// set violates the descriptor contract.
+    /// Returns [`ParameterDefinitionError`] when a range, default, choice set,
+    /// or control policy violates the descriptor contract.
     pub fn validate(&self) -> Result<(), ParameterDefinitionError> {
         match &self.kind {
             ParameterKind::Float {
@@ -587,7 +626,11 @@ impl ParameterDescriptor {
                 }
             }
         }
-        Ok(())
+        self.validate_control()
+            .map_err(|reason| ParameterDefinitionError::InvalidControlPolicy {
+                parameter: self.key.clone(),
+                reason,
+            })
     }
 
     /// Validate one proposed value against this descriptor.
@@ -796,6 +839,13 @@ pub enum ParameterDefinitionError {
         /// Unknown default identity.
         choice: ChoiceId,
     },
+    /// The control policy rejected this domain or its configuration.
+    InvalidControlPolicy {
+        /// Parameter whose policy was rejected.
+        parameter: ParameterKey,
+        /// Policy rejection reason.
+        reason: ParameterControlError,
+    },
     /// Two descriptors used one stable parameter key.
     DuplicateParameter(ParameterKey),
 }
@@ -835,6 +885,10 @@ impl fmt::Display for ParameterDefinitionError {
             Self::UnknownChoiceDefault { parameter, choice } => write!(
                 formatter,
                 "choice parameter {parameter} defaults to unknown option {choice}"
+            ),
+            Self::InvalidControlPolicy { parameter, reason } => write!(
+                formatter,
+                "parameter {parameter} has an invalid control policy: {reason}"
             ),
             Self::DuplicateParameter(key) => write!(formatter, "parameter key {key} is duplicated"),
         }

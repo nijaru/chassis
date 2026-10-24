@@ -84,6 +84,9 @@ unsafe impl GlobalAlloc for CountingAllocator {
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
 
+#[path = "../../../examples/clap-conformance/src/trim_control.rs"]
+mod trim_control;
+
 struct ProbeComponent {
     parameters: Vec<ParameterDescriptor>,
 }
@@ -93,7 +96,9 @@ impl Default for ProbeComponent {
         Self {
             parameters: vec![
                 ParameterDescriptor::float("trim", "Trim", 0.0, 1.0, 1.0)
-                    .expect("probe parameter is valid"),
+                    .expect("probe parameter is valid")
+                    .with_control_policy(trim_control::TrimControl { precision: 1 })
+                    .unwrap(),
                 ParameterDescriptor::integer("steps", "Steps", -4, 4, 0).unwrap(),
                 ParameterDescriptor::boolean("bypass", "Bypass", true).unwrap(),
                 ParameterDescriptor::choice(
@@ -535,6 +540,50 @@ fn exercise_raw_aliases(processor: &mut StartedPluginAudioProcessor<TestHostHand
     }
 }
 
+fn exercise_control_text(plugin: &mut PluginInstance<TestHostHandlers>) {
+    let handle = plugin.plugin_handle();
+    let params = handle.get_extension::<PluginParams>().unwrap();
+    for (id, plain, text, canonical_plain) in [
+        (7, 0.0, c"0.0 %", 0.0),
+        (7, 0.25, c"25.0 %", 0.25),
+        (7, 1.0, c"100.0 %", 1.0),
+        (8, -2.7, c"-2", -2.0),
+        (9, 0.99, c"0", 0.0),
+        (10, 0.99, c"Clean", 0.0),
+        (10, 1.99, c"Warm", 1.0),
+        (10, 2.0, c"Driven", 2.0),
+    ] {
+        let mut buffer = [0; 32];
+        assert_eq!(
+            params
+                .value_to_text(&handle, ClapId::new(id), plain, &mut buffer)
+                .unwrap(),
+            text.to_bytes()
+        );
+        assert_eq!(
+            params.text_to_value(&handle, ClapId::new(id), text),
+            Some(canonical_plain)
+        );
+    }
+    assert_eq!(
+        params.text_to_value(&handle, ClapId::new(8), c"-2.7"),
+        Some(-2.0)
+    );
+    assert_eq!(
+        params.text_to_value(&handle, ClapId::new(9), c"0.99"),
+        Some(0.0)
+    );
+    for text in [c"25", c"101 %", c"NaN %"] {
+        assert_eq!(params.text_to_value(&handle, ClapId::new(7), text), None);
+    }
+    let mut too_small = [0; 3];
+    assert!(
+        params
+            .value_to_text(&handle, ClapId::new(7), 0.25, &mut too_small)
+            .is_err()
+    );
+}
+
 #[test]
 fn full_adapter_process_path_is_allocation_free_at_event_bound_for_f32_and_f64() {
     REALTIME_LOG_CALLS.store(0, Ordering::Relaxed);
@@ -562,35 +611,11 @@ fn full_adapter_process_path_is_allocation_free_at_event_bound_for_f32_and_f64()
     )
     .expect("probe plugin instantiates");
 
-    let handle = plugin.plugin_handle();
-    let params = handle.get_extension::<PluginParams>().unwrap();
-    for (id, plain, text, normalized) in [
-        (8, -2.7, c"-2", -2.0),
-        (9, 0.99, c"0", 0.0),
-        (10, 0.99, c"Clean", 0.0),
-        (10, 1.99, c"Warm", 1.0),
-        (10, 2.0, c"Driven", 2.0),
-    ] {
-        let mut buffer = [0; 32];
-        assert_eq!(
-            params
-                .value_to_text(&handle, ClapId::new(id), plain, &mut buffer)
-                .unwrap(),
-            text.to_bytes()
-        );
-        assert_eq!(
-            params.text_to_value(&handle, ClapId::new(id), text),
-            Some(normalized)
-        );
-    }
-    assert_eq!(
-        params.text_to_value(&handle, ClapId::new(8), c"-2.7"),
-        Some(-2.0)
-    );
-    assert_eq!(
-        params.text_to_value(&handle, ClapId::new(9), c"0.99"),
-        Some(0.0)
-    );
+    exercise_control_text(&mut plugin);
+    let params = plugin
+        .plugin_handle()
+        .get_extension::<PluginParams>()
+        .unwrap();
     let flush_events = [
         ParamValueEvent::new(0, ClapId::new(8), Pckn::match_all(), -1.7),
         ParamValueEvent::new(0, ClapId::new(9), Pckn::match_all(), 1.0),

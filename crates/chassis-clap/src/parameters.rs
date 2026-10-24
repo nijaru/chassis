@@ -13,6 +13,7 @@ use clack_plugin::{
     utils::ClapId,
 };
 
+mod control;
 mod publication;
 mod state;
 
@@ -63,7 +64,7 @@ impl fmt::Display for ParameterMappingError {
             ),
             Self::ChoiceLabelsNotRepresentable(parameter) => write!(
                 formatter,
-                "choice parameter {parameter} requires distinct CLAP labels without surrounding whitespace or NUL"
+                "choice parameter {parameter} control text cannot round-trip through CLAP"
             ),
         }
     }
@@ -325,30 +326,24 @@ impl ClapStateProjection {
                         descriptor.key().as_str().to_owned(),
                     ));
                 }
-                ParameterKind::Choice { options, .. } if u32::try_from(options.len()).is_ok() => {
-                    if options.iter().enumerate().any(|(index, option)| {
-                        option.name().trim() != option.name()
-                            || option.name().contains('\0')
-                            || options[..index]
-                                .iter()
-                                .any(|previous| previous.name() == option.name())
-                    }) {
-                        return Err(ParameterMappingError::ChoiceLabelsNotRepresentable(
-                            descriptor.key().as_str().to_owned(),
-                        ));
-                    }
-                }
+                ParameterKind::Choice { options, .. } if u32::try_from(options.len()).is_ok() => {}
                 ParameterKind::Choice { .. } => {
                     return Err(ParameterMappingError::ChoiceCountNotRepresentable(
                         descriptor.key().as_str().to_owned(),
                     ));
                 }
             }
-            bindings.push(ClapParameterBinding {
+            let binding = ClapParameterBinding {
                 index: parameter_index,
                 id,
                 descriptor: descriptor.clone(),
-            });
+            };
+            if !binding.choice_text_representable() {
+                return Err(ParameterMappingError::ChoiceLabelsNotRepresentable(
+                    descriptor.key().as_str().to_owned(),
+                ));
+            }
+            bindings.push(binding);
         }
 
         for (key, _) in mappings {

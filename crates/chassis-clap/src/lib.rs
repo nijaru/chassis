@@ -11,7 +11,7 @@ mod parameters;
 mod process_audio;
 mod raw_audio;
 
-use core::{fmt::Write as _, marker::PhantomData, num::NonZeroU32};
+use core::{marker::PhantomData, num::NonZeroU32};
 use std::{
     io::{Read as _, Write as _},
     sync::{
@@ -25,7 +25,6 @@ use audio::{ClapAudioConfiguration, ClapProcessSlot};
 use chassis_runtime::{
     audio::PortDirection,
     automation::ParameterEvents,
-    parameters::ParameterKind,
     process::{ProcessConfig, ProcessContext, ProcessMode, TransportSnapshot},
     runtime::{Component, InstanceRuntime, Process as ChassisProcess, Processor},
     schema::ComponentSchema,
@@ -556,40 +555,16 @@ where
         else {
             return Err(core::fmt::Error);
         };
-        let value = binding
-            .normalize_host_plain(value)
-            .ok_or(core::fmt::Error)?;
-        if let ParameterKind::Choice { options, .. } = binding.descriptor().kind() {
-            // normalize_host_plain validated the range and applied CLAP's truncation.
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let index = value as usize;
-            let Some(option) = options.get(index) else {
-                return Err(core::fmt::Error);
-            };
-            return write!(writer, "{}", option.name());
-        }
-        if binding.process_value(value).is_none() {
-            return Err(core::fmt::Error);
-        }
-        write!(writer, "{value}")
+        binding.format_control(value, writer)
     }
 
     fn text_to_value(&self, param_id: ClapId, text: &std::ffi::CStr) -> Option<f64> {
-        let index = self
+        let binding = self
             .shared
             .bindings()
             .iter()
-            .position(|binding| binding.id() == param_id)?;
-        let binding = &self.shared.bindings()[index];
-        let text = text.to_str().ok()?.trim();
-        // Choice parameters primarily accept their option display names.
-        if let ParameterKind::Choice { options, .. } = binding.descriptor().kind() {
-            let plain = options.iter().position(|option| option.name() == text)?;
-            let plain = f64::from(u32::try_from(plain).ok()?);
-            return binding.process_value(plain).map(|_| plain);
-        }
-        let value = binding.normalize_host_plain(text.parse().ok()?)?;
-        binding.process_value(value).map(|_| value)
+            .find(|binding| binding.id() == param_id)?;
+        binding.parse_control(text.to_str().ok()?)
     }
 
     fn flush(&self, input: &InputEvents, _output: &mut OutputEvents) {

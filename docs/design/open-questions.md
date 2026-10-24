@@ -2,10 +2,6 @@
 
 This file owns unresolved decisions, not implemented inventories or a second roadmap. [Execution plan](../next-runtime-slice.md) owns next work; [validation](validation.md) owns evidence; [roadmap](../roadmap.md) owns deferred scope. All APIs and CHSS bytes remain pre-alpha.
 
-## Parameter authoring policy
-
-Typed plain-unit domains and basic CLAP scalar/text conversion exist; a shared normalized-control mapping does not. What semantic policy should own nonlinear mapping, units, formatting/parsing, display precision, stepped rounding, and meaningful round trips? DSP, editors, and deployment adapters must not maintain competing mappings. Keep stable choice identity independent of display names and backend indices.
-
 ## Modulation and event ordering
 
 Define modulation domain, timing, addressing, combination, and reset semantics separately from automation and persistent base state. Which capabilities preserve global/per-note expression and MIDI 2 information? Equal timestamps do not establish a cross-family causal order when the source has separate streams. An output sink must report target rejection rather than silently discard essential events.

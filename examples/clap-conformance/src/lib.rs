@@ -1,5 +1,7 @@
 //! Deterministic exported CLAP component used to qualify Chassis adapter semantics.
 
+mod trim_control;
+
 use core::convert::Infallible;
 
 use chassis_clap::{ClapComponent, F32AndF64, SingleComponentEntry, clack_export_entry};
@@ -33,7 +35,9 @@ impl ConformanceEffect {
         )
         .expect("choice parameter is valid");
         let trim = ParameterDescriptor::float("trim", "Trim", 0.0, 1.0, 0.5)
-            .expect("float parameter is valid");
+            .expect("float parameter is valid")
+            .with_control_policy(trim_control::TrimControl { precision: 1 })
+            .expect("trim control policy is valid");
         Self {
             parameters: vec![mode, trim],
         }

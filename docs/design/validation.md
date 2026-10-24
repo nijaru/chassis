@@ -163,7 +163,8 @@ Tests under `crates/chassis-clap/tests/` exercise the actual exported Chassis CL
 
 Current cases include:
 
-- `host_conformance.rs`: f32/f64 callback dispatch, stereo main + stereo sidechain, configured 64-event bound, accepted/rejected-callback allocation/deallocation counting and absence of realtime host logging, stepped conversion through display/flush/process, output constant masks, legal raw in-place audio, illegal partial-alias rejection, reactivation, latency callbacks, audio-thread transfer, repeated inactive instances;
+- `host_conformance.rs`: f32/f64 callback dispatch, stereo main + stereo sidechain, configured 64-event bound, accepted/rejected-callback allocation/deallocation counting and absence of realtime host logging, author-defined percent display/parsing and stepped conversion through display/flush/process, output constant masks, legal raw in-place audio, illegal partial-alias rejection, reactivation, latency callbacks, audio-thread transfer, repeated inactive instances;
+- `host_control_text.rs`: custom choice syntax/stable identity, multibyte buffer boundaries, embedded NUL rejection, and formatter errors swallowed by author code;
 - `exported_probe_reset.rs`: actual exported delay fixture reset clears history/positions without allocation and retains the activation delay;
 - `host_frame_bounds.rs`: activation frame extremes and over-bound rejection;
 - `host_activation_failure.rs`: product activation failure and same-instance retry, explicit descriptor feature preservation, and rejection of schemas whose event ports CLAP cannot yet project;
@@ -183,6 +184,7 @@ The format-independent proof is split by concern while exercising the same publi
 
 - `crates/chassis-runtime/tests/conformance.rs`: schema rejection, lifecycle, buffer relationships, process bounds/context, base parameters, sample-accurate automation, invalid events, generic non-flat buffer-source traversal, and rejection of structurally valid but unsupported audio configurations;
 - `crates/chassis-runtime/tests/automation_runtime.rs`: final typed endpoints retained after successful DSP, equal-offset last-value order, event-free carryover, block-local ramp continuation, canonical encoded state, subsequent control precedence, reactivation, and invalid-batch failure atomicity;
+- `crates/chassis-runtime/tests/parameter_control.rs`: nonlinear mapping, units/precision, extreme and constant numeric domains, distinct discrete/text rounding, full-width integer text, invalid policy outputs, writer failures, and policy-configuration schema drift;
 - `crates/chassis-runtime/tests/component_schema_runtime.rs`: one coherent schema snapshot, dense lookup, and schema-drift rejection;
 - `crates/chassis-runtime/tests/audio_endpoint_runtime.rs`: active/inactive port, direction, channel-range, and dense endpoint legality before product DSP;
 - `crates/chassis-runtime/tests/event_schema_runtime.rs` and `note_runtime.rs`: event-schema authority, dense note-port addressing, wildcard handling, and zero-audio note processing;

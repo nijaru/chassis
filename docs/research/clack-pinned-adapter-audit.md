@@ -94,7 +94,7 @@ CLAP deactivate                -> InstanceRuntime::deactivate
 CLAP audio ports               -> setup-built stable mapped ports/process slots
 CLAP process f32/f64           -> raw alias qualification -> safe views -> InstanceRuntime
 CLAP params                    -> typed metadata + bounded value-event normalization/publication
-CLAP state                     -> bounded CHSS save/load + transactional parameter publication
+CLAP state                     -> bounded CHSS save/load + coherent parameter/custom publication
 CLAP render                    -> ProcessMode::Realtime / ProcessMode::Offline
 CLAP latency                   -> activation snapshot + host change notification
 CLAP transport                 -> bounded borrowed transport snapshot
@@ -103,6 +103,14 @@ CLAP transport                 -> bounded borrowed transport snapshot
 The deterministic conformance export has audible sample-accurate `trim` automation, typed float/choice state, f32/f64 processing, and zero declared latency. A separate in-process delayed probe proves nonzero reported latency matches actual delayed audio sample-for-sample.
 
 Note/MIDI/event ports, GUI/editor APIs, and broad application/host infrastructure remain intentionally deferred until real clients require them.
+
+## Parameter text boundary — reviewed 2026-10-24
+
+At the same pin, `extensions/src/params/plugin.rs::ParamDisplayWriter` exposes remaining capacity excluding the terminator, but `write_str` copies only the available byte prefix and returns success. This can truncate within a UTF-8 code point; embedded NULs are not rejected.
+
+The adapter's `parameters/control.rs::HostTextWriter` rejects either condition before forwarding a chunk. The core semantic formatter tracks writer failures even if author policy ignores `fmt::Error`, so the callback cannot report a successful truncated conversion. Actual-entry tests cover multibyte boundary cuts, NULs, and ignored writer errors. No Clack source patch is needed for this control-thread wrapper.
+
+Parameter text delegates to descriptor policy without trimming custom syntax. Finite choice admission validates actual policy text against stable identity rather than banning raw labels independently. CLAP's stepped plain conversion still truncates before presentation; normalized framework controls do not redefine host plain automation. [Parameters/state](../design/parameters-state.md#control-mapping-and-presentation) owns these semantics.
 
 ## Failure containment and realtime evidence
 
@@ -116,7 +124,7 @@ Current mechanical evidence includes:
 - processor ownership can transfer to another audio thread without concurrent mutation;
 - current main + sidechain f32/f64 callback paths allocate/deallocate zero times at the configured event bound in the test harness;
 - frame-bound extremes are accepted and over-bound process blocks rejected;
-- active state save linearizes to one completed scalar generation;
+- active state save linearizes to one completed parameter/custom generation;
 - nonzero latency metadata matches an actual delayed impulse;
 - state-rescan and latency host callbacks tolerate immediate plugin extension re-entry.
 

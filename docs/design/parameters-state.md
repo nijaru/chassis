@@ -1,6 +1,6 @@
 # Parameters, Automation, and State
 
-Status: typed parameter schema/store, dense realtime identity, borrowed sample-accurate automation, durable `InstanceRuntime` ownership, complete semantic state replacement, CLAP float/integer/boolean/choice projection, and generation-checked complete CLAP state publication are implemented. Public API and the CHSS wire format remain pre-alpha.
+Status: typed parameter schema/store, author-defined control mapping/text policy, dense realtime identity, borrowed sample-accurate automation, durable `InstanceRuntime` ownership, complete semantic state replacement, CLAP float/integer/boolean/choice projection, and generation-checked complete CLAP state publication are implemented. Public API and the CHSS wire format remain pre-alpha.
 
 ## Identity
 
@@ -14,7 +14,7 @@ ParameterKey (persistent) -> ParameterIndex (runtime only)
 
 Adapters resolve backend IDs to dense indices during setup. `ParameterIndex` is never serialized.
 
-Choice option identities are stable semantic IDs for control/persistence. Setup resolves them to parameter-local `ChoiceIndex` values for events; callbacks validate/index options without scanning strings. These indices are never serialized. CLAP uses stepped plain option indices, advertises enum metadata, and rejects labels that cannot round-trip unambiguously. Per [CLAP's stepped contract](https://github.com/free-audio/clap/blob/main/include/clap/ext/params.h), in-range host doubles truncate toward zero consistently in process/flush/display conversion. Typed semantic stores and decoded state remain strict; host quantization does not weaken them.
+Choice option identities are stable semantic IDs for control/persistence. Setup resolves them to parameter-local `ChoiceIndex` values for events; callbacks validate/index options without scanning strings. These indices are never serialized. CLAP uses stepped plain option indices, advertises enum metadata, and requires policy-produced choice text to round-trip unambiguously. Per [CLAP's stepped contract](https://github.com/free-audio/clap/blob/main/include/clap/ext/params.h), in-range host doubles truncate toward zero consistently in process/flush/display conversion. Typed semantic stores and decoded state remain strict; host quantization does not weaken them.
 
 ## Four parameter concepts
 
@@ -30,6 +30,25 @@ Base values and automation are implemented. Modulation and its combination contr
 `ParameterEvents` and trajectory cursors borrow fixed-width event slices, not choice text or another persistent state store. The accepted event count therefore bounds shape-validation work independently of identifier length.
 
 Explicit host ramps are reproduced without automatic extra smoothing. Smoothing remains product DSP policy unless real clients prove a common helper.
+
+## Control mapping and presentation
+
+`ParameterDescriptor` owns an immutable `ParameterControlPolicy` configuration for normalized control mapping, units, precision, formatting, and parsing. These are non-realtime setup/control hooks, not DSP transformations. Normalized positions are finite `0..=1` coordinates for framework/editor controls; stores, automation, and state retain typed plain-unit values.
+
+Use the descriptor's `value_to_normalized`, `normalized_to_value`, `format_value`, and `parse_value` methods rather than invoking policy hooks directly. They validate typed inputs/results and normalized bounds without mutating a store. Schema admission checks policy/domain compatibility and basic endpoint/default mapping usability; it does not prove arbitrary inverses or monotonicity. Policies must be deterministic and immutable. Configuration equality covers every behavior-affecting setting and participates in frozen-schema drift detection, independently of allocation addresses. Policy types/configuration are not persistence identities.
+
+The implicit `DefaultParameterControl` provides:
+- linear float mapping, including finite extreme/subnormal ranges;
+- nearest-step integer/choice mapping with ties toward the higher step, and boolean switching at `0.5`;
+- constant domains mapped to zero, with every valid normalized coordinate mapping back to that constant;
+- exact numeric endpoints, subject to the finite resolution of interior `f64` coordinates—not every wide integer or float can round-trip through a normalized coordinate;
+- numeric display, `0`/`1` booleans, and choice names. Its parser trims outer whitespace and rejects ambiguous choice names.
+
+Default numeric stepped **text** truncates toward zero after checking the unrounded domain, rather than using normalized-control rounding. Exact integer spellings preserve the whole `i64` range; fractional/scientific fallback requires magnitude below `2^53` to avoid accepting overflowing integer spellings through floating-point rounding. Custom policies own their syntax, units, precision, and supported lossy display round trips; parsers receive the original text. There is no mandatory unit registry or curve catalog.
+
+Formatting propagates writer failure even if a policy swallows `fmt::Error`. Callers must discard partial output on failure. CLAP additionally rejects embedded NULs and insufficient buffer capacity rather than accepting Clack's silently truncated output. Choice admission checks each option's actual formatted text is nonempty, NUL-free, and parses to the original stable identity; custom policy may disambiguate or replace otherwise unusable raw labels.
+
+CLAP retains its plain-unit ranges and stepped-double truncation in process/flush/display. Its text callbacks delegate to this same policy, but CLAP offers no hook to project an arbitrary framework normalized taper into a host's generic knob. Do not remap host automation or persisted values to imitate one. The [conformance policy](../../examples/clap-conformance/src/trim_control.rs) demonstrates percent display and a square-law framework control while DSP/state remain linear gain.
 
 ## Base-state authority
 

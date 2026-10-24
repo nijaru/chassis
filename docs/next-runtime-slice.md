@@ -38,17 +38,19 @@ Actual-entry resource-backed tests exercise default save, migration, deferred re
 
 Start with reactivation-based resource replacement. Bounded prepared adoption, coalescing, stale-result rejection, deferred reclamation, cancellation, and unload fencing need a concrete client before choosing a queue or executor. No hidden global executor or last-owner `Arc` destruction on the callback.
 
-## Next — parameter authoring policy
+## Closed — parameter authoring policy
 
-Descriptors validate typed plain-unit domains. CLAP supplies scalar plain-value conversion and basic numeric/choice text; a shared normalized-control mapping and author-defined formatting/parsing policy are not implemented.
+Descriptors now own immutable normalized-control and formatting/parsing policy. Core and actual-entry tests cover nonlinear mapping, units/precision, extreme domains, discrete rounding, stable-choice round trips, configuration drift, and output-buffer rejection. CLAP delegates text without reinterpreting product syntax; its plain automation stays unchanged. A host's generic normalized knob cannot inherit an arbitrary framework taper through CLAP.
 
-Specify domain mapping, units, precision, parsing, and stepped/choice round trips at the semantic owner. Migrate deployments to that policy and prove nonlinear mapping, endpoints, invalid input, and supported round trips through the actual adapter. Dense callback values remain separate from display/control mapping. Do not add macros or a crate before the ordinary API is coherent.
+[Parameters/state](design/parameters-state.md#control-mapping-and-presentation) owns this contract; [validation](design/validation.md) owns revision-scoped evidence. No macros, new crate, or unit/curve catalog is needed.
+
+## Next — modulation
+
+Define modulation separately from base state/automation, with explicit domain, timing, addressing, combination, ordering, and reset policy. Deliver the contract with its deployment projection and a focused fixture; preserve information or reject unsupported capabilities rather than overwrite persistent values.
 
 ## Following audio contracts
 
 Deliver each contract with its deployment projection and focused fixture:
-
-- modulation separate from base state/automation, with explicit timing and combination policy;
 - tail separate from latency;
 - host bypass identity/timing and product DSP policy, not a generic dry/wet control;
 - note-port/input CLAP projection and a non-effect export with honest descriptor features;
