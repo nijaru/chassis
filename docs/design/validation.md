@@ -51,6 +51,26 @@ These gates do not establish production DAW behavior or representative performan
 
 Hosted workflows and local results are separate evidence. Before publication, hosted jobs were rejected and local checks supplied the interim record. Consult the actual workflow run for the revision under review before claiming Linux/macOS/Windows coverage. The dated validator, host, and benchmark results below are baselines, not automatic qualification of later commits.
 
+### Complete CLAP custom-state projection — 2026-10-24
+
+At code revision `75202f9` on macOS 26.6.2 arm64 with stable Rust 1.99.1:
+
+- workspace tests: 189 passed; formatting, strict all-feature/all-target Clippy, warning-denied rustdoc, local Markdown links, and release workspace build passed;
+- CI-baseline Rust 1.98.0 workspace tests and strict Clippy passed locally;
+- `cargo deny check` 0.19.0 passed with unused-license-allowance warnings; `cargo machete` 0.9.1 found no unused dependencies. Local tools differ from CI's pins;
+- actual-entry resource-backed state tests cover original custom defaults, component migration/validation, failure-atomic rejection, immediate restart notification, deferred processing, active flush, reset/repeated loads/reversion (including before callback observation), save/reopen, and resource preparation on reactivation;
+- 1,000 pending resource-backed f32 callbacks with parameter input and reset measured zero allocations/deallocations, no retargeting or destruction of old DSP resources, and unchanged saveable desired state;
+- a load during paused DSP saves the accepted complete replacement, defeats old endpoint publication, and retains the last old block's local parameter baseline until reactivation;
+- production-helper tests cover custom-epoch gating, scalar-write epoch preservation, and complete-state rejection at terminal generation exhaustion; Loom models cover coherent scalar/epoch snapshots and existing bounded/CAS ordering;
+- deployment admission tests preserve original defaults, reject incompatible retained policy/schema drift, and reject defaults outside the bounded wire budget;
+- rebuilt/package-qualified conformance: 35 passed / 0 failed / 9 skipped; delayed probe: 21 passed / 0 failed / 23 skipped. Pinned `clap-validator` 0.4.1 (`b2f1d9b79b1d264a5747f46707d72b1aa40a02ef`) passed both five-second, two-worker fuzz runs.
+
+Actual-entry regressions failed when bypassing the custom-epoch guard, forwarding withheld trajectories, or reacquiring a newer publication token after DSP. Design review exposed the contention case: an unreadable baseline also withholds automation for that block, without permanently latching the resource gate. Custom ownership and reclamation remain off-callback; this does not qualify prepared resource adoption or background tasks.
+
+Hosted [Rust CI](https://github.com/nijaru/chassis/actions/runs/40064059445) and [CLAP Conformance](https://github.com/nijaru/chassis/actions/runs/40064059500) succeeded at `75202f9`, with every Linux/macOS/Windows job passing, including CI's pinned dependency tools and packaged validator/fuzz matrix.
+
+No production DAW scenario, representative performance benchmark, or new Miri run was performed. Raw sample-reference construction and CHSS bytes are unchanged; arbitrary boxed errors and DSP panics remain outside realtime qualification.
+
 ### Component-owned complete state — 2026-10-23
 
 At code revision `7620284` on macOS 26.6.2 arm64 with stable Rust 1.99.1:
@@ -303,8 +323,8 @@ Retain golden fixtures for every released schema. The current CHSS v1 envelope r
 
 | Host / harness | Platform | Status | Evidence |
 | --- | --- | --- | --- |
-| Clack in-process host harness | Linux/macOS/Windows CI | passed at `7620284`; same revision macOS local | accepted/rejected process allocation and host logging, f32/f64, component state policy, lifecycle, active state save, latency, re-entrancy, panic containment |
-| `clap-validator` 0.4.1 | Linux/macOS/Windows CI | passed at `7620284`; same revision macOS local | conformance 35 pass / 0 fail / 9 skip; delayed probe 21 / 0 / 23; both bounded fuzz runs |
+| Clack in-process host harness | Linux/macOS/Windows CI | passed at `75202f9`; same revision macOS local | accepted/rejected process allocation and host logging, f32/f64, complete custom-state policy/publication, deferred resource restart, lifecycle, active state save, latency, re-entrancy, panic containment |
+| `clap-validator` 0.4.1 | Linux/macOS/Windows CI | passed at `75202f9`; same revision macOS local | conformance 35 pass / 0 fail / 9 skip; delayed probe 21 / 0 / 23; both bounded fuzz runs |
 | REAPER 7.79 | macOS arm64 (M3 Max, 48 kHz) | 2026-09-06 baseline | 2026-09-06 headless `-renderproject` qualification: scan + instantiate (FX browser, 5 params enumerated), square `trim` automation render sample-exact against the deterministic reference (value changes land at exact sample offsets 24000/36000), injected-CHSS state load render sample-exact (trim 0.25/0.75; blobs byte-identical to a REAPER-saved blob at 0.5 and validated by the real `StateDocument` decoder), project save while the transport rolled through automation with coherent base state (trim=0.5, not torn) and sample-exact automation replay after reload, no-FX baseline render bit-identical to the source fixture, and PDC alignment: a wet track carrying the exported 64-sample delayed probe (`examples/clap-delayed-probe`) mixes against a dry track as exactly `2*x[i]` for all 48,000 frames — REAPER honored the CLAP latency extension and aligned the delayed DSP sample-exact. Host-quirk recorded: `TrackFX_SetParamNormalized` on an inactive CLAP reports success but delivers no change; the differential shows FabFilter Pro-Q 4 (CLAP) behaving identically while ReaEQ (VST) applies immediately, so this is REAPER's inactive-CLAP delivery behavior, not an adapter defect — the automation path (process events) is sample-exact. |
 | Bitwig | — | not run | production-host re-entrancy confirmation remains useful when available |
 
