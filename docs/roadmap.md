@@ -9,20 +9,19 @@ This roadmap records unfinished capabilities, not a requirement to build every l
 - One format-independent schema/instance/processor model, including component-owned state defaults/validation/migrations, resource-safe deferred reactivation, and activation-scoped audio I/O.
 - Direct runtime fixtures for effects, event-only components, a note-driven instrument, multiple outputs, sidechains/layout switching, and dynamic metadata.
 - Complete callback topology validation, alias-classified CLAP buffers, f32/f64 processing, typed parameters/dense choice events, sample-accurate automation, explicit custom-state reactivation, latency/restart, process modes, and bounded scalar telemetry.
-- Native CLAP deployment for fixed mapped audio configurations, scalar parameters/state, automation, render mode, and latency.
+- Native CLAP deployment for fixed mapped audio configurations, typed parameters, coherent complete state with deferred resource reactivation, automation, render mode, and latency.
 - Rust/concurrency/allocation tests, packaged CLAP validator/fuzz gates, and dated host/performance baselines.
 
-Core capability is not deployment support. CLAP note/event/custom-state projection remains incomplete; VST3/AU, editors, devices, graphs, hosting, and media integrations are not implemented. [Validation](design/validation.md) owns exact evidence and its revision limits.
+Core capability is not deployment support. CLAP note/event projection remains incomplete; VST3/AU, editors, devices, graphs, hosting, and media integrations are not implemented. [Validation](design/validation.md) owns exact evidence and its revision limits.
 
 ## Near-term semantic and deployment work
 
-1. Complete coherent CLAP custom-state projection across inactive/active lifetimes. Core component-owned policy and the resource-backed deferred-reactivation proof are implemented; the scalar-only bridge still rejects custom fields/defaults.
-2. Unify author-defined parameter domain mapping/formatting/parsing and adapter conversion.
-3. Define modulation independently from automation/base state, then tail and host-bypass contracts without prescribing one DSP algorithm.
-4. Export a non-effect fixture: note ports/input, honest descriptor features, then bounded event output and expression/MIDI families.
-5. Add prepared adoption/reclamation and background-work lifecycle only when the resource-backed client needs more than reactivation.
+1. Unify author-defined parameter domain mapping/formatting/parsing and adapter conversion.
+2. Define modulation independently from automation/base state, then tail and host-bypass contracts without prescribing one DSP algorithm.
+3. Export a non-effect fixture: note ports/input, honest descriptor features, then bounded event output and expression/MIDI families.
+4. Add prepared adoption/reclamation and background-work lifecycle only when the resource-backed client needs more than reactivation.
 
-Automation completion has one runtime owner; CLAP synchronizes/publishes dense values without replaying events or scanning stable choice identities on the callback. A reviewed local Clack plugin patch returns rejected-process failure without synchronous reporting. Unsupported CLAP custom fields/event ports remain explicitly rejected.
+Automation completion has one runtime owner; CLAP synchronizes/publishes dense values without replaying events or scanning stable choice identities on the callback. A reviewed local Clack plugin patch returns rejected-process failure without synchronous reporting. Unsupported CLAP event ports remain explicitly rejected.
 
 These are independently deliverable contracts. Do not turn “core closure” into a blanket freeze or defer all deployment feedback until after a large core redesign.
 

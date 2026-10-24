@@ -30,15 +30,15 @@ The roadmap review also found remaining stable-choice scans in CLAP synchronizat
 
 A resource-backed table fixture couples parameter addressing to custom data and processes before restart. The first accepted active custom-state change freezes the pre-load DSP parameter projection. Incoming parameter automation remains validated but is discarded, with no endpoint completion, until deactivation/reactivation. Later loads and control edits affect saveable desired state only. Reset and state reversion cannot unfreeze the old resources. This deliberately sacrifices parameter automation while a host defers restart; retaining it would require a qualified resource-compatibility policy.
 
-CLAP scalar load and activation now use component validation/migrations and reject schema drift. Every factory/main-thread/activation/load admission rejects custom defaults rather than silently losing them. Complete custom-state projection remains unsupported.
+## Closed — complete CLAP state projection
 
-## Next — complete CLAP state projection
+CLAP now projects one coherent parameter/custom generation across shared/main-thread and active lifetimes. Component policy admits defaults, migrated loads, and activation snapshots; original defaults must also fit deployment wire bounds. Custom ownership stays off the callback. A resource epoch gates old DSP parameters/automation until reactivation, including reset, repeated loads, and reversion. A block already in flight may finish, but stale endpoint publication cannot overwrite desired state.
 
-Project one coherent parameter/custom semantic generation across inactive and active CLAP lifetimes. Never combine independently sampled scalar/custom snapshots or let an old processor publish endpoints into a newly accepted complete generation. Exercise the resource-backed transition through the actual plugin entry, including default save, migrated load, deferred restart, save/reopen, and rejected candidates. The scalar bridge is not yet this contract.
+Actual-entry resource-backed tests exercise default save, migration, deferred restart, zero-allocation pending callbacks, rejection, save/reopen, and a load racing DSP completion. [Parameters/state](design/parameters-state.md#complete-clap-state-publication) owns the transition and contention contract; [validation](design/validation.md) owns revision-scoped qualification.
 
 Start with reactivation-based resource replacement. Bounded prepared adoption, coalescing, stale-result rejection, deferred reclamation, cancellation, and unload fencing need a concrete client before choosing a queue or executor. No hidden global executor or last-owner `Arc` destruction on the callback.
 
-## Parameter authoring policy
+## Next — parameter authoring policy
 
 Descriptors validate typed plain-unit domains. CLAP supplies scalar plain-value conversion and basic numeric/choice text; a shared normalized-control mapping and author-defined formatting/parsing policy are not implemented.
 

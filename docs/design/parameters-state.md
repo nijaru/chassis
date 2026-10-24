@@ -1,6 +1,6 @@
 # Parameters, Automation, and State
 
-Status: typed parameter schema/store, dense realtime identity, borrowed sample-accurate automation, durable `InstanceRuntime` ownership, complete semantic state replacement, CLAP float/integer/boolean/choice projection, and generation-checked scalar publication are implemented. Public API and the CHSS wire format remain pre-alpha.
+Status: typed parameter schema/store, dense realtime identity, borrowed sample-accurate automation, durable `InstanceRuntime` ownership, complete semantic state replacement, CLAP float/integer/boolean/choice projection, and generation-checked complete CLAP state publication are implemented. Public API and the CHSS wire format remain pre-alpha.
 
 ## Identity
 
@@ -35,7 +35,7 @@ Explicit host ramps are reproduced without automatic extra smoothing. Smoothing 
 
 `InstanceRuntime<P>` owns the canonical format-independent `ParameterStore` for a retained core instance. Base values survive processor deactivate/reactivate cycles.
 
-CLAP host lifetimes split long-lived shared/main-thread objects from the active audio processor. `chassis-clap` therefore keeps an adapter-local synchronized scalar projection and synchronizes it into the active `InstanceRuntime`. This projection exists because of deployment lifetime, not as permission for a second semantic authority.
+CLAP host lifetimes split long-lived shared/main-thread objects from the active audio processor. `chassis-clap` therefore keeps one adapter-local desired parameter/custom-state projection. Activation admits a coherent complete snapshot into a fresh `InstanceRuntime`; subsequent scalar synchronization is allowed only while its custom-resource generation matches. This projection exists because of deployment lifetime, not as permission for a second semantic authority.
 
 Outside the pending custom-state transition described below, a successful process call retains each parameter's final automation point in `InstanceRuntime`'s durable store. Untouched parameters remain unchanged; equal-offset source order determines the last value. Validation failure or a DSP panic commits no endpoints. Direct clients therefore carry values into event-free blocks, state export, and reactivation without replaying events themselves. Subsequent control edits use exclusive runtime access and override that completion.
 
@@ -43,12 +43,12 @@ Linear points are block-local endpoints, not future ramp targets. A ramp spannin
 
 Choice values in the store share schema-owned IDs, including values accepted from control edits or decoded state. Each stored choice also caches its parameter-local dense index at the sole mutation boundary. `get_event_value` and `set_event_value` project durable base values through fixed-width payloads without scanning stable identities; CLAP uses them for synchronization and completed publication, and flush keeps already-normalized dense values. Control/state lookup remains off-thread. Realtime choice replacement/drop is safe because an event never owns the last ID allocation reference. Serialization still writes stable choice IDs, never the cached index.
 
-## Automation publication
+## Complete CLAP state publication
 
 Realtime automation endpoint publication follows:
 
 ```text
-synchronize the runtime from completed generation G
+synchronize scalars and the activation's custom epoch from completed generation G
  -> process the block and retain endpoints in the runtime
  -> project its completed values into preallocated scalar scratch
  -> attempt publication from G
@@ -57,11 +57,15 @@ synchronize the runtime from completed generation G
 
 A newer control edit or state load advances the generation and causes stale realtime completion to be discarded. The audio thread never waits for control ownership.
 
-The current scalar protocol uses even completed generations and odd in-progress writer tokens. Realtime writer acquisition is one-shot; realtime snapshots use a fixed retry bound. Non-realtime control/state operations may wait for an in-progress writer.
+The protocol uses even completed generations and odd in-progress writer tokens. Scalar values and a fixed-width custom epoch participate in the same transaction. Every accepted custom payload change assigns its completed generation as the new epoch, including reversion to earlier contents; scalar-only writes preserve it. Realtime writer acquisition is one-shot; realtime snapshots use a fixed retry bound. Non-realtime control/state operations may wait for an in-progress writer.
 
-The adapter caches the generation its whole local store represents. Equal completed generations permit skipping an unchanged snapshot. The publication token comes from start-of-block synchronization, never from a new snapshot after DSP. Local completion invalidates that cache; a successful CAS establishes the new generation, while rejection leaves no token. End-of-block synchronization restores the whole newer control generation when readable, or retries next block after contention.
+Custom entries stay behind a control-only ownership mutex. Complete load prepares and validates a candidate before taking that lock, publishes its scalars/epoch, then swaps custom ownership without a fallible step. Save and activation hold the same lock while capturing a completed scalar/epoch snapshot and copying custom entries. Encoding, stream I/O, host calls, and retired payload destruction occur after unlocking. The callback never takes this lock or adopts/reclaims custom payloads.
 
-This removes the separate pending-notification flag. Snapshot/CAS payload ordering remains Release/Acquire and is Loom-qualified. Active save still reads the coherent shared projection, not partially completed local values.
+The adapter caches the generation its whole local store represents. Equal completed generations permit skipping an unchanged snapshot. The publication token comes from start-of-block synchronization, never from a new snapshot after DSP. Local completion invalidates that cache; a successful CAS establishes the new generation, while rejection leaves no token. End-of-block synchronization restores the whole newer scalar generation only if its custom epoch still matches this activation. Snapshot/CAS payload ordering remains Release/Acquire and is Loom-qualified. Active save reads the coherent desired projection, not partially completed local values.
+
+An epoch mismatch is checked before mutating runtime parameters and latches a resource-transition gate until deactivation. Subsequent controls/loads change saveable desired state only; reset and custom reversion cannot reopen the gate. DSP keeps old resources and their parameter projection, with parameter automation withheld and no endpoint publication. A block already in flight when a load publishes may finish its old-generation DSP and retain local endpoints; that last old block establishes the frozen DSP baseline, but its stale CAS cannot overwrite desired state.
+
+If a bounded snapshot cannot establish a matching baseline, withhold parameter trajectories and completion for that block too: a custom load may have completed immediately before another writer acquired ownership. Contention alone does not latch the gate. Original event domains, shape, and bounds are checked before withholding events. Parameter-only changes remain live before a custom transition, and processor-originated restart requests do not impose this gate.
 
 `u64::MAX - 1` is the terminal completed generation. New writes fail rather than wrap into ABA ambiguity; coherent reads remain valid.
 
@@ -103,12 +107,13 @@ Migration/decoding are non-realtime operations. Retain fixtures for every releas
 
 ## Active state save
 
-The CLAP scalar save contract is now locally executable:
+The complete CLAP save contract is locally executable:
 
 - audio processing never waits for state save;
-- the non-realtime save path obtains one coherent **completed** scalar generation;
+- the non-realtime save path obtains one coherent **completed** parameter/custom generation;
 - a save racing a process block may linearize immediately before or immediately after the block's final endpoint publication;
-- save cannot accept a mixed cross-parameter generation;
+- save cannot mix parameter values or independently sampled parameter/custom generations;
+- accepted desired state remains saveable while old resources await reactivation;
 - a newer control edit/state load defeats stale realtime publication;
 - terminal generation exhaustion still permits coherent save of the final generation.
 
@@ -136,12 +141,11 @@ Realtime-originated host notifications require a narrow bounded capability; prod
 
 Before freezing parameter/state APIs:
 
-- preserve coherent custom/scalar state generations through CLAP rather than extending its scalar-only projection implicitly; component migration/validation already applies to scalar loads;
 - refresh native automated-render and active-save scenarios against changed exported artifacts;
 - define/qualify product-originated gesture and echo semantics;
 - add cross-format state/automation round trips once VST3/AU projections exist;
 - freeze CHSS v1 only after released-product fixtures and cross-format evidence justify compatibility;
-- do not generalize the CLAP scalar publication helper into core until typed non-scalar publication/reclamation has a concrete client need.
+- do not generalize the adapter publication helper into core or add callback resource adoption until typed publication/reclamation has a concrete client need.
 
 ## Authoring direction
 

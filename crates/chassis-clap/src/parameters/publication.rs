@@ -13,12 +13,21 @@ pub(super) enum PublicationError {
     InvalidValueCount,
 }
 
-pub(super) struct ScalarPublication {
-    values: Vec<AtomicU64>,
-    generation: AtomicU64,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Snapshot {
+    pub generation: u64,
+    pub custom_generation: u64,
 }
 
-impl ScalarPublication {
+// Custom payloads stay behind a control-only mutex. The fixed-width epoch joins
+// the scalar transaction without adopting or reclaiming objects on RT.
+pub(super) struct StatePublication {
+    values: Vec<AtomicU64>,
+    generation: AtomicU64,
+    custom_generation: AtomicU64,
+}
+
+impl StatePublication {
     pub(super) fn new(initial_values: &[f64]) -> Self {
         Self {
             values: initial_values
@@ -26,6 +35,7 @@ impl ScalarPublication {
                 .map(|value| AtomicU64::new(value.to_bits()))
                 .collect(),
             generation: AtomicU64::new(0),
+            custom_generation: AtomicU64::new(0),
         }
     }
 
@@ -90,7 +100,11 @@ impl ScalarPublication {
         true
     }
 
-    pub(super) fn publish_values_control(&self, values: &[f64]) -> Result<(), PublicationError> {
+    pub(super) fn publish_values_control(
+        &self,
+        values: &[f64],
+        custom_changed: bool,
+    ) -> Result<(), PublicationError> {
         if values.len() != self.values.len() {
             return Err(PublicationError::InvalidValueCount);
         }
@@ -105,6 +119,10 @@ impl ScalarPublication {
             };
             for (slot, value) in self.values.iter().zip(values) {
                 slot.store(value.to_bits(), Ordering::Release);
+            }
+            if custom_changed {
+                // Reversion must not make an old activation current again.
+                self.custom_generation.store(completed, Ordering::Release);
             }
             self.finish_write(completed);
             return Ok(());
@@ -125,7 +143,7 @@ impl ScalarPublication {
         true
     }
 
-    pub(super) fn try_snapshot_into(&self, output: &mut [f64]) -> Option<u64> {
+    pub(super) fn try_snapshot_into(&self, output: &mut [f64]) -> Option<Snapshot> {
         if output.len() != self.values.len() {
             return None;
         }
@@ -138,9 +156,13 @@ impl ScalarPublication {
             for (slot, value) in self.values.iter().zip(output.iter_mut()) {
                 *value = f64::from_bits(slot.load(Ordering::Acquire));
             }
+            let custom_generation = self.custom_generation.load(Ordering::Acquire);
             let end = self.generation.load(Ordering::Acquire);
             if start == end && end.is_multiple_of(2) {
-                return Some(end);
+                return Some(Snapshot {
+                    generation: end,
+                    custom_generation,
+                });
             }
         }
         None
@@ -149,7 +171,7 @@ impl ScalarPublication {
     pub(super) fn snapshot_control_into(
         &self,
         output: &mut [f64],
-    ) -> Result<u64, PublicationError> {
+    ) -> Result<Snapshot, PublicationError> {
         if output.len() != self.values.len() {
             return Err(PublicationError::InvalidValueCount);
         }
@@ -173,25 +195,25 @@ mod tests {
 
     #[test]
     fn stale_generation_cannot_publish_after_control_write() {
-        let publication = ScalarPublication::new(&[0.5, 0.0]);
+        let publication = StatePublication::new(&[0.5, 0.0]);
         let mut snapshot = [0.0; 2];
         let generation = publication
             .try_snapshot_into(&mut snapshot)
             .expect("initial snapshot is coherent");
 
         publication
-            .publish_values_control(&[0.5, 4.0])
+            .publish_values_control(&[0.5, 4.0], false)
             .expect("control publication succeeds");
         snapshot[0] = 0.25;
 
-        assert!(!publication.try_publish_values_from(generation, &snapshot));
+        assert!(!publication.try_publish_values_from(generation.generation, &snapshot));
         assert_eq!(publication.value(0).to_bits(), 0.5_f64.to_bits());
         assert_eq!(publication.value(1).to_bits(), 4.0_f64.to_bits());
     }
 
     #[test]
     fn realtime_attempts_are_bounded_while_a_writer_is_active() {
-        let publication = ScalarPublication::new(&[0.5]);
+        let publication = StatePublication::new(&[0.5]);
         publication.generation.store(1, Ordering::Release);
         let mut snapshot = [0.0];
 
@@ -201,27 +223,28 @@ mod tests {
 
     #[test]
     fn control_snapshot_after_realtime_publication_observes_completed_generation() {
-        let publication = ScalarPublication::new(&[0.5, 0.0]);
+        let publication = StatePublication::new(&[0.5, 0.0]);
         let mut realtime = [0.0; 2];
         let generation = publication
             .try_snapshot_into(&mut realtime)
             .expect("initial realtime snapshot is coherent");
         realtime.copy_from_slice(&[0.25, 4.0]);
-        assert!(publication.try_publish_values_from(generation, &realtime));
+        assert!(publication.try_publish_values_from(generation.generation, &realtime));
 
         let mut saved = [0.0; 2];
         let saved_generation = publication
             .snapshot_control_into(&mut saved)
             .expect("control save obtains a coherent completed generation");
 
-        assert_eq!(saved_generation, generation + 2);
+        assert_eq!(saved_generation.generation, generation.generation + 2);
+        assert_eq!(saved_generation.custom_generation, 0);
         assert_eq!(saved[0].to_bits(), 0.25_f64.to_bits());
         assert_eq!(saved[1].to_bits(), 4.0_f64.to_bits());
     }
 
     #[test]
     fn control_snapshot_waits_out_an_in_progress_multi_value_write() {
-        let publication = Arc::new(ScalarPublication::new(&[0.0, 0.0]));
+        let publication = Arc::new(StatePublication::new(&[0.0, 0.0]));
         let completed = publication
             .try_begin_write(0)
             .expect("test writer acquires generation zero");
@@ -252,14 +275,14 @@ mod tests {
         release_writer.wait();
 
         let (generation, saved) = reader.join().expect("snapshot thread joins");
-        assert_eq!(generation, completed);
+        assert_eq!(generation.generation, completed);
         assert_eq!(saved[0].to_bits(), 1.0_f64.to_bits());
         assert_eq!(saved[1].to_bits(), 1.0_f64.to_bits());
     }
 
     #[test]
     fn generation_exhaustion_is_terminal_instead_of_wrapping() {
-        let publication = ScalarPublication::new(&[0.5]);
+        let publication = StatePublication::new(&[0.5]);
         publication
             .generation
             .store(LAST_STABLE_GENERATION - 2, Ordering::Release);
@@ -271,25 +294,28 @@ mod tests {
         );
         assert!(!publication.try_publish_value(0, 0.25));
         assert_eq!(
-            publication.publish_values_control(&[0.25]),
+            publication.publish_values_control(&[0.25], false),
             Err(PublicationError::GenerationExhausted)
         );
 
         let mut snapshot = [0.0];
         assert_eq!(
             publication.try_snapshot_into(&mut snapshot),
-            Some(LAST_STABLE_GENERATION)
+            Some(Snapshot {
+                generation: LAST_STABLE_GENERATION,
+                custom_generation: 0
+            })
         );
         assert_eq!(snapshot[0].to_bits(), 0.75_f64.to_bits());
     }
 
     #[test]
     fn rejected_terminal_completion_invalidates_the_store_cache() {
-        use super::super::ClapParameterState;
+        use super::super::ClapStateProjection;
         use chassis_runtime::parameters::{ParameterDescriptor, ParameterStore, ParameterValue};
 
         let descriptors = [ParameterDescriptor::float("gain", "Gain", 0.0, 1.0, 0.5).unwrap()];
-        let state = ClapParameterState::new(&descriptors, &[("gain", 1)]).unwrap();
+        let state = ClapStateProjection::new(&descriptors, &[("gain", 1)]).unwrap();
         state
             .publication
             .generation
@@ -297,7 +323,7 @@ mod tests {
         let mut store = ParameterStore::new(&descriptors).unwrap();
         let mut scratch = [0.0];
         let baseline = state
-            .sync_into(store.values_mut(), &mut scratch, None)
+            .sync_into(store.values_mut(), &mut scratch, None, 0)
             .unwrap();
         assert_eq!(baseline, Some(LAST_STABLE_GENERATION));
 
@@ -307,19 +333,58 @@ mod tests {
             .unwrap();
         assert!(rejected.is_none());
         let restored = state
-            .sync_into(store.values_mut(), &mut scratch, rejected)
+            .sync_into(store.values_mut(), &mut scratch, rejected, 0)
             .unwrap();
         assert_eq!(restored, baseline);
         assert_eq!(store.get("gain"), Some(&ParameterValue::Float(0.5)));
     }
 
     #[test]
+    fn exhausted_complete_publication_retains_custom_payload_and_epoch() {
+        use crate::parameters::ClapStateProjection;
+        use chassis_runtime::{
+            parameters::ParameterDescriptor,
+            schema::{ComponentId, StateIdentity, StateSchemaVersion},
+            state::{StateEntry, StateValue},
+        };
+        let state = ClapStateProjection::new(
+            &[ParameterDescriptor::float("gain", "Gain", 0.0, 1.0, 0.5).unwrap()],
+            &[("gain", 1)],
+        )
+        .unwrap();
+        let identity = StateIdentity::new(
+            ComponentId::new("test.exhaustion").unwrap(),
+            StateSchemaVersion::new(1),
+        );
+        let (mut document, _) = state.state_document(&identity).unwrap();
+        document
+            .insert(StateEntry::new("state/bytes", StateValue::Bytes(vec![7])))
+            .unwrap();
+        state.apply_state(&document, &identity).unwrap();
+        state
+            .publication
+            .generation
+            .store(LAST_STABLE_GENERATION, Ordering::Release);
+        let before = state.state_document(&identity).unwrap();
+        let mut document =
+            chassis_runtime::state::StateDocument::new("test.exhaustion", 1).unwrap();
+        document
+            .insert(StateEntry::new("parameter/gain", StateValue::Float(0.75)))
+            .unwrap();
+        document
+            .insert(StateEntry::new("state/bytes", StateValue::Bytes(vec![9])))
+            .unwrap();
+        assert!(state.apply_state(&document, &identity).is_err());
+        assert_eq!(state.state_document(&identity).unwrap(), before);
+    }
+
+    #[test]
     fn control_operations_reject_wrong_value_counts() {
-        let publication = ScalarPublication::new(&[0.5, 0.0]);
+        let publication = StatePublication::new(&[0.5, 0.0]);
         let mut snapshot = [0.0];
 
         assert_eq!(
-            publication.publish_values_control(&[0.25]),
+            publication.publish_values_control(&[0.25], false),
             Err(PublicationError::InvalidValueCount)
         );
         assert_eq!(

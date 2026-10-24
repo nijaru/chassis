@@ -1,7 +1,7 @@
 //! Initial CLAP deployment adapter for Chassis.
 //!
-//! This adapter projects explicit stable audio/parameter IDs and a bounded scalar
-//! parameter publication into CLAP. Process-time audio is driven by the validated
+//! This adapter projects explicit stable audio/parameter IDs and coherent
+//! parameter/custom state into CLAP. Process-time audio is driven by the validated
 //! setup mapping rather than a hard-coded stereo buffer shape. The audio path
 //! supports f32 exports and explicit f64-capable exports; note/event projections
 //! remain explicit follow-up work.
@@ -55,7 +55,9 @@ use clack_plugin::{
     stream::{InputStream, OutputStream},
     utils::Cookie,
 };
-use parameters::{ClapParameterState, ParameterStateError, ParameterSyncError, normalized_events};
+use parameters::{
+    ClapStateProjection, ParameterSyncError, StateProjectionError, normalized_events,
+};
 use process_audio::{ClapBufferSource, ClapSample, ClapSamplePrecision, sample_precision};
 
 /// Explicit CLAP audio-port projection metadata.
@@ -65,7 +67,7 @@ pub use clack_plugin::clack_export_entry;
 
 /// CLAP deployment metadata for a Chassis component.
 ///
-/// The current projection supports mapped audio and scalar parameter state;
+/// The current projection supports mapped audio and complete semantic state;
 /// event ports are rejected until their CLAP projection is implemented.
 ///
 /// Parameter and audio-port IDs are explicit because stable Chassis keys cannot
@@ -149,12 +151,14 @@ impl RenderState {
 
 /// Thread-safe adapter state shared across CLAP domains.
 ///
-/// Scalar parameter publication and the ephemeral host render-mode projection are
-/// independent adapter-local synchronization paths. The audio-domain
-/// [`InstanceRuntime`] remains the semantic runtime authority while active.
+/// Complete desired-state publication and the ephemeral host render projection
+/// have independent synchronization paths. The audio-domain [`InstanceRuntime`]
+/// retains the activation's custom state/resources until reactivation and only
+/// synchronizes scalars while that resource epoch matches. It never adopts large
+/// replacement payloads on the callback.
 pub struct ChassisShared {
     schema: Arc<ComponentSchema>,
-    parameters: Arc<ClapParameterState>,
+    parameters: Arc<ClapStateProjection>,
     render: Arc<RenderState>,
 }
 
@@ -165,7 +169,7 @@ pub struct ChassisMainThread<'host, C> {
     component: C,
     schema: Arc<ComponentSchema>,
     audio: ClapAudioConfiguration,
-    shared: Arc<ClapParameterState>,
+    shared: Arc<ClapStateProjection>,
     render: Arc<RenderState>,
     latency: AtomicU32,
     host: HostMainThreadHandle<'host>,
@@ -183,6 +187,8 @@ where
     normalized_events: Vec<chassis_runtime::automation::ParameterEvent>,
     control_values: Vec<f64>,
     parameter_generation: Option<u64>,
+    activation_custom_generation: u64,
+    custom_state_pending: bool,
     process_slots: Vec<ClapProcessSlot>,
     audio_scratch: raw_audio::AudioScratch,
     _precision: PhantomData<fn() -> M>,
@@ -272,22 +278,36 @@ where
     }
 }
 
-// All scalar-only lifecycle admissions use the same checks, including the
-// retained main-thread definition rather than just its temporary factory peer.
-fn scalar_runtime<C: Component>(
+// Every retained definition must admit the original shared generation rather
+// than silently substituting its own defaults.
+fn component_runtime<C: Component>(
     component: &C,
-    expected_schema: Option<&ComponentSchema>,
+    expected_schema: &ComponentSchema,
 ) -> Result<InstanceRuntime<C::Processor>, PluginError> {
     let runtime = InstanceRuntime::for_component(component).map_err(PluginError::from)?;
-    if expected_schema.is_some_and(|expected| runtime.schema() != expected) {
+    if runtime.schema() != expected_schema {
         return Err(PluginError::Message("CLAP component schema changed"));
     }
-    if !runtime.custom_state().is_empty() {
-        return Err(PluginError::Message(
-            "CLAP complete custom-state projection is not implemented",
-        ));
-    }
     Ok(runtime)
+}
+
+fn projected_runtime<C: Component>(
+    component: &C,
+    shared: &ChassisShared,
+) -> Result<(InstanceRuntime<C::Processor>, u64), PluginError> {
+    let mut runtime = component_runtime(component, &shared.schema)?;
+    let identity = shared
+        .schema
+        .state_identity()
+        .ok_or(PluginError::Message("CLAP state identity is unavailable"))?;
+    let (document, custom_generation) = shared
+        .parameters
+        .state_document(identity)
+        .map_err(|error| state_error(&error))?;
+    runtime
+        .apply_state(component, &document)
+        .map_err(PluginError::from)?;
+    Ok((runtime, custom_generation))
 }
 
 fn new_shared<C>() -> Result<ChassisShared, PluginError>
@@ -295,13 +315,13 @@ where
     C: ClapComponent,
 {
     let component = C::default();
-    let runtime = scalar_runtime(&component, None)?;
+    let runtime = InstanceRuntime::for_component(&component).map_err(PluginError::from)?;
     let schema = runtime.schema().clone();
-    if schema.state_identity().is_none() {
+    let Some(identity) = schema.state_identity() else {
         return Err(PluginError::Message(
             "CLAP state projection requires semantic component state identity",
         ));
-    }
+    };
     if !schema.event_ports().is_empty() {
         return Err(PluginError::Message(
             "CLAP event-port projection is not implemented",
@@ -317,9 +337,20 @@ where
             "CLAP parameter event bound exceeds total input event bound",
         ));
     }
-    let parameters = ClapParameterState::new(schema.parameters(), C::CLAP_PARAMETER_IDS)
+    let parameters = ClapStateProjection::new(schema.parameters(), C::CLAP_PARAMETER_IDS)
         .map_err(PluginError::from)?
         .with_input_event_bound(C::CLAP_MAX_INPUT_EVENTS);
+    let defaults = runtime.state_document().map_err(PluginError::from)?;
+    // Reject definitions whose defaults cannot round-trip through this
+    // deployment's bounded state stream, not only oversized incoming loads.
+    drop(
+        defaults
+            .encode_with_limits(StateLimits::default())
+            .map_err(PluginError::from)?,
+    );
+    parameters
+        .apply_state(&defaults, identity)
+        .map_err(|error| state_error(&error))?;
     Ok(ChassisShared {
         schema: Arc::new(schema),
         parameters: Arc::new(parameters),
@@ -336,7 +367,7 @@ where
     C: ClapComponent,
 {
     let component = C::default();
-    scalar_runtime(&component, Some(&shared.schema))?;
+    projected_runtime(&component, shared)?;
     let mut audio = ClapAudioConfiguration::new(shared.schema.audio_ports(), C::CLAP_AUDIO_PORTS)
         .map_err(PluginError::from)?;
     if !shared.schema.audio_io_policy().accepts(audio.audio_io()) {
@@ -374,7 +405,8 @@ where
     P: Processor,
 {
     let process = map_process_config(audio_config, C::CLAP_MAX_PARAMETER_EVENTS)?;
-    let runtime = scalar_runtime(&main_thread.component, Some(&main_thread.schema))?;
+    let (runtime, activation_custom_generation) =
+        projected_runtime(&main_thread.component, shared)?;
 
     let maximum_events = usize::try_from(C::CLAP_MAX_PARAMETER_EVENTS)
         .map_err(|_| PluginError::Message("CLAP parameter event bound is not representable"))?;
@@ -402,11 +434,12 @@ where
         normalized_events,
         control_values,
         parameter_generation: None,
+        activation_custom_generation,
+        custom_state_pending: false,
         process_slots,
         audio_scratch,
         _precision: PhantomData::<fn() -> M>,
     };
-    processor.sync_parameters()?;
     processor
         .runtime
         .activate(
@@ -597,7 +630,7 @@ where
     fn load(&self, input: &mut InputStream) -> Result<(), PluginError> {
         let limits = StateLimits::default();
         let encoded = read_bounded_state(input, limits.max_total_bytes)?;
-        let mut candidate = scalar_runtime(&self.component, Some(&self.schema))?;
+        let mut candidate = component_runtime(&self.component, &self.schema)?;
         candidate
             .apply_state_bytes(&self.component, &encoded, limits)
             .map_err(PluginError::from)?;
@@ -749,6 +782,15 @@ where
             maximum_parameter_events,
         )
         .map_err(|_| PluginError::Message("Invalid CLAP parameter event stream"))?;
+        // Normalization validated descriptor domains and ParameterEvents checked
+        // the original shape/bounds above. Without a coherent matching baseline,
+        // withhold trajectories even on transient snapshot contention: a custom
+        // load may have completed immediately before another writer took over.
+        let parameter_events = if generation.is_some() {
+            parameter_events
+        } else {
+            ParameterEvents::empty_for_block(frame_count)
+        };
         let context = ProcessContext::new(
             self.shared.render.process_mode(),
             transport,
@@ -758,7 +800,7 @@ where
             .process_source(frame_count, context, &mut buffers)
             .map_err(|_| PluginError::Message("Invalid Chassis process block"))?;
 
-        if !self.normalized_events.is_empty() {
+        if generation.is_some() && !self.normalized_events.is_empty() {
             // Runtime completion changed the whole-store cache invariant. A
             // failed/aborted publication must not let end sync skip restoration.
             self.parameter_generation = None;
@@ -783,15 +825,25 @@ where
     }
 
     fn sync_parameters(&mut self) -> Result<(), PluginError> {
-        self.parameter_generation = self
-            .shared
-            .parameters
-            .sync_into(
-                self.runtime.parameters_mut(),
-                &mut self.control_values,
-                self.parameter_generation,
-            )
-            .map_err(sync_error)?;
+        if self.custom_state_pending {
+            return Ok(());
+        }
+        match self.shared.parameters.sync_into(
+            self.runtime.parameters_mut(),
+            &mut self.control_values,
+            self.parameter_generation,
+            self.activation_custom_generation,
+        ) {
+            Ok(generation) => self.parameter_generation = generation,
+            Err(ParameterSyncError::CustomStateChanged) => {
+                // Sticky even after reset, repeated loads, or a custom reversion.
+                // A block already in flight may finish its old-generation DSP;
+                // its CAS cannot overwrite the accepted replacement state.
+                self.custom_state_pending = true;
+                self.parameter_generation = None;
+            }
+            Err(error) => return Err(sync_error(error)),
+        }
         Ok(())
     }
 }
@@ -800,8 +852,8 @@ fn sync_error(_error: ParameterSyncError) -> PluginError {
     PluginError::Message("CLAP parameter projection could not reach the audio processor")
 }
 
-fn state_error(_error: &ParameterStateError) -> PluginError {
-    PluginError::Message("Invalid Chassis parameter state")
+fn state_error(_error: &StateProjectionError) -> PluginError {
+    PluginError::Message("Invalid Chassis complete state")
 }
 
 fn read_bounded_state(input: &mut InputStream, maximum: usize) -> Result<Vec<u8>, PluginError> {

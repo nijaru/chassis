@@ -1,5 +1,4 @@
-//! Actual-entry admission of component-owned scalar policy and migration.
-//! Custom defaults remain explicitly unsupported, across both factory objects.
+//! Actual-entry admission of component-owned state policy and migration.
 
 use chassis_clap::{ClapComponent, SingleComponentEntry};
 use chassis_runtime::{
@@ -7,7 +6,7 @@ use chassis_runtime::{
     process::{ActivationConfig, ProcessBlock, ProcessBufferSource},
     runtime::{Component, ComponentStateError, Process, Processor},
     schema::{ComponentId, ComponentSchema, ComponentSchemaError, StateSchemaVersion},
-    state::{StateDocument, StateEntry, StateMigration, StateValue},
+    state::{StateDocument, StateEntry, StateLimits, StateMigration, StateValue},
 };
 use clack_extensions::state::PluginState;
 use clack_host::{factory::plugin::PluginFactory, prelude::*};
@@ -25,7 +24,8 @@ struct PolicyProbe<const KIND: u8> {
 impl<const KIND: u8> Default for PolicyProbe<KIND> {
     fn default() -> Self {
         Self {
-            custom: KIND == 1 || (KIND == 2 && DEFAULT_COUNT.fetch_add(1, Ordering::Relaxed) > 0),
+            custom: matches!(KIND, 1 | 4)
+                || (KIND == 2 && DEFAULT_COUNT.fetch_add(1, Ordering::Relaxed) > 0),
         }
     }
 }
@@ -71,7 +71,15 @@ impl<const KIND: u8> Component for PolicyProbe<KIND> {
         )
     }
     fn default_custom_state(&self) -> Vec<StateEntry> {
-        if self.custom {
+        if KIND == 4 {
+            vec![StateEntry::new(
+                format!(
+                    "oversized/{}",
+                    "x".repeat(StateLimits::default().max_key_bytes)
+                ),
+                StateValue::Boolean(true),
+            )]
+        } else if self.custom {
             vec![StateEntry::new("state/flag", StateValue::Boolean(true))]
         } else {
             vec![]
@@ -85,7 +93,9 @@ impl<const KIND: u8> Component for PolicyProbe<KIND> {
         let Some(ParameterValue::Float(gate)) = params.get("gate") else {
             unreachable!("float schema");
         };
-        let valid_custom = if self.custom {
+        let valid_custom = if KIND == 4 {
+            matches!(custom, [entry] if entry.key().starts_with("oversized/") && entry.value() == &StateValue::Boolean(true))
+        } else if self.custom {
             matches!(custom, [entry] if entry.key() == "state/flag" && entry.value() == &StateValue::Boolean(true))
         } else {
             custom.is_empty()
@@ -210,10 +220,29 @@ fn load_uses_component_migrations_and_rejects_policy_failures_atomically() {
 }
 
 #[test]
-fn custom_defaults_are_rejected_even_when_only_the_retained_definition_has_them() {
-    assert!(instance(&entry::<1>()).is_err());
+fn original_custom_defaults_are_preserved_and_retained_policy_is_enforced() {
+    let mut plugin = instance(&entry::<1>()).unwrap();
+    let state = plugin
+        .plugin_handle()
+        .get_extension::<PluginState>()
+        .unwrap();
+    let saved = StateDocument::decode(&save(&mut plugin, state)).unwrap();
+    assert!(saved.entries().iter().any(|entry| entry.key() == "state/flag" && entry.value() == &StateValue::Boolean(true)));
+    // The retained definition requires a field the original shared generation
+    // lacks. Do not silently substitute its independently constructed defaults.
     DEFAULT_COUNT.store(0, Ordering::Relaxed);
     assert!(instance(&entry::<2>()).is_err());
+}
+
+#[test]
+fn defaults_outside_the_deployment_wire_budget_are_rejected() {
+    // Core policy accepts this definition; CLAP must not instantiate a state it
+    // cannot save/reopen through its bounded stream.
+    assert!(
+        chassis_runtime::runtime::InstanceRuntime::for_component(&PolicyProbe::<4>::default())
+            .is_ok()
+    );
+    assert!(instance(&entry::<4>()).is_err());
 }
 
 #[test]

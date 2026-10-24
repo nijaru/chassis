@@ -191,17 +191,17 @@ Outside the pending custom-state gate, successful DSP retains final automation p
 
 `crates/chassis-runtime/tests/realtime_alloc.rs` mechanically checks post-activation allocation/deallocation with float/integer/boolean/choice completion, including choice replacement after control edits and state loading. Full adapter-path allocation/work and performance evidence remains separate.
 
-## Parameter publication
+## Deployment state publication
 
 Persistent/authoring identity is `ParameterKey`; realtime identity is schema-local `ParameterIndex`.
 
-The CLAP host lifetime currently splits durable shared/main-thread scalar state from the active audio processor. The adapter therefore owns an adapter-local scalar publication bridge and synchronizes it into a fresh `InstanceRuntime` on activation. This is deployment plumbing, not a second core state authority.
+CLAP host lifetimes split durable shared/main-thread desired state from the active audio processor. The adapter owns one complete parameter/custom-state projection and admits a coherent snapshot through component policy into a fresh `InstanceRuntime` on activation. This is deployment plumbing, not a second core state authority.
 
-The bridge uses even completed generations and odd in-progress writer tokens. Realtime publication is one-shot/nonblocking; realtime snapshots have a fixed retry bound; non-realtime control/state snapshots may wait for an in-progress writer.
+The bridge publishes scalars and a custom-resource epoch in one transaction. Custom payload ownership stays behind a control-only mutex; the callback reads only fixed-width metadata and never adopts or reclaims custom payloads. Realtime publication is one-shot/nonblocking; realtime snapshots have a fixed retry bound. Non-realtime save/activation capture a coherent completed parameter/custom generation before encoding or preparing resources.
 
-CLAP projects the runtime's completed store rather than replaying automation. Publication uses the generation actually synchronized before processing. A newer control edit or state load defeats the CAS; the adapter invalidates its local generation cache and restores the newer whole store when a bounded snapshot succeeds. Cache validity tracks the whole local store, including untouched values. No separate pending-notification authority is needed.
+CLAP projects the runtime's completed store rather than replaying automation. Publication uses the generation actually synchronized before processing, so newer control/state publication defeats stale completion. A changed custom epoch gates parameter synchronization and automation until deactivation; desired replacements remain saveable while old resources continue. An already-running old-generation block may finish and establish the frozen local baseline, but cannot overwrite the replacement. Snapshot contention withholds trajectories for that block without permanently latching the gate. [Parameters/state](parameters-state.md#complete-clap-state-publication) owns the full concurrency contract.
 
-CLAP scalar load uses component-owned migrations/validation before publishing accepted values, and activation validates synchronized scalar state. Shared creation, the retained main-thread definition, activation, and load use one scalar-only admission check for schema drift and custom defaults. Complete custom fields remain rejected; no coherent custom/scalar generation bridge is implemented yet.
+CLAP load runs component-owned migrations/complete validation before publishing a candidate. Shared creation validates original defaults against deployment wire bounds; the separately retained definition must admit those defaults rather than substitute its own. Activation and load reject component schema drift. Unsupported event ports still fail explicitly.
 
 ## Deactivation and teardown
 

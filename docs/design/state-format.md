@@ -175,7 +175,7 @@ CLAP/VST3 stream boundaries can carry canonical Chassis bytes directly through b
 
 Adapters must not create a second persistence authority for the same component semantics.
 
-The current CLAP adapter persists scalar parameters only. It rejects non-parameter entries and nonempty custom defaults, including defaults on the retained main-thread definition. Scalar loads run component-owned adjacent migrations and complete validation in a temporary runtime before publication; schema drift is rejected. Activation synchronizes scalar parameters into a validated fresh runtime. Complete custom/scalar generation preservation is remaining deployment work; the core contract does not establish equivalent CLAP support.
+The CLAP adapter persists complete parameter/custom state. Loads run component-owned adjacent migrations and validation in a temporary runtime before atomic projection; component schema drift is rejected. Original defaults must fit the deployment's bounded wire format and pass the separately retained definition's policy. Activation admits one complete projected snapshot, while active save captures one completed desired generation even during deferred resource restart. [Parameters/state](parameters-state.md#complete-clap-state-publication) owns epoch gating, in-flight block behavior, and off-callback custom ownership/reclamation. This support does not establish a stable CHSS compatibility promise or background resource adoption.
 
 Short/partial stream reads/writes and backend errors are real boundary cases and require adapter tests rather than an assumption that state arrives in one complete call.
 

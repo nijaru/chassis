@@ -67,7 +67,7 @@ The coupled-resource regression failed when restoring either pre-fix parameter s
 
 Hosted [Rust CI](https://github.com/nijaru/chassis/actions/runs/40030698060) and [CLAP Conformance](https://github.com/nijaru/chassis/actions/runs/40030698084) succeeded at `7620284`, with all Linux/macOS/Windows jobs passing. This includes CI's pinned dependency tools and packaged validator/fuzz matrix.
 
-Custom-state deployment remains unsupported. The core transition intentionally discards parameter automation until reactivation; it does not qualify arbitrary product DSP or a future complete-state bridge. No production DAW, representative performance benchmark, or new Miri run was performed; raw reference construction and CHSS bytes are unchanged.
+At this baseline, custom-state deployment remained unsupported. The core transition intentionally discards parameter automation until reactivation; this baseline did not qualify arbitrary product DSP or the later complete-state bridge. No production DAW, representative performance benchmark, or new Miri run was performed; raw reference construction and CHSS bytes are unchanged.
 
 ### Realtime rejection and dense projection — 2026-10-23
 
@@ -150,7 +150,8 @@ Current cases include:
 - `host_latency_audio.rs`: nonzero reported latency matching actual delayed audio;
 - `host_restart.rs`: one processor restart request per activation, immediate successful-state-load restart notification before processing, rejected state without restart, unchanged active latency, and reactivation using published state;
 - `host_active_state_save.rs`: coherent CLAP state save while processing is active;
-- `host_state_policy.rs`: component-owned scalar migrations/validation, atomic load rejection, schema drift, and custom-default rejection across factory/main-thread definitions;
+- `host_state_policy.rs`: component-owned scalar migrations/validation, atomic load rejection, schema drift, original custom-default preservation, retained-definition policy admission, and deployment wire-budget rejection;
+- `host_custom_state.rs`: resource-backed complete state through default save, migration/rejection, deferred restart/reset/reversion, active flush, save/reopen, zero-allocation pending callbacks, and a load racing old DSP completion;
 - `host_reentrancy.rs`: plugin -> host -> plugin main-thread re-entry through parameter-rescan and latency-change callbacks;
 - `host_panic_containment.rs`: activation/process panic containment at the Clack FFI boundary.
 
@@ -192,24 +193,13 @@ The following pre-alpha architecture changes were gated with workspace formattin
 
 The resulting `ComponentSchema` / `InstanceRuntime` ownership shape is considered a candidate-stable architecture, not a published compatibility promise. Later graph/device/host/deployment clients may still reveal concrete semantic gaps.
 
-## Active state-save contract
+## Active state-save evidence
 
-Implemented CLAP contract:
-
-- audio processing never waits for state save;
-- save obtains one coherent completed scalar generation;
-- a save racing a process block may linearize immediately before or after final automation-endpoint publication;
-- save never emits a mixed cross-parameter generation;
-- the publication token describes the whole store synchronized before DSP, not a generation reacquired afterward;
-- newer control/state publication prevents stale realtime completion from overwriting it;
-- failed publication invalidates the local generation cache, including at terminal exhaustion; coherent end sync restores the authoritative store or retries next block after contention;
-- state load is transactional and requests host value rescan after publication.
-
-Evidence exists at three levels:
+[Parameters/state](parameters-state.md#complete-clap-state-publication) owns the complete-generation save/publication contract, including resource-epoch gating and in-flight DSP completion. Evidence exists at three levels:
 
 1. direct publication unit tests;
 2. Loom atomic models;
-3. in-process CLAP host test that pauses an active callback before endpoint publication, saves the old complete generation, releases processing, then saves both new endpoints together.
+3. actual-entry CLAP host tests that pause DSP before endpoint publication: scalar save sees both old or both new endpoints, and a complete custom-state load saves its accepted replacement without contamination by old DSP completion.
 
 The dated REAPER active-save scenario below is production-host evidence for that baseline. Refresh it against changed artifacts; it is distinct from the current in-process semantic evidence.
 

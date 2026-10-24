@@ -1,4 +1,4 @@
-use std::{fmt, string::String, vec::Vec};
+use std::{fmt, string::String, sync::Mutex, vec::Vec};
 
 use chassis_runtime::{
     automation::{ParameterEvent, ParameterEventValue},
@@ -6,10 +6,7 @@ use chassis_runtime::{
         ChoiceId, ChoiceIndex, ChoiceOption, ParameterDescriptor, ParameterIndex, ParameterKind,
         ParameterStore, ParameterValuesMut,
     },
-    schema::StateIdentity,
-    state::{
-        StateDocument, StateDocumentError, StateEncodeError, StateEntry, StateLimits, StateValue,
-    },
+    state::{StateEntry, StateValue},
 };
 use clack_plugin::{
     events::{Event, event_types::ParamValueEvent, io::InputEvents},
@@ -17,8 +14,10 @@ use clack_plugin::{
 };
 
 mod publication;
+mod state;
 
-use publication::{PublicationError, ScalarPublication};
+use publication::StatePublication;
+pub(crate) use state::StateProjectionError;
 
 const EXACT_INTEGER_LIMIT: f64 = 9_007_199_254_740_992.0;
 
@@ -282,15 +281,17 @@ fn choice_option(options: &[ChoiceOption], plain: f64) -> Option<&ChoiceOption> 
     options.get(index)
 }
 
-pub(crate) struct ClapParameterState {
+pub(crate) struct ClapStateProjection {
     bindings: Vec<ClapParameterBinding>,
     id_lookup: Vec<usize>,
     key_lookup: Vec<usize>,
-    publication: ScalarPublication,
+    publication: StatePublication,
+    // Only setup/state callers acquire this lock; callbacks see an atomic epoch.
+    custom: Mutex<Vec<StateEntry>>,
     maximum_input_events: u32,
 }
 
-impl ClapParameterState {
+impl ClapStateProjection {
     pub(crate) fn new(
         descriptors: &[ParameterDescriptor],
         mappings: &[(&str, u32)],
@@ -392,7 +393,8 @@ impl ClapParameterState {
             bindings,
             id_lookup,
             key_lookup,
-            publication: ScalarPublication::new(&initial_values),
+            publication: StatePublication::new(&initial_values),
+            custom: Mutex::new(Vec::new()),
             maximum_input_events: 1024,
         })
     }
@@ -467,12 +469,16 @@ impl ClapParameterState {
 
     /// Synchronize one coherent generation, or keep the last values on contention.
     /// The cache certifies the whole store; callers invalidate it after any local
-    /// mutation that was not successfully published.
+    /// mutation that was not successfully published. The cached token also
+    /// certifies this activation's custom epoch. An epoch mismatch is checked
+    /// before store mutation; contention returns no token, so callers must
+    /// withhold both automation and endpoint publication for that block.
     pub(crate) fn sync_into(
         &self,
         mut store: ParameterValuesMut<'_>,
         scratch: &mut [f64],
         synchronized_generation: Option<u64>,
+        activation_custom_generation: u64,
     ) -> Result<Option<u64>, ParameterSyncError> {
         if scratch.len() != self.publication.len() {
             return Err(ParameterSyncError::InvalidPublishedValue);
@@ -481,9 +487,12 @@ impl ClapParameterState {
         if current.is_some() && current == synchronized_generation {
             return Ok(current);
         }
-        let Some(generation) = self.publication.try_snapshot_into(scratch) else {
+        let Some(snapshot) = self.publication.try_snapshot_into(scratch) else {
             return Ok(None);
         };
+        if snapshot.custom_generation != activation_custom_generation {
+            return Err(ParameterSyncError::CustomStateChanged);
+        }
         if self
             .bindings
             .iter()
@@ -500,7 +509,7 @@ impl ClapParameterState {
                 .set_event_value(binding.index(), parameter)
                 .map_err(|_| ParameterSyncError::StoreRejected)?;
         }
-        Ok(Some(generation))
+        Ok(Some(snapshot.generation))
     }
 
     /// Project completed runtime values without replaying automation. The token
@@ -533,87 +542,11 @@ impl ClapParameterState {
             Ok(None)
         }
     }
-
-    pub(crate) fn encode_state(
-        &self,
-        identity: &StateIdentity,
-        limits: StateLimits,
-    ) -> Result<Vec<u8>, ParameterStateError> {
-        let mut values = vec![0.0; self.publication.len()];
-        self.publication
-            .snapshot_control_into(&mut values)
-            .map_err(publication_state_error)?;
-        let mut document =
-            StateDocument::new(identity.component().as_str(), identity.schema().get())
-                .map_err(ParameterStateError::Document)?;
-        for (binding, value) in self.bindings.iter().zip(values) {
-            let state_value = binding
-                .state_value(value)
-                .ok_or(ParameterStateError::InvalidValue)?;
-            document
-                .insert(StateEntry::new(
-                    parameter_state_key(binding.descriptor.key().as_str()),
-                    state_value,
-                ))
-                .map_err(ParameterStateError::Document)?;
-        }
-        document
-            .encode_with_limits(limits)
-            .map_err(ParameterStateError::Encode)
-    }
-
-    pub(crate) fn apply_state(
-        &self,
-        document: &StateDocument,
-        identity: &StateIdentity,
-    ) -> Result<(), ParameterStateError> {
-        if document.product_id() != identity.component().as_str() {
-            return Err(ParameterStateError::ProductIdentityMismatch);
-        }
-        if document.product_schema() != identity.schema().get() {
-            return Err(ParameterStateError::ProductSchemaMismatch);
-        }
-        let mut candidate: Vec<_> = self
-            .bindings
-            .iter()
-            .map(ClapParameterBinding::default_plain)
-            .collect();
-        let mut parameter_entries = 0_usize;
-        for entry in document.entries() {
-            let Some(key) = entry.key().strip_prefix("parameter/") else {
-                return Err(ParameterStateError::UnsupportedCustomState(
-                    entry.key().to_owned(),
-                ));
-            };
-            let Some(index) = self.index_for_key(key) else {
-                return Err(ParameterStateError::UnknownParameter(key.to_owned()));
-            };
-            let Some(value) = self.bindings[index].state_plain_value(entry.value()) else {
-                return Err(ParameterStateError::InvalidValue);
-            };
-            candidate[index] = value;
-            parameter_entries += 1;
-        }
-        if parameter_entries != self.bindings.len() {
-            return Err(ParameterStateError::IncompleteParameterState {
-                expected: self.bindings.len(),
-                actual: parameter_entries,
-            });
-        }
-        self.publication
-            .publish_values_control(&candidate)
-            .map_err(publication_state_error)
-    }
-}
-
-fn parameter_state_key(key: &str) -> String {
-    let mut state_key = String::from("parameter/");
-    state_key.push_str(key);
-    state_key
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ParameterSyncError {
+    CustomStateChanged,
     InvalidPublishedValue,
     StoreRejected,
 }
@@ -621,6 +554,7 @@ pub(crate) enum ParameterSyncError {
 impl fmt::Display for ParameterSyncError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
+            Self::CustomStateChanged => "custom-state resources require reactivation",
             Self::InvalidPublishedValue => "parameter projection contained an invalid value",
             Self::StoreRejected => "parameter projection was rejected by the active schema",
         })
@@ -629,71 +563,8 @@ impl fmt::Display for ParameterSyncError {
 
 impl std::error::Error for ParameterSyncError {}
 
-#[derive(Debug)]
-pub(crate) enum ParameterStateError {
-    Document(StateDocumentError),
-    Encode(StateEncodeError),
-    PublicationGenerationExhausted,
-    InvalidPublicationValueCount,
-    ProductIdentityMismatch,
-    ProductSchemaMismatch,
-    UnknownParameter(String),
-    UnsupportedCustomState(String),
-    IncompleteParameterState { expected: usize, actual: usize },
-    InvalidValue,
-}
-
-impl fmt::Display for ParameterStateError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Document(error) => {
-                write!(formatter, "parameter state document is invalid: {error}")
-            }
-            Self::Encode(error) => {
-                write!(formatter, "parameter state could not be encoded: {error}")
-            }
-            Self::PublicationGenerationExhausted => {
-                formatter.write_str("parameter publication generation is exhausted")
-            }
-            Self::InvalidPublicationValueCount => {
-                formatter.write_str("parameter publication has the wrong value count")
-            }
-            Self::ProductIdentityMismatch => {
-                formatter.write_str("parameter state has the wrong product identity")
-            }
-            Self::ProductSchemaMismatch => {
-                formatter.write_str("parameter state has the wrong product schema")
-            }
-            Self::UnknownParameter(parameter) => write!(
-                formatter,
-                "parameter state names unknown parameter {parameter}"
-            ),
-            Self::UnsupportedCustomState(key) => write!(
-                formatter,
-                "CLAP scalar state projection cannot preserve custom field {key}"
-            ),
-            Self::IncompleteParameterState { expected, actual } => write!(
-                formatter,
-                "parameter state contains {actual} parameters but {expected} are required"
-            ),
-            Self::InvalidValue => formatter.write_str("parameter state contains an invalid value"),
-        }
-    }
-}
-
-impl std::error::Error for ParameterStateError {}
-
-fn publication_state_error(error: PublicationError) -> ParameterStateError {
-    match error {
-        PublicationError::GenerationExhausted => {
-            ParameterStateError::PublicationGenerationExhausted
-        }
-        PublicationError::InvalidValueCount => ParameterStateError::InvalidPublicationValueCount,
-    }
-}
-
 pub(crate) fn normalized_event(
-    state: &ClapParameterState,
+    state: &ClapStateProjection,
     id: ClapId,
     time: u32,
     value: f64,
@@ -708,7 +579,7 @@ pub(crate) fn normalized_event(
 }
 
 pub(crate) fn normalized_events(
-    state: &ClapParameterState,
+    state: &ClapStateProjection,
     input: &InputEvents<'_>,
     output: &mut Vec<ParameterEvent>,
 ) -> Result<(), &'static str> {
@@ -743,8 +614,8 @@ mod tests {
     use chassis_runtime::{
         automation::{ParameterEventChange, ParameterEvents},
         parameters::{ChoiceId, ChoiceOption, ParameterDescriptor, ParameterStore, ParameterValue},
-        schema::{ComponentId, StateSchemaVersion},
-        state::StateEntry,
+        schema::{ComponentId, StateIdentity, StateSchemaVersion},
+        state::{StateDocument, StateEntry, StateLimits},
     };
     use clack_plugin::events::Pckn;
 
@@ -769,7 +640,7 @@ mod tests {
     #[test]
     fn stepped_host_values_truncate_but_semantic_projection_stays_strict() {
         let state =
-            ClapParameterState::new(&descriptors(), &[("gain", 1), ("steps", 2), ("bypass", 3)])
+            ClapStateProjection::new(&descriptors(), &[("gain", 1), ("steps", 2), ("bypass", 3)])
                 .unwrap();
         let integer = &state.bindings()[1];
         let boolean = &state.bindings()[2];
@@ -834,7 +705,7 @@ mod tests {
         )
         .expect("choice parameter is valid");
         let state =
-            ClapParameterState::new(&[choice], &[("mode", 1)]).expect("choice parameters map");
+            ClapStateProjection::new(&[choice], &[("mode", 1)]).expect("choice parameters map");
         let binding = &state.bindings()[0];
         assert_eq!(binding.plain_range(), (0.0, 1.0));
         assert!((binding.default_plain() - 1.0).abs() <= f64::EPSILON);
@@ -853,14 +724,14 @@ mod tests {
 
         let descriptors = descriptors();
         assert!(matches!(
-            ClapParameterState::new(
+            ClapStateProjection::new(
                 &descriptors,
                 &[("gain", u32::MAX), ("steps", 2), ("bypass", 3)]
             ),
             Err(ParameterMappingError::InvalidId(_))
         ));
         assert!(
-            ClapParameterState::new(&descriptors, &[("gain", 1), ("steps", 2), ("bypass", 3)])
+            ClapStateProjection::new(&descriptors, &[("gain", 1), ("steps", 2), ("bypass", 3)])
                 .is_ok()
         );
     }
@@ -883,7 +754,7 @@ mod tests {
                 "clean",
             )
             .unwrap();
-            assert!(ClapParameterState::new(&[descriptor], &[("mode", 1)]).is_err());
+            assert!(ClapStateProjection::new(&[descriptor], &[("mode", 1)]).is_err());
         }
     }
 
@@ -893,7 +764,7 @@ mod tests {
             let descriptor = ParameterDescriptor::integer("large", "Large", value, value, value)
                 .expect("integer schema is valid");
             assert!(matches!(
-                ClapParameterState::new(&[descriptor], &[("large", 1)]),
+                ClapStateProjection::new(&[descriptor], &[("large", 1)]),
                 Err(ParameterMappingError::IntegerRangeNotRepresentable(_))
             ));
         }
@@ -903,7 +774,7 @@ mod tests {
     fn total_input_bound_rejects_unknown_events_and_entire_flush_batch() {
         let descriptor =
             ParameterDescriptor::float("gain", "Gain", 0.0, 1.0, 0.0).expect("schema is valid");
-        let state = ClapParameterState::new(&[descriptor], &[("gain", 1)])
+        let state = ClapStateProjection::new(&[descriptor], &[("gain", 1)])
             .expect("mapping is valid")
             .with_input_event_bound(1);
         let raw = [
@@ -927,7 +798,7 @@ mod tests {
         let descriptor =
             ParameterDescriptor::float("gain", "Gain", 0.0, 1.0, 0.0).expect("schema is valid");
         let state =
-            ClapParameterState::new(&[descriptor], &[("gain", 1)]).expect("mapping is valid");
+            ClapStateProjection::new(&[descriptor], &[("gain", 1)]).expect("mapping is valid");
         for target in [
             Pckn::new(0_u16, Match::All, Match::All, Match::All),
             Pckn::new(Match::All, 0_u16, Match::All, Match::All),
@@ -950,7 +821,7 @@ mod tests {
     fn input_events_normalize_to_dense_parameter_indices() {
         let descriptors = descriptors();
         let state =
-            ClapParameterState::new(&descriptors, &[("gain", 1), ("steps", 2), ("bypass", 3)])
+            ClapStateProjection::new(&descriptors, &[("gain", 1), ("steps", 2), ("bypass", 3)])
                 .expect("parameter mapping is valid");
         assert_eq!(state.bindings()[0].index(), ParameterIndex::new(0));
         assert_eq!(state.bindings()[1].index(), ParameterIndex::new(1));
@@ -988,21 +859,21 @@ mod tests {
     fn control_projection_syncs_transactionally_into_active_store() {
         let descriptors = descriptors();
         let state =
-            ClapParameterState::new(&descriptors, &[("gain", 1), ("steps", 2), ("bypass", 3)])
+            ClapStateProjection::new(&descriptors, &[("gain", 1), ("steps", 2), ("bypass", 3)])
                 .expect("parameter mapping is valid");
         assert!(state.apply_plain_value(ClapId::new(1), 0.75));
         assert!(state.apply_plain_value(ClapId::new(2), -2.0));
         let mut store = ParameterStore::new(&descriptors).expect("schema is valid");
         let mut scratch = vec![0.0; 3];
         state
-            .sync_into(store.values_mut(), &mut scratch, None)
+            .sync_into(store.values_mut(), &mut scratch, None, 0)
             .expect("projection syncs");
         assert_eq!(store.get("gain"), Some(&ParameterValue::Float(0.75)));
         assert_eq!(store.get("steps"), Some(&ParameterValue::Integer(-2)));
 
         store.reset();
         state
-            .sync_into(store.values_mut(), &mut scratch, None)
+            .sync_into(store.values_mut(), &mut scratch, None, 0)
             .expect("new runtime with no cached generation syncs");
         assert_eq!(store.get("gain"), Some(&ParameterValue::Float(0.75)));
         assert_eq!(store.get("steps"), Some(&ParameterValue::Integer(-2)));
@@ -1012,13 +883,13 @@ mod tests {
     fn completed_runtime_projection_preserves_untouched_values_and_restores_newer_control() {
         let descriptors = descriptors();
         let state =
-            ClapParameterState::new(&descriptors, &[("gain", 1), ("steps", 2), ("bypass", 3)])
+            ClapStateProjection::new(&descriptors, &[("gain", 1), ("steps", 2), ("bypass", 3)])
                 .expect("parameter mapping is valid");
         let mut store = ParameterStore::new(&descriptors).expect("schema is valid");
         let mut scratch = vec![0.0; 3];
         assert!(state.apply_plain_value(ClapId::new(2), -2.0));
         let baseline = state
-            .sync_into(store.values_mut(), &mut scratch, None)
+            .sync_into(store.values_mut(), &mut scratch, None, 0)
             .unwrap();
         store.set("gain", ParameterValue::Float(0.75)).unwrap();
         let published = state
@@ -1037,7 +908,7 @@ mod tests {
             .unwrap();
         assert!(rejected.is_none());
         let synchronized = state
-            .sync_into(store.values_mut(), &mut scratch, rejected)
+            .sync_into(store.values_mut(), &mut scratch, rejected, 0)
             .unwrap();
         assert!(synchronized.is_some());
         assert_eq!(store.get("gain"), Some(&ParameterValue::Float(0.75)));
@@ -1052,7 +923,7 @@ mod tests {
                 .is_none()
         );
         state
-            .sync_into(store.values_mut(), &mut scratch, None)
+            .sync_into(store.values_mut(), &mut scratch, None, 0)
             .unwrap();
         assert_eq!(store.get("gain"), Some(&ParameterValue::Float(0.75)));
     }
@@ -1061,7 +932,7 @@ mod tests {
     fn state_projection_rejects_invalid_values_transactionally() {
         let descriptors = descriptors();
         let state =
-            ClapParameterState::new(&descriptors, &[("gain", 1), ("steps", 2), ("bypass", 3)])
+            ClapStateProjection::new(&descriptors, &[("gain", 1), ("steps", 2), ("bypass", 3)])
                 .expect("parameter mapping is valid");
         assert!(state.apply_plain_value(ClapId::new(1), 0.75));
         let mut document = StateDocument::new("com.example.test", 1).expect("document is valid");
@@ -1071,7 +942,7 @@ mod tests {
 
         assert!(matches!(
             state.apply_state(&document, &state_identity()),
-            Err(ParameterStateError::InvalidValue)
+            Err(StateProjectionError::InvalidValue)
         ));
         assert!((state.value(0) - 0.75).abs() <= f64::EPSILON);
     }
@@ -1080,7 +951,7 @@ mod tests {
     fn state_projection_requires_a_complete_parameter_snapshot() {
         let descriptors = descriptors();
         let state =
-            ClapParameterState::new(&descriptors, &[("gain", 1), ("steps", 2), ("bypass", 3)])
+            ClapStateProjection::new(&descriptors, &[("gain", 1), ("steps", 2), ("bypass", 3)])
                 .expect("parameter mapping is valid");
         let mut document = StateDocument::new("com.example.test", 1).expect("document is valid");
         document
@@ -1089,7 +960,7 @@ mod tests {
 
         assert!(matches!(
             state.apply_state(&document, &state_identity()),
-            Err(ParameterStateError::IncompleteParameterState {
+            Err(StateProjectionError::IncompleteParameterState {
                 expected: 3,
                 actual: 1
             })
@@ -1098,25 +969,47 @@ mod tests {
     }
 
     #[test]
-    fn state_projection_rejects_custom_fields_without_publishing_parameters() {
+    fn complete_projection_preserves_custom_and_gates_old_resource_parameters() {
         let descriptors = descriptors();
         let state =
-            ClapParameterState::new(&descriptors, &[("gain", 1), ("steps", 2), ("bypass", 3)])
-                .expect("parameter mapping is valid");
-        let encoded = state
-            .encode_state(&state_identity(), StateLimits::default())
-            .expect("state encodes");
-        let mut document = StateDocument::decode(&encoded).expect("state decodes");
+            ClapStateProjection::new(&descriptors, &[("gain", 1), ("steps", 2), ("bypass", 3)])
+                .unwrap();
+        let mut store = ParameterStore::new(&descriptors).unwrap();
+        let mut scratch = [0.0; 3];
+        let baseline = state
+            .sync_into(store.values_mut(), &mut scratch, None, 0)
+            .unwrap();
+        let (initial, initial_epoch) = state.state_document(&state_identity()).unwrap();
+        assert_eq!(initial_epoch, 0);
+        let mut document = initial.clone();
         document
             .insert(StateEntry::new(
                 "custom/calibration",
                 StateValue::Signed(123),
             ))
-            .expect("custom entry is structurally valid");
+            .unwrap();
+        state.apply_state(&document, &state_identity()).unwrap();
+        let (saved, custom_epoch) = state.state_document(&state_identity()).unwrap();
+        assert_eq!(saved, document);
+        assert!(custom_epoch > initial_epoch);
+        assert_eq!(
+            state.sync_into(store.values_mut(), &mut scratch, baseline, 0),
+            Err(ParameterSyncError::CustomStateChanged)
+        );
+        assert_eq!(store.get("gain"), Some(&ParameterValue::Float(0.5)));
+        assert!(
+            state
+                .publish_parameters(&store, baseline, &mut scratch)
+                .unwrap()
+                .is_none()
+        );
         assert!(state.apply_plain_value(ClapId::new(1), 0.75));
-
-        assert!(state.apply_state(&document, &state_identity()).is_err());
-        assert!((state.value(0) - 0.75).abs() <= f64::EPSILON);
+        assert_eq!(
+            state.state_document(&state_identity()).unwrap().1,
+            custom_epoch
+        );
+        state.apply_state(&initial, &state_identity()).unwrap();
+        assert!(state.state_document(&state_identity()).unwrap().1 > custom_epoch);
     }
 
     #[test]
@@ -1124,7 +1017,7 @@ mod tests {
         const LIMIT: i64 = 9_007_199_254_740_992;
         let descriptor = ParameterDescriptor::integer("count", "Count", -LIMIT, LIMIT, 0)
             .expect("integer domain is valid");
-        let state = ClapParameterState::new(&[descriptor], &[("count", 1)])
+        let state = ClapStateProjection::new(&[descriptor], &[("count", 1)])
             .expect("integer domain is representable");
         for invalid in [LIMIT + 1, -LIMIT - 1] {
             let mut document =
@@ -1144,7 +1037,7 @@ mod tests {
     fn state_projection_round_trips_scalar_values() {
         let descriptors = descriptors();
         let state =
-            ClapParameterState::new(&descriptors, &[("gain", 1), ("steps", 2), ("bypass", 3)])
+            ClapStateProjection::new(&descriptors, &[("gain", 1), ("steps", 2), ("bypass", 3)])
                 .expect("parameter mapping is valid");
         assert!(state.apply_plain_value(ClapId::new(1), 0.75));
         assert!(state.apply_plain_value(ClapId::new(3), 1.0));
@@ -1155,7 +1048,7 @@ mod tests {
 
         assert_eq!(document.product_id(), "com.example.test");
         let restored =
-            ClapParameterState::new(&descriptors, &[("gain", 1), ("steps", 2), ("bypass", 3)])
+            ClapStateProjection::new(&descriptors, &[("gain", 1), ("steps", 2), ("bypass", 3)])
                 .expect("parameter mapping is valid");
         restored
             .apply_state(&document, &state_identity())
@@ -1185,7 +1078,7 @@ mod tests {
     #[test]
     fn choice_events_normalize_to_dense_option_indices() {
         let descriptors = choice_descriptors();
-        let state = ClapParameterState::new(&descriptors, &[("gain", 1), ("mode", 2)])
+        let state = ClapStateProjection::new(&descriptors, &[("gain", 1), ("mode", 2)])
             .expect("parameter mapping is valid");
         let raw = [ParamValueEvent::new(
             0,
@@ -1220,13 +1113,13 @@ mod tests {
     #[test]
     fn choice_control_and_completed_runtime_values_project_without_changing_identity() {
         let descriptors = choice_descriptors();
-        let state = ClapParameterState::new(&descriptors, &[("gain", 1), ("mode", 2)])
+        let state = ClapStateProjection::new(&descriptors, &[("gain", 1), ("mode", 2)])
             .expect("parameter mapping is valid");
         assert!(state.apply_plain_value(ClapId::new(2), 2.0));
         let mut store = ParameterStore::new(&descriptors).expect("schema is valid");
         let mut scratch = vec![0.0; 2];
         let baseline = state
-            .sync_into(store.values_mut(), &mut scratch, None)
+            .sync_into(store.values_mut(), &mut scratch, None, 0)
             .expect("control choice syncs");
         assert_eq!(
             store.get("mode"),
@@ -1246,7 +1139,7 @@ mod tests {
             .expect("completed choice publication succeeds");
         store.reset();
         state
-            .sync_into(store.values_mut(), &mut scratch, None)
+            .sync_into(store.values_mut(), &mut scratch, None, 0)
             .expect("completed choice syncs into a fresh store");
         assert_eq!(
             store.get("mode"),
@@ -1260,7 +1153,7 @@ mod tests {
     #[test]
     fn choice_state_round_trips_through_stable_identities() {
         let descriptors = choice_descriptors();
-        let state = ClapParameterState::new(&descriptors, &[("gain", 1), ("mode", 2)])
+        let state = ClapStateProjection::new(&descriptors, &[("gain", 1), ("mode", 2)])
             .expect("parameter mapping is valid");
         assert!(state.apply_plain_value(ClapId::new(2), 2.0));
         let encoded = state
@@ -1277,7 +1170,7 @@ mod tests {
             Some(&StateValue::Choice("driven".to_owned()))
         );
 
-        let restored = ClapParameterState::new(&descriptors, &[("gain", 1), ("mode", 2)])
+        let restored = ClapStateProjection::new(&descriptors, &[("gain", 1), ("mode", 2)])
             .expect("parameter mapping is valid");
         restored
             .apply_state(&document, &state_identity())
@@ -1297,7 +1190,7 @@ mod tests {
             .expect("entry is structurally valid");
         assert!(matches!(
             restored.apply_state(&corrupt, &state_identity()),
-            Err(ParameterStateError::InvalidValue)
+            Err(StateProjectionError::InvalidValue)
         ));
         assert!((restored.value(1) - 2.0).abs() <= f64::EPSILON);
     }

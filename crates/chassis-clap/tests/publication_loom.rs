@@ -1,4 +1,4 @@
-//! Weak-memory qualification model for the CLAP scalar publication protocol.
+//! Weak-memory qualification model for the CLAP complete-state publication protocol.
 //!
 //! This integration test mirrors the production generation/CAS, payload, and
 //! cached-generation synchronization without abstracting the production atomics
@@ -14,7 +14,7 @@ use loom::{
 
 const INITIAL_VALUES: [u64; 2] = [10, 20];
 
-/// Loom-only mirror of the adapter-local scalar publication protocol.
+/// Loom-only mirror of the adapter-local complete-state publication protocol.
 ///
 /// The production representation stores `f64` bit patterns in the payload
 /// atomics. These tokens preserve the same atomic and memory-ordering behavior
@@ -23,6 +23,7 @@ const INITIAL_VALUES: [u64; 2] = [10, 20];
 struct PublicationModel {
     values: [AtomicU64; 2],
     generation: AtomicU64,
+    custom_generation: AtomicU64,
 }
 
 impl PublicationModel {
@@ -33,6 +34,7 @@ impl PublicationModel {
                 AtomicU64::new(INITIAL_VALUES[1]),
             ],
             generation: AtomicU64::new(0),
+            custom_generation: AtomicU64::new(0),
         }
     }
 
@@ -58,12 +60,19 @@ impl PublicationModel {
     }
 
     fn try_publish_values_from(&self, expected: u64, values: [u64; 2]) -> bool {
+        self.try_publish_from(expected, values, false)
+    }
+
+    fn try_publish_from(&self, expected: u64, values: [u64; 2], custom_changed: bool) -> bool {
         let Some(completed) = self.try_begin_write(expected) else {
             return false;
         };
 
         self.values[0].store(values[0], Ordering::Release);
         self.values[1].store(values[1], Ordering::Release);
+        if custom_changed {
+            self.custom_generation.store(completed, Ordering::Release);
+        }
         self.finish_write(completed);
         true
     }
@@ -73,7 +82,7 @@ impl PublicationModel {
         self.try_publish_values_from(expected, values)
     }
 
-    fn try_snapshot(&self) -> Option<(u64, [u64; 2])> {
+    fn try_snapshot(&self) -> Option<(u64, u64, [u64; 2])> {
         let start = self.generation.load(Ordering::Acquire);
         if !start.is_multiple_of(2) {
             return None;
@@ -83,9 +92,10 @@ impl PublicationModel {
             self.values[0].load(Ordering::Acquire),
             self.values[1].load(Ordering::Acquire),
         ];
+        let custom_generation = self.custom_generation.load(Ordering::Acquire);
         let end = self.generation.load(Ordering::Acquire);
 
-        (start == end && end.is_multiple_of(2)).then_some((end, values))
+        (start == end && end.is_multiple_of(2)).then_some((end, custom_generation, values))
     }
 
     fn values(&self) -> [u64; 2] {
@@ -123,14 +133,14 @@ fn same_generation_writers_are_serialized() {
 }
 
 #[test]
-fn accepted_snapshot_never_mixes_generations() {
+fn accepted_snapshot_never_mixes_scalars_and_custom_epoch() {
     loom::model(|| {
         let publication = Arc::new(PublicationModel::new());
 
         let writer = {
             let publication = Arc::clone(&publication);
             thread::spawn(move || {
-                assert!(publication.try_publish_values_from(0, [11, 21]));
+                assert!(publication.try_publish_from(0, [11, 21], true));
             })
         };
         let reader = {
@@ -141,10 +151,16 @@ fn accepted_snapshot_never_mixes_generations() {
         writer.join().expect("model writer must not panic");
         let snapshot = reader.join().expect("model reader must not panic");
 
-        if let Some((generation, values)) = snapshot {
+        if let Some((generation, custom_generation, values)) = snapshot {
             match generation {
-                0 => assert_eq!(values, INITIAL_VALUES),
-                2 => assert_eq!(values, [11, 21]),
+                0 => {
+                    assert_eq!(values, INITIAL_VALUES);
+                    assert_eq!(custom_generation, 0);
+                }
+                2 => {
+                    assert_eq!(values, [11, 21]);
+                    assert_eq!(custom_generation, 2);
+                }
                 _ => panic!("accepted an unexpected generation {generation}"),
             }
         }
@@ -165,7 +181,7 @@ fn cached_sync_token_certifies_the_whole_block_baseline() {
             let publication = Arc::clone(&publication);
             thread::spawn(move || {
                 if publication.completed_generation() == Some(0) {
-                    Some((0, INITIAL_VALUES))
+                    Some((0, 0, INITIAL_VALUES))
                 } else {
                     publication.try_snapshot()
                 }
@@ -176,7 +192,8 @@ fn cached_sync_token_certifies_the_whole_block_baseline() {
         let baseline = sync_worker
             .join()
             .expect("model sync worker must not panic");
-        if let Some((generation, mut values)) = baseline {
+        if let Some((generation, custom_generation, mut values)) = baseline {
+            assert_eq!(custom_generation, 0);
             match generation {
                 0 => assert_eq!(values, INITIAL_VALUES),
                 2 => assert_eq!(values, [11, 21]),

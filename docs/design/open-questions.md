@@ -12,9 +12,7 @@ Define modulation domain, timing, addressing, combination, and reset semantics s
 
 See [events/transport](events-transport.md) for the accepted ordering constraints and current implemented subset.
 
-## Complete deployment state
-
-How should one coherent complete generation span CLAP's shared/main-thread and active audio lifetimes? Scalar load now runs component-owned migrations/validation, but custom fields/defaults remain rejected. State save must capture a completed parameter/custom generation, never independently sampled halves; old DSP completion must not overwrite a newer complete publication. The core's reactivation gate freezes DSP parameters and discards parameter automation while custom resources are stale. Preserve that safety at the deployment boundary before considering a qualified compatibility policy that could retain automation.
+## State compatibility
 
 When should the provisional CHSS envelope become a compatibility promise? Released-schema fixtures, cross-format round trips, resource limits, and an explicit compatibility policy must justify that decision; the existing binary fixture alone does not.
 
