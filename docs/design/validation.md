@@ -51,6 +51,23 @@ These gates do not establish production DAW behavior or representative performan
 
 Hosted workflows and local results are separate evidence. Before publication, hosted jobs were rejected and local checks supplied the interim record. Consult the actual workflow run for the revision under review before claiming Linux/macOS/Windows coverage. The dated validator, host, and benchmark results below are baselines, not automatic qualification of later commits.
 
+### Parameter control policy — 2026-10-24
+
+At code revision `9f17ac3` on macOS 26.6.2 arm64:
+
+- 196 workspace tests passed with stable Rust 1.99.1 and CI-baseline Rust 1.98.0; formatting, strict all-feature/all-target Clippy on both compilers, warning-denied rustdoc, local Markdown links, and release workspace build passed;
+- `cargo deny check` 0.19.0 passed with unused-license-allowance warnings; `cargo machete` 0.9.1 found no unused dependencies. Local tools differ from CI's pins;
+- core tests cover nonlinear controls, author-owned units/precision, unchanged plain-unit state, extreme/subnormal/constant float domains, exact wide-integer step rounding, full-width integer text, invalid policy results, sticky writer errors, and configuration-based schema drift;
+- actual-entry tests share the exported percent policy, preserve stepped plain conversion, accept disambiguated custom choice syntax, and reject truncated multibyte text, embedded NULs, or swallowed writer failures;
+- existing 1,000 f32 and 1,000 f64 bounded-event callbacks still measured zero allocations/deallocations and realtime host-log calls with author control policy attached;
+- rebuilt packaged conformance: 35 passed / 0 failed / 9 skipped; delayed probe: 21 passed / 0 failed / 23 skipped. Pinned `clap-validator` 0.4.1 passed both five-second, two-worker fuzz runs.
+
+Regressions failed when restoring adapter whitespace trimming, bypassing text-buffer checks, ignoring policy configuration equality, or replacing subnormal-safe interpolation. Final review also exposed wide integer half ties reversed by converting the span to `f64`; the added regression failed before exact binary-coordinate rounding replaced that calculation. Independent review checked the bounded integer-product proof and boundary cases.
+
+Hosted [Rust CI](https://github.com/nijaru/chassis/actions/runs/40068376120) and [CLAP Conformance](https://github.com/nijaru/chassis/actions/runs/40068376228) succeeded at `9f17ac3`, with every Linux/macOS/Windows job passing, including CI's pinned dependency tools and packaged validator/fuzz matrix.
+
+No production DAW scenario, representative performance benchmark, or new Miri run was performed. CHSS bytes and raw sample-reference construction are unchanged. Framework normalized control policy does not imply a custom CLAP host-knob taper or a new editor integration.
+
 ### Complete CLAP custom-state projection — 2026-10-24
 
 At code revision `75202f9` on macOS 26.6.2 arm64 with stable Rust 1.99.1:
@@ -184,7 +201,7 @@ The format-independent proof is split by concern while exercising the same publi
 
 - `crates/chassis-runtime/tests/conformance.rs`: schema rejection, lifecycle, buffer relationships, process bounds/context, base parameters, sample-accurate automation, invalid events, generic non-flat buffer-source traversal, and rejection of structurally valid but unsupported audio configurations;
 - `crates/chassis-runtime/tests/automation_runtime.rs`: final typed endpoints retained after successful DSP, equal-offset last-value order, event-free carryover, block-local ramp continuation, canonical encoded state, subsequent control precedence, reactivation, and invalid-batch failure atomicity;
-- `crates/chassis-runtime/tests/parameter_control.rs`: nonlinear mapping, units/precision, extreme and constant numeric domains, distinct discrete/text rounding, full-width integer text, invalid policy outputs, writer failures, and policy-configuration schema drift;
+- `crates/chassis-runtime/tests/parameter_control.rs`: nonlinear mapping, units/precision, extreme and constant numeric domains, distinct discrete/text rounding, wide-integer rounding, full-width integer text, invalid policy outputs, writer failures, and policy-configuration schema drift;
 - `crates/chassis-runtime/tests/component_schema_runtime.rs`: one coherent schema snapshot, dense lookup, and schema-drift rejection;
 - `crates/chassis-runtime/tests/audio_endpoint_runtime.rs`: active/inactive port, direction, channel-range, and dense endpoint legality before product DSP;
 - `crates/chassis-runtime/tests/event_schema_runtime.rs` and `note_runtime.rs`: event-schema authority, dense note-port addressing, wildcard handling, and zero-audio note processing;
@@ -325,8 +342,8 @@ Retain golden fixtures for every released schema. The current CHSS v1 envelope r
 
 | Host / harness | Platform | Status | Evidence |
 | --- | --- | --- | --- |
-| Clack in-process host harness | Linux/macOS/Windows CI | passed at `75202f9`; same revision macOS local | accepted/rejected process allocation and host logging, f32/f64, complete custom-state policy/publication, deferred resource restart, lifecycle, active state save, latency, re-entrancy, panic containment |
-| `clap-validator` 0.4.1 | Linux/macOS/Windows CI | passed at `75202f9`; same revision macOS local | conformance 35 pass / 0 fail / 9 skip; delayed probe 21 / 0 / 23; both bounded fuzz runs |
+| Clack in-process host harness | Linux/macOS/Windows CI | passed at `9f17ac3`; same revision macOS local | accepted/rejected process allocation and host logging, f32/f64, author control text/buffer rejection, complete custom-state policy/publication, deferred resource restart, lifecycle, active state save, latency, re-entrancy, panic containment |
+| `clap-validator` 0.4.1 | Linux/macOS/Windows CI | passed at `9f17ac3`; same revision macOS local | conformance 35 pass / 0 fail / 9 skip; delayed probe 21 / 0 / 23; both bounded fuzz runs |
 | REAPER 7.79 | macOS arm64 (M3 Max, 48 kHz) | 2026-09-06 baseline | 2026-09-06 headless `-renderproject` qualification: scan + instantiate (FX browser, 5 params enumerated), square `trim` automation render sample-exact against the deterministic reference (value changes land at exact sample offsets 24000/36000), injected-CHSS state load render sample-exact (trim 0.25/0.75; blobs byte-identical to a REAPER-saved blob at 0.5 and validated by the real `StateDocument` decoder), project save while the transport rolled through automation with coherent base state (trim=0.5, not torn) and sample-exact automation replay after reload, no-FX baseline render bit-identical to the source fixture, and PDC alignment: a wet track carrying the exported 64-sample delayed probe (`examples/clap-delayed-probe`) mixes against a dry track as exactly `2*x[i]` for all 48,000 frames — REAPER honored the CLAP latency extension and aligned the delayed DSP sample-exact. Host-quirk recorded: `TrackFX_SetParamNormalized` on an inactive CLAP reports success but delivers no change; the differential shows FabFilter Pro-Q 4 (CLAP) behaving identically while ReaEQ (VST) applies immediately, so this is REAPER's inactive-CLAP delivery behavior, not an adapter defect — the automation path (process events) is sample-exact. |
 | Bitwig | — | not run | production-host re-entrancy confirmation remains useful when available |
 
