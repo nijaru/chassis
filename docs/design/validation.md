@@ -51,6 +51,24 @@ These gates do not establish production DAW behavior or representative performan
 
 Hosted workflows and local results are separate evidence. Before publication, hosted jobs were rejected and local checks supplied the interim record. Consult the actual workflow run for the revision under review before claiming Linux/macOS/Windows coverage. The dated validator, host, and benchmark results below are baselines, not automatic qualification of later commits.
 
+### Global additive float modulation — 2026-10-24
+
+At code revision `f7459c6aabc8961302b850e7ea5d96571cd87884` on macOS 26.6.2 arm64:
+
+- 202 workspace tests passed; local stable Rust 1.99.1 and CI-baseline Rust 1.98.0 suites and final focused checks passed. Formatting, strict all-feature/all-target Clippy on both compilers, warning-denied rustdoc, local Markdown links, and release workspace build passed;
+- `cargo deny check` 0.19.0 passed with unused-license-allowance warnings; `cargo machete` 0.9.1 found no unused dependencies. Hosted CI additionally passed its pinned tool versions;
+- core tests cover explicit Float-only admission, finite unrestricted amounts, independent base ramps and modulation steps, equal-offset source order, effective clamping including finite overflow, held lifetime, state exclusion/load preservation, and mixed-batch failure atomicity;
+- actual-entry tests cover global-only flags, audible f32/f64 mixed controls, inactive/active flush, reset/reactivation, unmodulated get/save values, fresh-instance reopening, strict raw targeting including `-2`, known invalid/non-finite/unsupported controls, malformed record sizes, and combined process-event overflow;
+- resource-backed core/CLAP tests freeze consumed base and modulation through deferred restart, reset, loads/reversion, and active flush while retaining desired modulation for reactivation. A paused old block's accepted modulation survives a newer state load that rejects its base CAS;
+- 1,000 f32 and 1,000 f64 callbacks for each of all-base and maximum-bound mixed controls measured zero allocations/deallocations and realtime host-log calls. The pending-resource probe also measured 1,000 mixed-control callbacks with reset, without allocation/deallocation, resource destruction, or retargeting;
+- rebuilt packaged conformance: 35 passed / 0 failed / 9 skipped; delayed probe: 21 passed / 0 failed / 23 skipped. Both five-second, two-worker fuzz runs passed using the exact validator pin plus the reviewed correction described below. Its added generator regression failed the original code and passed the correction.
+
+Deliberate regressions failed when conflating modulation with base points, consuming desired instead of frozen modulation, validating targeting before ignoring unknown IDs, or making held-signal retention depend on successful base completion. All mutations were restored. Independent review also identified Windows line-ending requirements for the new installer/patch; explicit LF attributes passed a `core.autocrlf=true` checkout probe and the actual hosted Windows job.
+
+Hosted [Rust CI](https://github.com/nijaru/chassis/actions/runs/40119880419) and [CLAP Conformance](https://github.com/nijaru/chassis/actions/runs/40119880386) succeeded at this exact source revision, with every Linux/macOS/Windows job passing, including the corrected validator regression, packaged validation, and bounded fuzz. The user-installed validator and the audited Clack pin/local process patch remain unchanged.
+
+No production DAW scenario, representative performance benchmark, or new Miri run was performed. CHSS bytes and raw sample-reference construction are unchanged. This qualifies global additive float modulation, not per-note/expression, other parameter domains, or arbitrary product DSP.
+
 ### Validator source and local fix
 
 The qualification tool remains `clap-validator` 0.4.1 at `b2f1d9b79b1d264a5747f46707d72b1aa40a02ef`, with the reviewed [global-modulation patch](../../vendor/clap-validator/global-modulation.patch). The pin's [`ParamFuzzer::generate_event`](https://github.com/free-audio/clap-validator/blob/b2f1d9b79b1d264a5747f46707d72b1aa40a02ef/src/tests/rng.rs#L863-L891) constructs base-value events containing signed modulation amounts. For a `0..1` gain this sends invalid negative base values; strict plugin rejection correctly fails the unmodified `param-fuzz-modulation` test. Do not loosen parameter admission or exclude that test to compensate.
