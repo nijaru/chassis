@@ -39,11 +39,11 @@ Dependency-policy tooling is pinned in CI to `cargo-deny` 0.20.2 and `cargo-mach
 
 On Linux, macOS, and Windows:
 
-1. build the release conformance and delayed-probe artifacts;
+1. build the release conformance, delayed-probe, and note-probe artifacts;
 2. package the platform-native `.clap` forms;
 3. build `clap-validator` from pinned revision `b2f1d9b79b1d264a5747f46707d72b1aa40a02ef`;
-4. run the validator on both artifacts;
-5. run a bounded five-second two-worker fuzz pass on both artifacts.
+4. run the validator on all three artifacts;
+5. run a bounded five-second two-worker fuzz pass on each artifact.
 
 The recorded validator baseline is **35 passed, 0 failed, 9 intentional skips** for the conformance artifact. The matrix is configured in CI; successful revision-scoped runs and local checks below establish actual coverage. The exported delayed probe (`examples/clap-delayed-probe`) validates at **21 passed, 0 failed, 23 intentional skips** — the skips are parameter/state cases the no-parameter latency probe does not declare — and passes the same bounded fuzz after flushing subnormal delay-line output to zero (initially caught by the fuzzer as subnormal pass-through).
 
@@ -93,9 +93,11 @@ No production DAW scenario, representative performance benchmark, or new Miri ru
 
 The qualification tool remains `clap-validator` 0.4.1 at `b2f1d9b79b1d264a5747f46707d72b1aa40a02ef`, with the reviewed [global-modulation patch](../../vendor/clap-validator/global-modulation.patch). The pin's [`ParamFuzzer::generate_event`](https://github.com/free-audio/clap-validator/blob/b2f1d9b79b1d264a5747f46707d72b1aa40a02ef/src/tests/rng.rs#L863-L891) constructs base-value events containing signed modulation amounts. For a `0..1` gain this sends invalid negative base values; strict plugin rejection correctly fails the unmodified `param-fuzz-modulation` test. Do not loosen parameter admission or exclude that test to compensate.
 
-The patch changes only that global modulation branch's event variant, C struct/header, and amount field, plus a focused seeded regression that fails the original generator. It does not change assertions, ranges, test selection, or production code. Upstream MIT terms are retained alongside it; the tool does not ship in plugin artifacts.
+That patch changes only the global modulation branch's event variant, C struct/header, and amount field, plus a focused seeded regression that fails the original generator. It does not change assertions, ranges, test selection, or production code.
 
-[The installer](../../.github/scripts/install-clap-validator.sh) fetches the exact workflow pin, requires the patch to apply, runs its regression on Rust 1.98.0, and installs into `target/clap-validator/bin` without replacing the user's CLI. All three platform jobs call that same executable for validation and fuzzing. Re-audit and remove the patch when a pinned upstream replacement produces real modulation events; historical results above/below must be read with their recorded source delta.
+Native-note qualification exposed a second generator defect: tuning was sampled from `-128..=128` instead of CLAP's `-120..=120`, and volume admitted zero despite `0 < x <= 4`. The [native-note range patch](../../vendor/clap-validator/native-note-ranges.patch) corrects only these bounds and adds a fixed-seed 20,000-event domain regression. It fails the original code on tuning `127.85912075812644` and passes the correction. Strict plugin validation remains unchanged; no validator test is excluded or weakened. Both patches retain upstream MIT terms and the original license notice; the tool does not ship in plugin artifacts.
+
+[The installer](../../.github/scripts/install-clap-validator.sh) fetches the exact workflow pin, requires both patches to apply, runs all binary unit regressions on Rust 1.98.0, and installs into `target/clap-validator/bin` without replacing the user's CLI. All three platform jobs call that same executable for validation and fuzzing. Re-audit and remove each patch when a pinned upstream replacement corrects its generator; historical results above/below must be read with their recorded source delta.
 
 ### Parameter control policy — 2026-10-24
 
@@ -230,7 +232,7 @@ Current cases include:
 - `host_control_text.rs`: custom choice syntax/stable identity, multibyte buffer boundaries, embedded NUL rejection, and formatter errors swallowed by author code;
 - `exported_probe_reset.rs`: actual exported delay fixture reset clears history/positions without allocation and retains the activation delay;
 - `host_frame_bounds.rs`: activation frame extremes and over-bound rejection;
-- `host_activation_failure.rs`: product activation failure and same-instance retry, explicit descriptor feature preservation, and rejection of schemas whose event ports CLAP cannot yet project;
+- `host_activation_failure.rs`: product activation failure and same-instance retry, explicit descriptor feature preservation, and rejection of unsupported event-port schemas;
 - `host_latency_audio.rs`: nonzero reported latency matching actual delayed audio;
 - `host_restart.rs`: one processor restart request per activation, immediate successful-state-load restart notification before processing, rejected state without restart, unchanged active latency, and reactivation using published state;
 - `host_active_state_save.rs`: coherent CLAP state save while processing is active;
@@ -238,6 +240,7 @@ Current cases include:
 - `host_custom_state.rs`: resource-backed complete state through default save, migration/rejection, deferred restart/reset/reversion, active flush, save/reopen, zero-allocation pending callbacks, and a load racing old DSP completion whose accepted modulation survives rejected base completion;
 - `host_reentrancy.rs`: plugin -> host -> plugin main-thread re-entry through parameter-rescan and latency-change callbacks;
 - `host_panic_containment.rs`: activation/process panic containment at the Clack FFI boundary.
+- `exported_notes.rs`: native port metadata, f32/f64 mixed input order, onset expressions, exact raw wildcard admission, zero-velocity on, original input-port voice feedback including cross-block debt, host output rejection, and callback allocation/deallocation.
 
 The full adapter allocation test covers 1,000 f32 and 1,000 f64 callbacks for each of all-base and mixed base/modulation streams, with stereo main + stereo sidechain and exactly the configured 64 parameter controls, plus actual-entry exact-in-place acceptance and partial-alias rejection, with zero measured allocation/deallocation or host-log calls on the callback thread.
 

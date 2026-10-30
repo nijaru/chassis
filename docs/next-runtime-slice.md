@@ -48,7 +48,7 @@ Descriptors now own immutable normalized-control and formatting/parsing policy. 
 
 Explicitly opted-in floats now accept global held plain-unit amounts in the same bounded ordered stream as base automation. Cached effective cursors add/clamp without changing base or saved state. Held external signals survive reset, reactivation, and state loads. Custom transitions freeze both consumed base and modulation while retaining desired signals for reactivation; CLAP's separate transient projection preserves accepted modulation even when a newer state load defeats base completion.
 
-Core and actual-entry fixtures exercise mixed trajectories, lifecycle/state exclusion, resource gating, malformed/targeted rejection, and allocation bounds. Per-note/expression and non-float modulation remain unsupported rather than flattened. [Parameters/state](design/parameters-state.md#global-additive-float-modulation) owns the contract; [validation](design/validation.md) owns revision-scoped evidence.
+Core and actual-entry fixtures exercise mixed trajectories, lifecycle/state exclusion, resource gating, malformed/targeted rejection, and allocation bounds. Per-note parameter and non-float modulation remain unsupported rather than flattened; native note expression is a separate capability. [Parameters/state](design/parameters-state.md#global-additive-float-modulation) owns the contract; [validation](design/validation.md) owns revision-scoped evidence.
 
 ## Closed — tail and bypass
 
@@ -56,18 +56,22 @@ Tail now reports a completed conservative bound independently of activation late
 
 The core echo fixture preserves latency and existing tail; the exported gain fixture demonstrates timed unity-gain dry processing with subnormal cleanup in f32/f64, and the delayed export reports its actual delay extent. The boundary review also corrected read-only event-descriptor ownership and typed-event pointer provenance at the existing Clack pin. [Runtime services](design/runtime-services.md) owns the semantic contract; the [source audit](research/clack-pinned-adapter-audit.md) owns the FFI delta and [validation](design/validation.md) owns qualified revisions.
 
-## Next — note-port input projection
+## Closed — complete native notes
 
-Project core note ports/input through CLAP and export a non-effect fixture with honest descriptor features. Reject unsupported identity/expression rather than flattening it.
+The input-only slice was expanded to include native expression and bounded output so the exported instrument can report voice completion honestly. CLAP now projects explicit native note-port identities, preserves actual mixed parameter/note order, and supports all seven native expression dimensions. Caller-owned bounded output includes voice-end feedback to the original input port; essential rejection can terminate processing without completing parameter/modulation endpoints or tail metadata.
 
-Follow with bounded output events, expression, MIDI 1/SysEx, and MIDI 2/UMP, each with its deployment projection and focused fixture. The output-descriptor safety correction does not itself implement event output.
+The output-only stereo note probe exercises two input ports with distinct host/schema ordering, f32/f64, strike controls captured at onset, expressions, and same-block retrigger lifetime feedback. The existing Clack pin gains narrowly audited expression layout/decoding corrections. The isolated validator also corrects out-of-contract expression ranges, with a regression that fails its original generator. [Events/transport](design/events-transport.md) owns semantics; the [source audit](research/clack-pinned-adapter-audit.md) and [validation](design/validation.md) own boundary review and revision-scoped evidence.
+
+## Next — MIDI dialects
+
+Add MIDI 1/SysEx, then MIDI 2/UMP, each with explicit capabilities, bounded payload lifetime, faithful deployment projection, and a focused client. Do not silently convert native identity/expression into a lossy MIDI representation. Per-note parameter modulation and span processing remain separate follow-up.
 
 Speaker layouts and richer I/O policies remain demand-driven. Core proof is not format support, and additional formats/editors/devices/graphs do not justify freezing incomplete semantic surfaces.
 
 ## Qualification maintenance
 
 - Keep current Rust/dependency gates and revision-scoped platform evidence distinct.
-- After adapter changes, rebuild/package both fixtures and run the pinned validator plus bounded fuzz.
+- After adapter changes, rebuild/package all exported fixtures and run the pinned validator plus bounded fuzz.
 - Refresh real-host automation, save/reopen, active save, restart, and PDC when a production DAW is available; the September REAPER record is historical.
 - Refresh representative performance when making a comparison or renewing a claim. The old safe-pair benchmark does not measure the new raw alias boundary.
 

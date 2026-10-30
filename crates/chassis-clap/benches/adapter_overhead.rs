@@ -13,7 +13,7 @@ use chassis_clap::{ClapComponent, F32AndF64, SingleComponentEntry};
 use chassis_runtime::{
     parameters::ParameterDescriptor,
     process::{ActivationConfig, ProcessBlock, ProcessBufferSource},
-    runtime::{Component, Process, Processor},
+    runtime::{Component, Process, ProcessError, Processor},
 };
 use clack_host::{
     events::event_types::ParamValueEvent, factory::plugin::PluginFactory, prelude::*,
@@ -75,18 +75,26 @@ struct BenchProcessor;
 impl Processor for BenchProcessor {}
 
 impl Process<f32> for BenchProcessor {
-    fn process<B>(&mut self, _block: &mut ProcessBlock<'_, '_, '_, f32, B>)
+    fn process<B>(
+        &mut self,
+        _block: &mut ProcessBlock<'_, '_, '_, f32, B>,
+    ) -> Result<(), ProcessError>
     where
         B: ProcessBufferSource<f32> + ?Sized,
     {
+        Ok(())
     }
 }
 
 impl Process<f64> for BenchProcessor {
-    fn process<B>(&mut self, _block: &mut ProcessBlock<'_, '_, '_, f64, B>)
+    fn process<B>(
+        &mut self,
+        _block: &mut ProcessBlock<'_, '_, '_, f64, B>,
+    ) -> Result<(), ProcessError>
     where
         B: ProcessBufferSource<f64> + ?Sized,
     {
+        Ok(())
     }
 }
 

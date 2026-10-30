@@ -583,7 +583,7 @@ impl fmt::Display for ParameterSyncError {
 
 impl std::error::Error for ParameterSyncError {}
 
-fn normalize_input_event(
+pub(crate) fn normalize_input_event(
     state: &ClapStateProjection,
     event: &UnknownEvent,
 ) -> Result<Option<ParameterEvent>, &'static str> {
@@ -637,27 +637,6 @@ fn normalize_input_event(
     }
 }
 
-pub(crate) fn normalized_events(
-    state: &ClapStateProjection,
-    input: &InputEvents<'_>,
-    output: &mut Vec<ParameterEvent>,
-) -> Result<(), &'static str> {
-    output.clear();
-    if input.len() > state.maximum_input_events {
-        return Err("CLAP input event count exceeds the activation bound");
-    }
-    for event in input {
-        let Some(normalized) = normalize_input_event(state, event)? else {
-            continue;
-        };
-        if output.len() == output.capacity() {
-            return Err("CLAP parameter event count exceeds the activation bound");
-        }
-        output.push(normalized);
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -668,6 +647,21 @@ mod tests {
         state::{StateDocument, StateEntry, StateLimits},
     };
     use clack_plugin::events::Pckn;
+
+    fn normalized_events(
+        state: &ClapStateProjection,
+        input: &InputEvents<'_>,
+        output: &mut Vec<ParameterEvent>,
+    ) -> Result<(), &'static str> {
+        let bound = u32::try_from(output.capacity()).expect("small fixture event bound");
+        let mut scratch =
+            crate::input_events::InputScratch::new(bound, 0, state.maximum_input_events)
+                .expect("small fixture scratch allocation");
+        let notes = crate::notes::ClapNoteConfiguration::new(&[], &[]).expect("empty note schema");
+        let result = scratch.normalize(state, &notes, input, 4);
+        *output = scratch.parameters;
+        result
+    }
 
     fn state_identity() -> StateIdentity {
         StateIdentity::new(

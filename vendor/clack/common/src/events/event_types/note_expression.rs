@@ -56,6 +56,7 @@ impl NoteExpressionType {
             CLAP_NOTE_EXPRESSION_PAN => Some(Pan),
             CLAP_NOTE_EXPRESSION_TUNING => Some(Tuning),
             CLAP_NOTE_EXPRESSION_VIBRATO => Some(Vibrato),
+            CLAP_NOTE_EXPRESSION_EXPRESSION => Some(Expression),
             CLAP_NOTE_EXPRESSION_BRIGHTNESS => Some(Brightness),
             CLAP_NOTE_EXPRESSION_PRESSURE => Some(Pressure),
             _ => None,
@@ -87,6 +88,7 @@ impl NoteExpressionType {
 /// values and then apply the note expression when received. A plugin may make a choice
 /// to smooth note expression streams.
 #[derive(Copy, Clone)]
+#[repr(C)]
 pub struct NoteExpressionEvent {
     inner: clap_event_note_expression,
 }

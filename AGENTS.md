@@ -5,7 +5,7 @@
 - `docs/architecture.md` owns scope and architectural constraints; `docs/design/` owns individual contracts. Read the affected contract before changing it and update its owner when the decision changes.
 - `docs/roadmap.md` owns deferred framework work; `docs/next-runtime-slice.md` owns the immediate implementation sequence; `docs/design/validation.md` owns qualification evidence. Do not duplicate their status here.
 - `docs/dependencies.md` and `docs/licensing.md` govern dependency and distribution changes.
-- Workspace packages: `chassis-runtime` (format-independent semantics and lifecycle), `chassis-clap` (CLAP deployment), and two exported qualification fixtures under `examples/`.
+- Workspace packages: `chassis-runtime` (format-independent semantics and lifecycle), `chassis-clap` (CLAP deployment), and exported qualification fixtures under `examples/`.
 - Development tracks `stable` in `rust-toolchain.toml`, Edition 2024. CI's explicit compiler is a validation baseline, not a declared MSRV.
 
 ```sh

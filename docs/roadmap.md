@@ -12,16 +12,17 @@ This roadmap records unfinished capabilities, not a requirement to build every l
 - Explicitly opted-in global additive float modulation, separate held-input lifetime, clamped effective cursors, and resource-safe desired/consumed signal separation in core and CLAP.
 - Descriptor-owned normalized-control and formatting/parsing policy, shared by framework controls and deployment text without changing plain-unit automation/state.
 - Native CLAP deployment for fixed mapped audio configurations, typed parameters, coherent complete state with deferred resource reactivation, automation, render mode, latency, completed tail snapshots, and explicit timed Boolean bypass.
+- Native CLAP note ports, bounded input/output and voice-end feedback, all seven expressions, preserved mixed input order, and an output-only stereo instrument export.
 - Rust/concurrency/allocation tests, packaged CLAP validator/fuzz gates, and dated host/performance baselines.
 
-Core capability is not deployment support. CLAP note/event projection remains incomplete; VST3/AU, editors, devices, graphs, hosting, and media integrations are not implemented. [Validation](design/validation.md) owns exact evidence and its revision limits.
+Core capability is not deployment support. CLAP MIDI dialects remain unimplemented; VST3/AU, editors, devices, graphs, hosting, and media integrations are not implemented. [Validation](design/validation.md) owns exact evidence and its revision limits.
 
 ## Near-term semantic and deployment work
 
-1. Export a non-effect fixture: note ports/input, honest descriptor features, then bounded event output and expression/MIDI families. Per-note modulation and other domains remain capability-driven follow-up.
+1. Add MIDI 1/SysEx and MIDI 2/UMP with explicit payload lifetime, bounded work, and deployment fixtures. Per-note parameter modulation and other domains remain capability-driven follow-up.
 2. Add prepared adoption/reclamation and background-work lifecycle only when the resource-backed client needs more than reactivation.
 
-Automation completion has one runtime owner; CLAP synchronizes/publishes dense values without replaying events or scanning stable choice identities on the callback. A reviewed local Clack plugin patch returns rejected-process failure without synchronous reporting. Unsupported CLAP event ports remain explicitly rejected.
+Automation completion has one runtime owner; CLAP synchronizes/publishes dense values without replaying events or scanning stable choice identities on the callback. A reviewed local Clack plugin patch returns rejected-process failure without synchronous reporting. Unsupported CLAP event dialects remain explicitly rejected.
 
 These are independently deliverable contracts. Do not turn “core closure” into a blanket freeze or defer all deployment feedback until after a large core redesign.
 

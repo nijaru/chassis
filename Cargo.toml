@@ -4,6 +4,7 @@ members = [
     "crates/chassis-clap",
     "examples/clap-conformance",
     "examples/clap-delayed-probe",
+    "examples/clap-note-probe",
 ]
 exclude = ["vendor/clack/plugin", "vendor/clack/extensions", "vendor/clack/common"]
 resolver = "3"

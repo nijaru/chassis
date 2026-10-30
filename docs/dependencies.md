@@ -18,7 +18,7 @@ repository: https://github.com/prokopyl/clack
 revision:   c5975f9f89f0953b00768680357985d46178078a
 ```
 
-The revision identifies Clack's development 0.2.0 workspace after the plugin-side reentrancy fix and the immediately following safety/lifetime work. Host retains this exact source. Workspace Cargo patches consume common, plugin, and extensions from `vendor/clack`, copied from the same revision with narrowly reviewed nonlogging process-error, read-only output-descriptor, and typed-event provenance corrections. The [Clack audit](research/clack-pinned-adapter-audit.md) owns its provenance and complete source delta. Original MIT/Apache license texts are retained; no dependency versions change. `audio-ports`, `latency`, `params`, `render`, `state`, and `tail` extensions are enabled for the plugin; tests additionally enable host-side support and logging observation.
+The revision identifies Clack's development 0.2.0 workspace after the plugin-side reentrancy fix and the immediately following safety/lifetime work. Host retains this exact source. Workspace Cargo patches consume common, plugin, and extensions from `vendor/clack`, copied from the same revision with narrowly reviewed nonlogging process-error, read-only output-descriptor, typed-event provenance, and native-expression layout/decoding corrections. The [Clack audit](research/clack-pinned-adapter-audit.md) owns its provenance and complete source delta. Original MIT/Apache license texts are retained; no dependency versions change. `audio-ports`, `latency`, `note-ports`, `params`, `render`, `state`, and `tail` extensions are enabled for the plugin; tests additionally enable host-side support and logging observation.
 
 ### Why this git exception exists
 
@@ -84,7 +84,7 @@ Dependencies are acceptable at non-realtime edges much more readily than on the 
 | --- | --- | --- | --- |
 | Chassis workspace | framework | AGPL-3.0-or-later + intended separate commercial license | current |
 | Clack `c5975f9` + local patches | low-level CLAP boundary | MIT OR Apache-2.0 | common/plugin/extensions corrections at the same pin; host unchanged; audit and validation own evidence |
-| `clack-extensions` from same revision | CLAP extension wrappers | MIT OR Apache-2.0 | audio ports, latency, parameters, render mode, state, and host tail notification; local snapshot getter replaces unsafe live-DSP tail access |
+| `clack-extensions` from same revision | CLAP extension wrappers | MIT OR Apache-2.0 | audio/note ports, latency, parameters, render mode, state, and host tail notification; local snapshot getter replaces unsafe live-DSP tail access |
 | `clap-sys` 0.5.0 | raw CLAP ABI | MIT OR Apache-2.0 | direct adapter dependency for the shared-snapshot tail vtable; already used transitively by Clack |
 | CLAP SDK | CLAP ABI specification | MIT | compatible |
 | `clap-wrapper` | project CLAP into VST3/AU/AAX/standalone | MIT | preferred initial projection candidate; validate semantics per target |
@@ -99,7 +99,7 @@ Clack still owns CLAP ABI lifecycle, descriptor borrowing, and panic containment
 
 ## Qualification tool source
 
-CLAP qualification uses the exact validator revision in `.github/workflows/clap-conformance.yml`, with an MIT-licensed global-modulation generator correction under `vendor/clap-validator`. Its source delta, regression, isolated build, and refresh trigger are owned by [validation](design/validation.md#validator-source-and-local-fix). This is a development tool, not a new runtime dependency or part of distributed plugin artifacts; the Chassis lockfile and Clack pin are unchanged.
+CLAP qualification uses the exact validator revision in `.github/workflows/clap-conformance.yml`, with MIT-licensed global-modulation and native-expression generator corrections under `vendor/clap-validator`. Their source deltas, regressions, isolated build, and refresh trigger are owned by [validation](design/validation.md#validator-source-and-local-fix). This is a development tool, not a new runtime dependency or part of distributed plugin artifacts; the Chassis lockfile and Clack pin are unchanged.
 
 ## AAX exception
 

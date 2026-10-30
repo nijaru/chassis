@@ -247,6 +247,6 @@ The original schema freeze criteria have now been exercised by:
 - direct non-plugin/embedded runtime use;
 - runtime-owned dynamic/hosted audio and event metadata.
 
-Those cases fit the same schema/runtime model without a new lifecycle, richer policy language, or mandatory new convenience constructors. The remaining broad Chassis work—per-note modulation, event output/MIDI/expression, tail/bypass, background lifecycle, editor/device/graph/hosting layers, and additional plugin formats—may still expose changes, but there is no current evidence for reopening the ownership model speculatively.
+Those cases fit the same schema/runtime model without a new lifecycle, richer policy language, or mandatory new convenience constructors. The remaining broad Chassis work—per-note parameter modulation, MIDI dialects, background lifecycle, editor/device/graph/hosting layers, and additional plugin formats—may still expose changes, but there is no current evidence for reopening the ownership model speculatively.
 
 Treat `ComponentSchema` + `InstanceRuntime` as a candidate-stable architecture and change it only when a concrete later layer exposes a semantic mismatch.

@@ -3,10 +3,12 @@
 //! This adapter projects explicit stable audio/parameter IDs and coherent
 //! parameter/custom state into CLAP. Process-time audio is driven by the validated
 //! setup mapping rather than a hard-coded stereo buffer shape. The audio path
-//! supports f32 exports and explicit f64-capable exports; note/event projections
-//! remain explicit follow-up work.
+//! supports f32 exports and explicit f64-capable exports, native note/expression
+//! ports, and bounded native-note output including voice-lifetime feedback.
 
 mod audio;
+mod input_events;
+mod notes;
 mod parameters;
 mod process_audio;
 mod raw_audio;
@@ -26,6 +28,7 @@ use audio::{ClapAudioConfiguration, ClapProcessSlot};
 use chassis_runtime::{
     audio::PortDirection,
     automation::ParameterEvents,
+    events::NoteEvents,
     process::{ProcessConfig, ProcessContext, ProcessMode, TransportSnapshot},
     runtime::{Component, InstanceRuntime, Process as ChassisProcess, Processor},
     schema::ComponentSchema,
@@ -34,6 +37,7 @@ use chassis_runtime::{
 use clack_extensions::{
     audio_ports::{AudioPortInfoWriter, PluginAudioPorts, PluginAudioPortsImpl},
     latency::{HostLatency, PluginLatency, PluginLatencyImpl},
+    note_ports::{NotePortInfoWriter, PluginNotePorts, PluginNotePortsImpl},
     params::{
         HostParams, ParamDisplayWriter, ParamInfo, ParamRescanFlags, PluginAudioProcessorParams,
         PluginMainThreadParams, PluginParams,
@@ -56,20 +60,22 @@ use clack_plugin::{
     stream::{InputStream, OutputStream},
     utils::Cookie,
 };
-use parameters::{
-    ClapStateProjection, ParameterSyncError, StateProjectionError, normalized_events,
-};
+use input_events::InputScratch;
+use notes::{ClapNoteConfiguration, ClapNoteOutput};
+use parameters::{ClapStateProjection, ParameterSyncError, StateProjectionError};
 use process_audio::{ClapBufferSource, ClapSample, ClapSamplePrecision, sample_precision};
 
 /// Explicit CLAP audio-port projection metadata.
 pub use audio::{ClapAudioPort, DEFAULT_CLAP_AUDIO_PORTS};
 /// Re-export of Clack's CLAP entry macro for Chassis export crates.
 pub use clack_plugin::clack_export_entry;
+/// Explicit CLAP native-note port projection metadata.
+pub use notes::ClapNotePort;
 
 /// CLAP deployment metadata for a Chassis component.
 ///
-/// The current projection supports mapped audio and complete semantic state;
-/// event ports are rejected until their CLAP projection is implemented.
+/// The projection supports mapped audio, native notes/expression, and complete
+/// semantic state. Unsupported event dialects are rejected at setup.
 ///
 /// Parameter and audio-port IDs are explicit because stable Chassis keys cannot
 /// be silently hashed or assigned from declaration order without creating a
@@ -101,6 +107,21 @@ pub trait ClapComponent: Component + Default + 'static {
     /// choice descriptors are projected; choices use their stepped plain index
     /// for CLAP while Chassis retains stable semantic option identity in state.
     const CLAP_PARAMETER_IDS: &'static [(&'static str, u32)] = &[];
+
+    /// Stable CLAP note-port IDs keyed by canonical component event-port key.
+    ///
+    /// Every event port requires one mapping. Only native notes/expression are
+    /// supported; MIDI dialects are not implicitly converted.
+    const CLAP_NOTE_PORTS: &'static [ClapNotePort] = &[];
+
+    /// Maximum native note/expression input records accepted per callback.
+    const CLAP_MAX_NOTE_EVENTS: u32 = 0;
+
+    /// Maximum native-note output attempts, including rejected pushes, per callback.
+    ///
+    /// Voice-end feedback refers to an input port and does not require an output
+    /// port. Products own failure/retry policy within this bound.
+    const CLAP_MAX_OUTPUT_NOTE_EVENTS: u32 = 0;
 
     /// Maximum number of known CLAP parameter value events accepted per block.
     ///
@@ -160,6 +181,7 @@ impl RenderState {
 pub struct ChassisShared {
     schema: Arc<ComponentSchema>,
     parameters: Arc<ClapStateProjection>,
+    notes: Arc<ClapNoteConfiguration>,
     render: Arc<RenderState>,
     // A completed scalar only: relaxed loads publish no associated payload.
     tail: AtomicU32,
@@ -173,6 +195,7 @@ pub struct ChassisMainThread<'host, C> {
     component: C,
     schema: Arc<ComponentSchema>,
     audio: ClapAudioConfiguration,
+    notes: Arc<ClapNoteConfiguration>,
     shared: Arc<ClapStateProjection>,
     render: Arc<RenderState>,
     latency: AtomicU32,
@@ -189,7 +212,7 @@ where
     restart_sent: bool,
     host_tail: Option<HostTail>,
     shared: &'a ChassisShared,
-    normalized_events: Vec<chassis_runtime::automation::ParameterEvent>,
+    input: InputScratch,
     control_values: Vec<f64>,
     parameter_generation: Option<u64>,
     activation_custom_generation: u64,
@@ -210,6 +233,9 @@ where
 
     fn declare_extensions(builder: &mut PluginExtensions<Self>, shared: Option<&Self::Shared<'_>>) {
         builder.register::<PluginAudioPorts>();
+        if shared.is_none_or(|shared| !shared.notes.is_empty()) {
+            builder.register::<PluginNotePorts>();
+        }
         builder.register::<PluginLatency>();
         builder.register::<tail::PluginTailSnapshot>();
         if shared.is_none_or(|shared| !shared.parameters.bindings().is_empty()) {
@@ -253,6 +279,9 @@ where
 
     fn declare_extensions(builder: &mut PluginExtensions<Self>, shared: Option<&Self::Shared<'_>>) {
         builder.register::<PluginAudioPorts>();
+        if shared.is_none_or(|shared| !shared.notes.is_empty()) {
+            builder.register::<PluginNotePorts>();
+        }
         builder.register::<PluginLatency>();
         builder.register::<tail::PluginTailSnapshot>();
         if shared.is_none_or(|shared| !shared.parameters.bindings().is_empty()) {
@@ -334,9 +363,16 @@ where
             "CLAP state projection requires semantic component state identity",
         ));
     };
-    if !schema.event_ports().is_empty() {
+    let notes = ClapNoteConfiguration::new(schema.event_ports(), C::CLAP_NOTE_PORTS)
+        .map_err(PluginError::from)?;
+    if notes.has_inputs() && C::CLAP_MAX_NOTE_EVENTS == 0 {
         return Err(PluginError::Message(
-            "CLAP event-port projection is not implemented",
+            "CLAP note input requires a positive event bound",
+        ));
+    }
+    if C::CLAP_MAX_NOTE_EVENTS > C::CLAP_MAX_INPUT_EVENTS {
+        return Err(PluginError::Message(
+            "CLAP note event bound exceeds total input event bound",
         ));
     }
     if !schema.parameters().is_empty() && C::CLAP_MAX_PARAMETER_EVENTS == 0 {
@@ -366,6 +402,7 @@ where
     Ok(ChassisShared {
         schema: Arc::new(schema),
         parameters: Arc::new(parameters),
+        notes: Arc::new(notes),
         render: Arc::new(RenderState::default()),
         tail: AtomicU32::new(0),
         tail_notification_pending: AtomicBool::new(false),
@@ -396,6 +433,7 @@ where
         component,
         schema: Arc::clone(&shared.schema),
         audio,
+        notes: Arc::clone(&shared.notes),
         shared: Arc::clone(&shared.parameters),
         render: Arc::clone(&shared.render),
         latency: AtomicU32::new(0),
@@ -418,16 +456,17 @@ where
     C: ClapComponent<Processor = P>,
     P: Processor,
 {
-    let process = map_process_config(audio_config, C::CLAP_MAX_PARAMETER_EVENTS)?;
+    let process = map_process_config(audio_config, C::CLAP_MAX_PARAMETER_EVENTS)?
+        .with_max_note_events(C::CLAP_MAX_NOTE_EVENTS)
+        .with_max_output_note_events(C::CLAP_MAX_OUTPUT_NOTE_EVENTS);
     let (runtime, activation_custom_generation) =
         projected_runtime(&main_thread.component, shared)?;
 
-    let maximum_events = usize::try_from(C::CLAP_MAX_PARAMETER_EVENTS)
-        .map_err(|_| PluginError::Message("CLAP parameter event bound is not representable"))?;
-    let mut normalized_events = Vec::new();
-    normalized_events
-        .try_reserve_exact(maximum_events)
-        .map_err(PluginError::from)?;
+    let input = InputScratch::new(
+        C::CLAP_MAX_PARAMETER_EVENTS,
+        C::CLAP_MAX_NOTE_EVENTS,
+        C::CLAP_MAX_INPUT_EVENTS,
+    )?;
     let mut control_values = Vec::new();
     control_values
         .try_reserve_exact(shared.parameters.bindings().len())
@@ -446,7 +485,7 @@ where
         host,
         restart_sent: false,
         shared,
-        normalized_events,
+        input,
         control_values,
         parameter_generation: None,
         activation_custom_generation,
@@ -503,6 +542,18 @@ where
             PortDirection::Output
         };
         if let Some(info) = self.audio.info(index, direction) {
+            writer.set(&info);
+        }
+    }
+}
+
+impl<C: ClapComponent> PluginNotePortsImpl for ChassisMainThread<'_, C> {
+    fn count(&self, is_input: bool) -> u32 {
+        self.notes.count(is_input)
+    }
+
+    fn get(&self, index: u32, is_input: bool, writer: &mut NotePortInfoWriter) {
+        if let Some(info) = self.notes.info(index, is_input) {
             writer.set(&info);
         }
     }
@@ -669,9 +720,9 @@ where
         &mut self,
         process: ClapProcess,
         audio: Audio,
-        events: Events,
+        mut events: Events,
     ) -> Result<ProcessStatus, PluginError> {
-        self.process_block::<f32>(process, audio, &events, C::CLAP_MAX_PARAMETER_EVENTS)
+        self.process_block::<f32>(process, audio, &mut events)
     }
 
     fn deactivate(mut self, _main_thread: &ChassisMainThread<'_, C>) {
@@ -710,16 +761,12 @@ where
         &mut self,
         process: ClapProcess,
         mut audio: Audio,
-        events: Events,
+        mut events: Events,
     ) -> Result<ProcessStatus, PluginError> {
         let precision = sample_precision(&mut audio, &self.process_slots)?;
         match precision {
-            ClapSamplePrecision::F32 => {
-                self.process_block::<f32>(process, audio, &events, C::CLAP_MAX_PARAMETER_EVENTS)
-            }
-            ClapSamplePrecision::F64 => {
-                self.process_block::<f64>(process, audio, &events, C::CLAP_MAX_PARAMETER_EVENTS)
-            }
+            ClapSamplePrecision::F32 => self.process_block::<f32>(process, audio, &mut events),
+            ClapSamplePrecision::F64 => self.process_block::<f64>(process, audio, &mut events),
         }
     }
 
@@ -783,8 +830,7 @@ where
         &mut self,
         process: ClapProcess,
         audio: Audio,
-        events: &Events,
-        maximum_parameter_events: u32,
+        events: &mut Events,
     ) -> Result<ProcessStatus, PluginError>
     where
         P: ChassisProcess<S>,
@@ -804,34 +850,43 @@ where
             ClapBufferSource::<S>::new(audio, &self.process_slots, &mut self.audio_scratch)?;
         let frame_count = buffers.frame_count();
 
-        normalized_events(
-            &self.shared.parameters,
-            events.input,
-            &mut self.normalized_events,
-        )
-        .map_err(PluginError::Message)?;
+        self.input
+            .normalize(
+                &self.shared.parameters,
+                &self.shared.notes,
+                events.input,
+                frame_count,
+            )
+            .map_err(PluginError::Message)?;
         let parameter_events = ParameterEvents::new(
-            &self.normalized_events,
+            &self.input.parameters,
             frame_count,
-            maximum_parameter_events,
+            self.input.maximum_parameters,
         )
         .map_err(|_| PluginError::Message("Invalid CLAP parameter event stream"))?;
-        // Normalization validated descriptor domains and ParameterEvents checked
-        // the original shape/bounds above. Without a coherent matching baseline,
-        // withhold trajectories even on transient snapshot contention: a custom
-        // load may have completed immediately before another writer took over.
-        let parameter_events = if generation.is_some() {
-            parameter_events
-        } else {
-            ParameterEvents::empty_for_block(frame_count)
-        };
-        let context = ProcessContext::new(
+        let note_events = NoteEvents::new(&self.input.notes, frame_count, self.input.maximum_notes)
+            .map_err(|_| PluginError::Message("Invalid CLAP note event stream"))?;
+        let context = ProcessContext::with_note_events(
             self.shared.render.process_mode(),
             transport,
             parameter_events,
-        );
+            note_events,
+        )
+        .with_input_order(&self.input.order)
+        .map_err(|_| PluginError::Message("Invalid CLAP mixed input order"))?;
+        // Validate the complete source before withholding controls. Notes retain
+        // their order and continue while old custom resources remain active.
+        let context = if generation.is_some() {
+            context
+        } else {
+            context.without_parameter_events()
+        };
+        let mut output = ClapNoteOutput {
+            configuration: &self.shared.notes,
+            output: events.output,
+        };
         self.runtime
-            .process_source(frame_count, context, &mut buffers)
+            .process_source_with_output(frame_count, context, &mut buffers, &mut output)
             .map_err(|_| PluginError::Message("Invalid Chassis process block"))?;
 
         // External held input survives a newer state publication, including
@@ -839,8 +894,8 @@ where
         self.shared
             .parameters
             .modulation
-            .retain_endpoints(&self.normalized_events);
-        let base_changed = self.normalized_events.iter().any(|event| {
+            .retain_endpoints(&self.input.parameters);
+        let base_changed = self.input.parameters.iter().any(|event| {
             !matches!(
                 event.change(),
                 chassis_runtime::automation::ParameterEventChange::Modulate { .. }

@@ -48,7 +48,7 @@ Processor
 
 Process<S>
   sample-representation-specific processing capability
-  process(ProcessBlock<S>)
+  process(ProcessBlock<S>) -> Result<(), ProcessError>
 ```
 
 The ownership split is the durable contract; exact convenience API spelling remains pre-alpha.
@@ -197,6 +197,12 @@ trim.format_value(&plain, &mut text)?; // "25.0 %"
 
 [TrimControl](../../examples/clap-conformance/src/trim_control.rs) is the executable example; [parameters/state](parameters-state.md#control-mapping-and-presentation) owns validation, rounding, configuration equality, and deployment limits. Policies run off the callback and never transform stored values or automation. CLAP shares policy text, not an arbitrary host-knob normalized taper.
 
+## Native notes and output
+
+Declare stable event-port keys and `EventDialect::Notes` in the schema. Resolve dense indices at setup; CLAP additionally requires explicit `ClapNotePort` IDs and input/output attempt bounds. `ProcessContext::ordered_events()` exposes a source-defined mixed order only when supplied, otherwise returning `None`.
+
+`ProcessBlock::try_push_note_event` forwards to a borrowed caller sink with bounded attempts and explicit rejection. Voice-end feedback uses the original input address, not an output port. Propagate essential failure with `?` from `Process::process`; the runtime does not complete parameter/modulation endpoints or tail metadata on error, and deployments need not resume the failed run. [Events/transport](events-transport.md) owns the detailed contract; the [note probe](../../examples/clap-note-probe/src/lib.rs) is the executable CLAP example.
+
 ## Sample representation
 
 `Processor` and `Process<S>` remain separate deliberately. One processor lifecycle may implement:
@@ -222,7 +228,7 @@ Do not create generic lookahead/oversampling/model wrappers merely to make the f
 
 Explicit host/application ramps are reproduced without automatic extra smoothing. Smoothing is DSP policy; reusable ramp/smoother utilities may live in the DSP utility layer without changing automation semantics.
 
-Global additive float modulation shares the ordered parameter-control stream but not durable base storage. Held amounts survive reset, reactivation, and state load, and are excluded from save. [Parameters/state](parameters-state.md#global-additive-float-modulation) owns the domain, combination, lifecycle, and custom-resource transition contract. Per-note expression remains a separate unsupported capability.
+Global additive float modulation shares the ordered parameter-control stream but not durable base storage. Held amounts survive reset, reactivation, and state load, and are excluded from save. [Parameters/state](parameters-state.md#global-additive-float-modulation) owns the domain, combination, lifecycle, and custom-resource transition contract. Native note expression is a separate supported capability; it does not enable per-note parameter modulation.
 
 Editor/application-originated parameter edits need typed begin/change/end gesture semantics, observation, and echo suppression. They must never expose unrestricted mutable processor access.
 

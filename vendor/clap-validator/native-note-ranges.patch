@@ -1,0 +1,52 @@
+diff --git a/src/tests/rng.rs b/src/tests/rng.rs
+--- a/src/tests/rng.rs
++++ b/src/tests/rng.rs
+@@ -439,8 +439,8 @@ impl<'a> NoteGenerator<'a> {
+ 
+                     let expression_id = prng.random_range(CLAP_NOTE_EXPRESSION_VOLUME..=CLAP_NOTE_EXPRESSION_PRESSURE);
+                     let value_range = match expression_id {
+-                        CLAP_NOTE_EXPRESSION_VOLUME => 0.0..=4.0,
+-                        CLAP_NOTE_EXPRESSION_TUNING => -128.0..=128.0,
++                        CLAP_NOTE_EXPRESSION_VOLUME => f64::from_bits(1)..=4.0,
++                        CLAP_NOTE_EXPRESSION_TUNING => -120.0..=120.0,
+                         _ => 0.0..=1.0,
+                     };
+                     let value = prng.random_range(value_range);
+@@ -1019,6 +1019,37 @@ mod global_modulation_tests {
+     }
+ }
+ 
++#[cfg(test)]
++mod native_note_tests {
++    use super::*;
++    use crate::plugin::ext::note_ports::NotePort;
++
++    #[test]
++    fn native_expression_values_follow_clap_domains() {
++        let config = NotePortConfig {
++            inputs: vec![NotePort {
++                supported_dialects: vec![clap_sys::ext::note_ports::CLAP_NOTE_DIALECT_CLAP],
++            }],
++            outputs: vec![],
++        };
++        let mut generator = NoteGenerator::new(&config).with_inconsistent_events();
++        let mut rng = new_prng();
++        let mut expressions = 0;
++        for _ in 0..20_000 {
++            if let Some(Event::NoteExpression(event)) = generator.generate_event(&mut rng, 0) {
++                assert!(event.value.is_finite());
++                match event.expression_id {
++                    CLAP_NOTE_EXPRESSION_VOLUME => assert!(event.value > 0.0 && event.value <= 4.0),
++                    CLAP_NOTE_EXPRESSION_TUNING => assert!((-120.0..=120.0).contains(&event.value), "invalid tuning {}", event.value),
++                    _ => assert!((0.0..=1.0).contains(&event.value)),
++                }
++                expressions += 1;
++            }
++        }
++        assert!(expressions > 0);
++    }
++}
++
+ impl TransportFuzzer {
+     /// Create a new transport fuzzer.
+     pub fn new() -> Self {

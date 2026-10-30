@@ -25,7 +25,7 @@ Keep these distinct:
 3. **modulation** — process-time contribution that does not overwrite base state;
 4. **effective DSP value** — the result after combination/product policy.
 
-Base values, automation, and explicitly opted-in global additive float modulation are implemented. Per-note modulation and expression remain unsupported.
+Base values, automation, and explicitly opted-in global additive float modulation are implemented. Per-note parameter modulation remains unsupported. Native note expression is a separate [event capability](events-transport.md#note-expression), not a parameter-state extension.
 
 `ParameterEvents` and trajectory cursors borrow fixed-width event slices, not choice text or another persistent state store. The accepted event count therefore bounds shape-validation work independently of identifier length.
 

@@ -35,6 +35,7 @@ Processor
 
 Process<S>
   sample-representation-specific processing over borrowed ProcessBlock<S>
+  returns Result<(), ProcessError>
 
 Deployment publication bridge
   adapter-only when host object lifetimes require cross-domain synchronization
@@ -187,11 +188,12 @@ A source must repeat the same finite topology and dimensions across traversals. 
 - canonical consumed base parameter state and held modulation baseline;
 - sample-accurate bounded parameter/note/event sources;
 - transport/process context;
-- a safe `ProcessBufferSource<S>`.
+- a safe `ProcessBufferSource<S>`;
+- an optional caller-owned bounded native-note output sink.
 
 Adapters/embeddings prove raw pointer/alias facts before safe channel views enter core. Setup owns stable-to-dense endpoint translation and whole-I/O policy acceptance. Callback code consumes pre-resolved dense identities without callback-owned channel vectors or stable-string lookup.
 
-Outside the pending custom-state gate, successful DSP retains final automation points as durable parameter values. Event-free blocks, state export, and reactivation use those completed values. Failed validation or a processor/tail-query panic commits no endpoints. The completed tail hook runs before retaining base or modulation endpoints. Source ramps remain block-local; sources supply clipped continuation points rather than relying on hidden ramp state.
+Outside the pending custom-state gate, successful DSP retains final automation points as durable parameter values. Event-free blocks, state export, and reactivation use those completed values. Failed validation, a returned `ProcessError`, or a processor/tail-query panic commits no endpoints or new tail snapshot. Product errors propagate before the tail hook; audio, DSP history, and already delivered output are not rolled back. CLAP terminates that processing run rather than promising recovery. The completed tail hook runs before retaining base or modulation endpoints. Source ramps remain block-local; sources supply clipped continuation points rather than relying on hidden ramp state.
 
 `crates/chassis-runtime/tests/realtime_alloc.rs` mechanically checks post-activation allocation/deallocation with float/integer/boolean/choice completion, including choice replacement after control edits and state loading. Full adapter-path allocation/work and performance evidence remains separate.
 
@@ -207,7 +209,7 @@ A separate bounded scalar projection retains global modulation across CLAP runti
 
 CLAP projects the runtime's completed store rather than replaying automation. Publication uses the generation actually synchronized before processing, so newer control/state publication defeats stale completion. A changed custom epoch gates parameter synchronization and automation until deactivation; desired replacements remain saveable while old resources continue. An already-running old-generation block may finish and establish the frozen local baseline, but cannot overwrite the replacement. Snapshot contention withholds trajectories for that block without permanently latching the gate. [Parameters/state](parameters-state.md#complete-clap-state-publication) owns the full concurrency contract.
 
-CLAP load runs component-owned migrations/complete validation before publishing a candidate. Shared creation validates original defaults against deployment wire bounds; the separately retained definition must admit those defaults rather than substitute its own. Activation and load reject component schema drift. Unsupported event ports still fail explicitly.
+CLAP load runs component-owned migrations/complete validation before publishing a candidate. Shared creation validates original defaults against deployment wire bounds; the separately retained definition must admit those defaults rather than substitute its own. Activation and load reject component schema drift. Unsupported event dialects or unrepresentable port mappings still fail explicitly.
 
 ## Deactivation and teardown
 
@@ -230,8 +232,8 @@ Future background tasks, callbacks, editors, deferred reclamation, devices, grap
 
 The ownership/schema/identity migration is no longer the blocker. Remaining core work should be driven by concrete audio semantics:
 
-1. extend the qualified global float modulation subset only when a client needs per-note/expression or other domains; keep external signals separate from durable state;
-2. finish the event/output/expression/MIDI contracts needed by real instruments and event processors;
+1. extend the qualified global float modulation subset only when a client needs per-note parameter modulation or other domains; keep external signals separate from durable state;
+2. add the MIDI dialect/payload contracts needed beyond the implemented native note/expression input/output;
 3. add bounded control -> DSP non-parameter publication and background-work/reclamation lifecycle;
 4. add bus/port convenience or a richer `AudioIoPolicy` only if materially different clients show the current explicit model is insufficient;
 5. continue cross-platform, allocation, concurrency, adapter, and real-host qualification as these contracts change.
