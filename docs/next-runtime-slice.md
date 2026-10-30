@@ -80,6 +80,12 @@ Core now validates independently available song/sample/beat positions, meter/bar
 
 This unblocks ordinary host-synced phase/position consumption; it does not expose timestamped transport updates or supply a sequencer, clock engine, or product DSP.
 
+## Closed — DSP authoring surface
+
+`Process<S>` now receives one `ProcessBlock<'_, S>` without a backend-source generic. A scoped lazy iterator supports paired slices and simultaneous cross-channel DSP; independent-channel helpers use the same path. Typed parameter handles resolve kind/domain/modulation during setup and build trajectories from consumed block controls. Complete persistence has one instance-owned public path, and CLAP declares export metadata through one descriptor. Superseded traits, partial-store persistence, and metadata constants are removed rather than retained as compatibility shims.
+
+[Authoring](design/authoring-api.md), [buffers](design/process-buffers.md), and [parameters/state](design/parameters-state.md) own those contracts. Higher-level editor/graph/application work does not require another core lifecycle model.
+
 ## Next — evidence-driven runtime and authoring extensions
 
 Derive the next bounded requirement from established audio software and the intended framework uses, not only from a user-named new client. Concrete source/workload evidence is enough; a separate product migration is not required. Per-note parameter modulation, parameter gestures, span processing, and prepared resource adoption remain separate follow-up contracts, not an automatic event-model expansion.

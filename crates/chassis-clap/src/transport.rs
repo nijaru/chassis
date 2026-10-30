@@ -42,7 +42,7 @@ pub(crate) fn map(transport: Option<&TransportEvent>) -> Result<TransportSnapsho
         sample_position: None,
         seconds_position: seconds.then(|| f64::from(transport.song_pos_seconds)),
         beat_position: beats.then(|| f64::from(transport.song_pos_beats)),
-        bar_start: beats.then(|| f64::from(transport.bar_start)),
+        bar_start_beats: beats.then(|| f64::from(transport.bar_start)),
         bar_number: beats.then(|| i64::from(transport.bar_number)),
         time_signature: has(TransportFlags::HAS_TIME_SIGNATURE).then_some(TimeSignature {
             numerator: transport.time_signature_numerator,

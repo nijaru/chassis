@@ -486,21 +486,13 @@ impl Component for EventEcho {
                     EventPortKey::new("notes.in"),
                     "Input",
                     EventPortDirection::Input,
-                    &[
-                        EventDialect::Notes,
-                        EventDialect::Midi1,
-                        EventDialect::Midi2,
-                    ],
+                    &[EventDialect::Notes, EventDialect::Midi1, EventDialect::Ump],
                 ),
                 EventPortDescriptor::new(
                     EventPortKey::new("notes.out"),
                     "Output",
                     EventPortDirection::Output,
-                    &[
-                        EventDialect::Notes,
-                        EventDialect::Midi1,
-                        EventDialect::Midi2,
-                    ],
+                    &[EventDialect::Notes, EventDialect::Midi1, EventDialect::Ump],
                 ),
             ],
             vec![ParameterDescriptor::float("gain", "Gain", 0.0, 1.0, 0.5).unwrap()],

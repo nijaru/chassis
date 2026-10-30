@@ -1,6 +1,6 @@
 //! Format-independent processor activation and per-call process contracts.
 
-use core::{fmt, num::NonZeroU32, ops::ControlFlow};
+use core::{fmt, num::NonZeroU32};
 
 use crate::{
     audio::AudioIoConfiguration,
@@ -516,41 +516,21 @@ impl<'a> ActivationConfig<'a> {
 
 /// Reiterable, allocation-free source of safe process channel views.
 ///
-/// Views are borrowed only for a visitor call, so no callback-owned collection
-/// or retained sample references are needed. Implementations must stop immediately
-/// when the visitor returns `Break`, return that `Break`, and otherwise visit the
-/// complete finite topology. Each traversal must repeat the same endpoints,
-/// relationships, and dimensions (sample contents may change).
+/// Each call must invoke the visitor exactly once with a finite iterator over
+/// the complete topology. Construct the iterator on the stack; do not collect
+/// channel views. Its sample borrows may coexist inside the visitor, enabling
+/// cross-channel DSP without scratch copies, but cannot escape that call.
 ///
-/// Every active endpoint must appear exactly once; silence requires an explicit
-/// view. Runtime topology validation uses activation-owned coverage scratch and
-/// early stopping to reject repeated endpoints within the endpoint count plus one
-/// view, before any dimension-only scan or product DSP.
+/// Traversals must repeat the same endpoints, relationships, and dimensions.
+/// Every active endpoint appears exactly once; silence requires an explicit
+/// view. The runtime stops iteration on the first invalid endpoint, bounding
+/// topology validation by the activation's endpoint count plus one view.
 pub trait ProcessBufferSource<S> {
-    /// Visit lazily constructed safe views without allocating or retaining them.
-    fn visit_channels(
+    /// Lend a stack-owned iterator without allocating or retaining sample views.
+    fn with_channels(
         &mut self,
-        visitor: &mut dyn FnMut(ChannelBuffer<'_, S>) -> ControlFlow<()>,
-    ) -> ControlFlow<()>;
-}
-
-fn validate_source_frames<S>(
-    source: &mut dyn ProcessBufferSource<S>,
-    expected: usize,
-) -> Result<(), ProcessBlockError> {
-    let mut result = Ok(());
-    let _ = source.visit_channels(&mut |mut channel| {
-        let input = channel.input().map(<[S]>::len);
-        let output = channel.output_mut().map(|samples| samples.len());
-        for actual in [input, output].into_iter().flatten() {
-            if actual != expected {
-                result = Err(ProcessBlockError::BufferFrameCountMismatch { expected, actual });
-                return ControlFlow::Break(());
-            }
-        }
-        ControlFlow::Continue(())
-    });
-    result
+        visitor: &mut dyn FnMut(&mut dyn Iterator<Item = ChannelBuffer<'_, S>>),
+    );
 }
 
 /// Allocation-free source over an already-materialized channel slice.
@@ -573,14 +553,11 @@ impl<'buffers, 'samples, S> ChannelBufferSlice<'buffers, 'samples, S> {
 }
 
 impl<S> ProcessBufferSource<S> for ChannelBufferSlice<'_, '_, S> {
-    fn visit_channels(
+    fn with_channels(
         &mut self,
-        visitor: &mut dyn FnMut(ChannelBuffer<'_, S>) -> ControlFlow<()>,
-    ) -> ControlFlow<()> {
-        for buffer in &mut *self.buffers {
-            visitor(buffer.reborrow())?;
-        }
-        ControlFlow::Continue(())
+        visitor: &mut dyn FnMut(&mut dyn Iterator<Item = ChannelBuffer<'_, S>>),
+    ) {
+        visitor(&mut self.buffers.iter_mut().map(ChannelBuffer::reborrow));
     }
 }
 
@@ -607,17 +584,17 @@ pub struct ProcessBlock<'a, S> {
 }
 
 impl<'a, S> ProcessBlock<'a, S> {
-    pub(crate) fn new(
+    // Only InstanceRuntime constructs production blocks, after complete callback
+    // admission. Do not rescan the context or lazy source at this projection.
+    pub(crate) fn from_validated(
         config: &ActivationConfig<'a>,
         parameters: &'a ParameterStore,
         modulation: &'a [f64],
         frame_count: u32,
         context: ProcessContext<'a>,
         source: &'a mut dyn ProcessBufferSource<S>,
-    ) -> Result<Self, ProcessBlockError> {
-        let expected = Self::validate_context(config.process(), frame_count, context)?;
-        validate_source_frames(source, expected)?;
-        Ok(Self {
+    ) -> Self {
+        Self {
             frame_count,
             context,
             parameters,
@@ -629,7 +606,7 @@ impl<'a, S> ProcessBlock<'a, S> {
             remaining_midi_attempts: config.process().midi_output_limits().max_events(),
             remaining_sysex_bytes: config.process().midi_output_limits().max_sysex_bytes(),
             previous_output_offset: None,
-        })
+        }
     }
 
     pub(crate) fn validate_context(
@@ -860,16 +837,49 @@ impl<'a, S> ProcessBlock<'a, S> {
             .copied()
     }
 
+    /// Borrow an iterator for cross-channel algorithms, retaining any number of
+    /// disjoint channel views together inside the closure without allocating.
+    /// Sample references cannot escape the closure.
+    ///
+    /// Sample views cannot be retained outside the traversal:
+    ///
+    /// ```compile_fail
+    /// use chassis_runtime::process::ProcessBlock;
+    /// fn retain(block: &mut ProcessBlock<'_, f32>) {
+    ///     let mut escaped = None;
+    ///     block.with_channels(|channels| escaped = channels.next());
+    ///     drop(escaped);
+    /// }
+    /// ```
+    ///
+    /// # Panics
+    /// Panics if a buffer source violates its exactly-once visitor contract.
+    pub fn with_channels<R>(
+        &mut self,
+        mut visitor: impl FnMut(&mut dyn Iterator<Item = ChannelBuffer<'_, S>>) -> R,
+    ) -> R {
+        let mut result = None;
+        self.source.with_channels(&mut |channels| {
+            assert!(
+                result.is_none(),
+                "buffer source must invoke its visitor exactly once"
+            );
+            result = Some(visitor(channels));
+        });
+        result.expect("buffer source must invoke its visitor exactly once")
+    }
+
     /// Visit every channel, with simultaneous disjoint input/output access by
     /// matching [`ChannelBuffer::Separate`], or one mutable in-place slice.
     pub fn for_each_channel(&mut self, mut visitor: impl FnMut(ChannelBuffer<'_, S>)) {
-        let _ = self.source.visit_channels(&mut |channel| {
-            visitor(channel);
-            ControlFlow::Continue(())
+        self.with_channels(|channels| {
+            for channel in channels {
+                visitor(channel);
+            }
         });
     }
 
-    /// Visit channels until the first error, without visiting later channels.
+    /// Visit channels until the first error, without requesting later channels.
     ///
     /// # Errors
     /// Returns the visitor's first error. Earlier sample writes are not rolled back.
@@ -877,17 +887,12 @@ impl<'a, S> ProcessBlock<'a, S> {
         &mut self,
         mut visitor: impl FnMut(ChannelBuffer<'_, S>) -> Result<(), E>,
     ) -> Result<(), E> {
-        let mut result = Ok(());
-        let _ = self
-            .source
-            .visit_channels(&mut |channel| match visitor(channel) {
-                Ok(()) => ControlFlow::Continue(()),
-                Err(error) => {
-                    result = Err(error);
-                    ControlFlow::Break(())
-                }
-            });
-        result
+        self.with_channels(|channels| {
+            for channel in channels {
+                visitor(channel)?;
+            }
+            Ok(())
+        })
     }
 }
 
@@ -1099,14 +1104,17 @@ mod tests {
     }
 
     impl<S> ProcessBufferSource<S> for SplitChannelBuffers<'_, '_, S> {
-        fn visit_channels(
+        fn with_channels(
             &mut self,
-            visitor: &mut dyn FnMut(ChannelBuffer<'_, S>) -> ControlFlow<()>,
-        ) -> ControlFlow<()> {
-            for buffer in self.first.iter_mut().chain(self.second.iter_mut()) {
-                visitor(buffer.reborrow())?;
-            }
-            ControlFlow::Continue(())
+            visitor: &mut dyn FnMut(&mut dyn Iterator<Item = ChannelBuffer<'_, S>>),
+        ) {
+            visitor(
+                &mut self
+                    .first
+                    .iter_mut()
+                    .chain(self.second.iter_mut())
+                    .map(ChannelBuffer::reborrow),
+            );
         }
     }
 
@@ -1176,8 +1184,8 @@ mod tests {
             &TransportSnapshot::UNKNOWN,
             ParameterEvents::empty_for_block(2),
         );
-        let mut block = ProcessBlock::new(&activation, &parameters, &[], 2, context, &mut source)
-            .expect("split source forms a valid process block");
+        let mut block =
+            ProcessBlock::from_validated(&activation, &parameters, &[], 2, context, &mut source);
 
         block.for_each_channel(|channel| {
             let ChannelBuffer::Separate {
@@ -1202,68 +1210,41 @@ mod tests {
             Err("stop")
         );
         assert_eq!(visits, 1, "errors must not visit later channels");
-        block.for_each_channel(|mut channel| {
-            for sample in channel.output_mut().unwrap() {
-                *sample *= 2.0;
+        // Retain both lazy views together for a true cross-channel transform,
+        // without collecting channels or copying either input into scratch.
+        block.with_channels(|channels| {
+            let Some(ChannelBuffer::Separate {
+                input_samples: left,
+                output_samples: mid,
+                ..
+            }) = channels.next()
+            else {
+                panic!("left channel is separate");
+            };
+            let Some(ChannelBuffer::Separate {
+                input_samples: right,
+                output_samples: side,
+                ..
+            }) = channels.next()
+            else {
+                panic!("right channel is separate");
+            };
+            assert!(channels.next().is_none());
+            for ((left, right), (mid, side)) in left.iter().zip(right).zip(mid.iter_mut().zip(side))
+            {
+                *mid = *left + *right;
+                *side = *left - *right;
             }
         });
 
-        assert!((output_left[0] - 1.0).abs() <= f32::EPSILON);
-        assert!((output_left[1] - 2.0).abs() <= f32::EPSILON);
-        assert!((output_right[0] - 3.0).abs() <= f32::EPSILON);
-        assert!((output_right[1] - 4.0).abs() <= f32::EPSILON);
-    }
-
-    #[test]
-    fn process_block_rejects_mismatched_channel_lengths() {
-        let process =
-            ProcessConfig::new(48_000.0, None, maximum(8), 0).expect("test configuration is valid");
-        let schema = default_effect_schema();
-        let activation = ActivationConfig::new(process, DEFAULT_EFFECT_CONFIGURATION, &schema);
-        let parameters = empty_parameters();
-        let input = [0.0_f32; 3];
-        let mut output = [0.0_f32; 3];
-        let mut buffers = [ChannelBuffer::separate(
-            InputEndpoint::new(AudioPortIndex::new(0), 0),
-            &input,
-            OutputEndpoint::new(AudioPortIndex::new(1), 0),
-            &mut output,
-            3,
-        )
-        .expect("test buffers are long enough")];
-        let mut source = ChannelBufferSlice::new(&mut buffers);
-
-        let context = ProcessContext::new(
-            ProcessMode::Realtime,
-            &TransportSnapshot::UNKNOWN,
-            ParameterEvents::empty_for_block(2),
+        assert_eq!(
+            output_left.map(f32::to_bits),
+            [4.0_f32, 6.0].map(f32::to_bits)
         );
-        assert!(matches!(
-            ProcessBlock::new(&activation, &parameters, &[], 2, context, &mut source),
-            Err(ProcessBlockError::BufferFrameCountMismatch { .. })
-        ));
-    }
-
-    #[test]
-    fn materialized_source_rejects_mismatched_output_length() {
-        for output_length in [1, 3] {
-            let input = [0.0_f32; 2];
-            let mut output = vec![0.0_f32; output_length];
-            let mut buffers = [ChannelBuffer::Separate {
-                input: InputEndpoint::new(AudioPortIndex::new(0), 0),
-                input_samples: &input,
-                output: OutputEndpoint::new(AudioPortIndex::new(1), 0),
-                output_samples: &mut output,
-            }];
-            let mut source = ChannelBufferSlice::new(&mut buffers);
-            assert_eq!(
-                validate_source_frames(&mut source, 2),
-                Err(ProcessBlockError::BufferFrameCountMismatch {
-                    expected: 2,
-                    actual: output_length,
-                })
-            );
-        }
+        assert_eq!(
+            output_right.map(f32::to_bits),
+            [-2.0_f32, -2.0].map(f32::to_bits)
+        );
     }
 
     #[test]
@@ -1317,8 +1298,8 @@ mod tests {
         );
         let mut buffers: [ChannelBuffer<'_, f32>; 0] = [];
         let mut source = ChannelBufferSlice::new(&mut buffers);
-        let block = ProcessBlock::new(&activation, &parameters, &[], 2, context, &mut source)
-            .expect("bounded note-event context is valid");
+        let block =
+            ProcessBlock::from_validated(&activation, &parameters, &[], 2, context, &mut source);
 
         assert_eq!(block.note_events().len(), 1);
         assert_eq!(block.note_events().iter().next(), Some(&raw_notes[0]));
@@ -1328,19 +1309,14 @@ mod tests {
     fn process_block_rejects_events_for_another_block_size() {
         let process =
             ProcessConfig::new(48_000.0, None, maximum(8), 0).expect("test configuration is valid");
-        let schema = default_effect_schema();
-        let activation = ActivationConfig::new(process, DEFAULT_EFFECT_CONFIGURATION, &schema);
-        let parameters = empty_parameters();
         let context = ProcessContext::new(
             ProcessMode::Realtime,
             &TransportSnapshot::UNKNOWN,
             ParameterEvents::empty_for_block(1),
         );
-        let mut buffers: [ChannelBuffer<'_, f32>; 0] = [];
-        let mut source = ChannelBufferSlice::new(&mut buffers);
 
         assert!(matches!(
-            ProcessBlock::new(&activation, &parameters, &[], 2, context, &mut source),
+            ProcessBlock::<f32>::validate_context(process, 2, context),
             Err(ProcessBlockError::ParameterEventFrameCountMismatch {
                 expected: 2,
                 actual: 1,
@@ -1356,7 +1332,7 @@ mod tests {
         let context =
             ProcessContext::new(ProcessMode::Realtime, &TransportSnapshot::UNKNOWN, events);
         assert!(matches!(
-            ProcessBlock::new(&activation, &parameters, &[], 2, context, &mut source),
+            ProcessBlock::<f32>::validate_context(process, 2, context),
             Err(ProcessBlockError::ParameterEventCountTooLarge {
                 actual: 1,
                 maximum: 0,
@@ -1368,9 +1344,6 @@ mod tests {
     fn process_block_rejects_invalid_note_event_context() {
         let process =
             ProcessConfig::new(48_000.0, None, maximum(8), 0).expect("test configuration is valid");
-        let schema = default_effect_schema();
-        let activation = ActivationConfig::new(process, DEFAULT_EFFECT_CONFIGURATION, &schema);
-        let parameters = empty_parameters();
         let raw_notes = [NoteEvent::new(
             0,
             NoteEventKind::On {
@@ -1385,11 +1358,9 @@ mod tests {
             ParameterEvents::empty_for_block(2),
             wrong_frames,
         );
-        let mut buffers: [ChannelBuffer<'_, f32>; 0] = [];
-        let mut source = ChannelBufferSlice::new(&mut buffers);
 
         assert!(matches!(
-            ProcessBlock::new(&activation, &parameters, &[], 2, context, &mut source),
+            ProcessBlock::<f32>::validate_context(process, 2, context),
             Err(ProcessBlockError::NoteEventFrameCountMismatch {
                 expected: 2,
                 actual: 1,
@@ -1404,7 +1375,7 @@ mod tests {
             notes,
         );
         assert!(matches!(
-            ProcessBlock::new(&activation, &parameters, &[], 2, context, &mut source),
+            ProcessBlock::<f32>::validate_context(process, 2, context),
             Err(ProcessBlockError::NoteEventCountTooLarge {
                 actual: 1,
                 maximum: 0,

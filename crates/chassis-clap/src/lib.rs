@@ -35,7 +35,7 @@ use std::{
 use audio::{ClapAudioConfiguration, ClapProcessSlot};
 use chassis_runtime::midi::{MidiEventLimits, MidiEvents};
 use chassis_runtime::{
-    audio::PortDirection,
+    audio::AudioPortDirection,
     automation::ParameterEvents,
     events::NoteEvents,
     process::{ProcessConfig, ProcessContext, ProcessMode},
@@ -393,7 +393,7 @@ where
         ));
     }
     if (notes.has_input_dialect(chassis_runtime::events::EventDialect::Midi1)
-        || notes.has_input_dialect(chassis_runtime::events::EventDialect::Midi2))
+        || notes.has_input_dialect(chassis_runtime::events::EventDialect::Ump))
         && C::CLAP_MAX_MIDI_EVENTS == 0
     {
         return Err(PluginError::Message(
@@ -575,17 +575,17 @@ where
 {
     fn count(&self, is_input: bool) -> u32 {
         self.audio.count(if is_input {
-            PortDirection::Input
+            AudioPortDirection::Input
         } else {
-            PortDirection::Output
+            AudioPortDirection::Output
         })
     }
 
     fn get(&self, index: u32, is_input: bool, writer: &mut AudioPortInfoWriter) {
         let direction = if is_input {
-            PortDirection::Input
+            AudioPortDirection::Input
         } else {
-            PortDirection::Output
+            AudioPortDirection::Output
         };
         if let Some(info) = self.audio.info(index, direction) {
             writer.set(&info);
@@ -1114,7 +1114,7 @@ mod tests {
                     EventPortKey::new("ump"),
                     "UMP",
                     EventPortDirection::Input,
-                    &[EventDialect::Midi2],
+                    &[EventDialect::Ump],
                 )],
                 vec![],
             )
@@ -1139,7 +1139,7 @@ mod tests {
         const CLAP_NOTE_PORTS: &'static [ClapNotePort] = &[ClapNotePort::new(
             chassis_runtime::events::EventPortKey::new("ump"),
             1,
-            chassis_runtime::events::EventDialect::Midi2,
+            chassis_runtime::events::EventDialect::Ump,
         )];
         const CLAP_MAX_MIDI_EVENTS: u32 = COUNT;
     }

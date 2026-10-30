@@ -172,18 +172,14 @@ struct RepeatedInputSource {
 }
 
 impl ProcessBufferSource<f32> for RepeatedInputSource {
-    fn visit_channels(
+    fn with_channels(
         &mut self,
-        visitor: &mut dyn FnMut(ChannelBuffer<'_, f32>) -> std::ops::ControlFlow<()>,
-    ) -> std::ops::ControlFlow<()> {
-        for _ in 0..100 {
+        visitor: &mut dyn FnMut(&mut dyn Iterator<Item = ChannelBuffer<'_, f32>>),
+    ) {
+        visitor(&mut (0..100).map(|_| {
             self.visits.set(self.visits.get() + 1);
-            visitor(
-                ChannelBuffer::input_only(InputEndpoint::new(MAIN_INPUT_INDEX, 0), &[1.0], 1)
-                    .unwrap(),
-            )?;
-        }
-        std::ops::ControlFlow::Continue(())
+            ChannelBuffer::input_only(InputEndpoint::new(MAIN_INPUT_INDEX, 0), &[1.0], 1).unwrap()
+        }));
     }
 }
 
@@ -230,6 +226,45 @@ fn inactive_optional_port_is_rejected_before_product_dsp() {
         )) if index == SIDECHAIN_INPUT_INDEX
     ));
     assert_eq!(process_calls.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+fn channel_dimensions_are_checked_in_complete_runtime_admission() {
+    for output_length in [1, 3] {
+        let (process_calls, mut runtime) = active_runtime();
+        let input = [1.0_f32; 2];
+        let mut output = vec![-1.0_f32; output_length];
+        let mut right = [0.0_f32; 2];
+        let mut buffers = [
+            ChannelBuffer::Separate {
+                input: InputEndpoint::new(MAIN_INPUT_INDEX, 0),
+                input_samples: &input,
+                output: OutputEndpoint::new(MAIN_OUTPUT_INDEX, 0),
+                output_samples: &mut output,
+            },
+            ChannelBuffer::Separate {
+                input: InputEndpoint::new(MAIN_INPUT_INDEX, 1),
+                input_samples: &input,
+                output: OutputEndpoint::new(MAIN_OUTPUT_INDEX, 1),
+                output_samples: &mut right,
+            },
+        ];
+        assert_eq!(
+            runtime.process(2, process_context(2), &mut buffers),
+            Err(InstanceProcessError::InvalidBlock(
+                chassis_runtime::process::ProcessBlockError::BufferFrameCountMismatch {
+                    expected: 2,
+                    actual: output_length
+                }
+            )),
+        );
+        assert_eq!(process_calls.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            output,
+            vec![-1.0; output_length],
+            "rejection must not enter DSP"
+        );
+    }
 }
 
 #[test]

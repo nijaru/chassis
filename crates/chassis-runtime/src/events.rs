@@ -90,8 +90,8 @@ pub enum EventDialect {
     Notes,
     /// Raw MIDI 1 messages/SysEx where supported.
     Midi1,
-    /// MIDI 2 / UMP data where supported.
-    Midi2,
+    /// Opaque Universal MIDI Packets, without protocol conversion or parsing.
+    Ump,
 }
 
 /// Stable metadata for one event port.

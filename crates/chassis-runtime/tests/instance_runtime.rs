@@ -131,14 +131,17 @@ struct SplitChannelBuffers<'buffers, 'samples, S> {
 }
 
 impl<S> ProcessBufferSource<S> for SplitChannelBuffers<'_, '_, S> {
-    fn visit_channels(
+    fn with_channels(
         &mut self,
-        visitor: &mut dyn FnMut(ChannelBuffer<'_, S>) -> core::ops::ControlFlow<()>,
-    ) -> core::ops::ControlFlow<()> {
-        for buffer in self.first.iter_mut().chain(self.second.iter_mut()) {
-            visitor(buffer.reborrow())?;
-        }
-        core::ops::ControlFlow::Continue(())
+        visitor: &mut dyn FnMut(&mut dyn Iterator<Item = ChannelBuffer<'_, S>>),
+    ) {
+        visitor(
+            &mut self
+                .first
+                .iter_mut()
+                .chain(self.second.iter_mut())
+                .map(ChannelBuffer::reborrow),
+        );
     }
 }
 

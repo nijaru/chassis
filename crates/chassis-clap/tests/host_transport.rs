@@ -10,8 +10,8 @@ use std::{
 use chassis_clap::{ClapAudioPort, ClapComponent, F32AndF64, SingleComponentEntry};
 use chassis_runtime::{
     audio::{
-        AudioIoConfigurationSpec, AudioIoPolicy, AudioPortDescriptor, ChannelLayout,
-        ConfiguredAudioPort, PortDirection, PortKey, PortRole,
+        AudioIoConfigurationSpec, AudioIoPolicy, AudioPortDescriptor, AudioPortDirection,
+        AudioPortKey, AudioPortRole, ChannelLayout, ConfiguredAudioPort,
     },
     process::{ActivationConfig, ProcessBlock},
     runtime::{Component, Process, ProcessError, Processor},
@@ -57,7 +57,7 @@ unsafe impl GlobalAlloc for Allocator {
 #[global_allocator]
 static GLOBAL: Allocator = Allocator;
 
-const OUTPUT: PortKey = PortKey::new("out");
+const OUTPUT: AudioPortKey = AudioPortKey::new("out");
 const FIELDS: usize = 17;
 #[derive(Default)]
 struct TransportProbe;
@@ -71,8 +71,8 @@ impl Component for TransportProbe {
             vec![AudioPortDescriptor::new(
                 OUTPUT,
                 "Output",
-                PortDirection::Output,
-                PortRole::Main,
+                AudioPortDirection::Output,
+                AudioPortRole::Main,
                 false,
             )],
             AudioIoPolicy::enumerated(vec![AudioIoConfigurationSpec::new(vec![
@@ -120,7 +120,7 @@ fn observations(values: &TransportValues) -> [f64; FIELDS] {
             .map_or(unknown, |position| position as f64),
         values.seconds_position.unwrap_or(unknown),
         values.beat_position.unwrap_or(unknown),
-        values.bar_start.unwrap_or(unknown),
+        values.bar_start_beats.unwrap_or(unknown),
         values.bar_number.map_or(unknown, |number| number as f64),
         values
             .time_signature

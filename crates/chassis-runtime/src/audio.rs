@@ -9,9 +9,9 @@ use std::{borrow::Cow, string::String, vec::Vec};
 /// activation-time dense indices are derived separately and must not replace
 /// this identity in persisted product metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct PortKey(Cow<'static, str>);
+pub struct AudioPortKey(Cow<'static, str>);
 
-impl PortKey {
+impl AudioPortKey {
     /// Construct a zero-allocation port key from static product metadata.
     #[must_use]
     pub const fn new(value: &'static str) -> Self {
@@ -31,13 +31,13 @@ impl PortKey {
     }
 }
 
-impl AsRef<str> for PortKey {
+impl AsRef<str> for AudioPortKey {
     fn as_ref(&self) -> &str {
         self.as_str()
     }
 }
 
-impl fmt::Display for PortKey {
+impl fmt::Display for AudioPortKey {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.as_str())
     }
@@ -67,7 +67,7 @@ impl AudioPortIndex {
 
 /// Direction of an audio port from the component's point of view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum PortDirection {
+pub enum AudioPortDirection {
     /// Audio enters the component through this port.
     Input,
     /// Audio leaves the component through this port.
@@ -76,7 +76,7 @@ pub enum PortDirection {
 
 /// Conventional semantic role of an audio port.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum PortRole {
+pub enum AudioPortRole {
     /// Primary product input or output.
     Main,
     /// Detector/control sidechain input.
@@ -142,13 +142,13 @@ impl ChannelLayout {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AudioPortDescriptor {
     /// Persistent product key.
-    pub key: PortKey,
+    pub key: AudioPortKey,
     /// Human-readable display name. This is not persistent identity.
     pub name: Cow<'static, str>,
     /// Input/output direction.
-    pub direction: PortDirection,
+    pub direction: AudioPortDirection,
     /// Conventional semantic role.
-    pub role: PortRole,
+    pub role: AudioPortRole,
     /// Whether the component can operate while this port is inactive.
     pub optional: bool,
 }
@@ -157,10 +157,10 @@ impl AudioPortDescriptor {
     /// Construct static product metadata without allocating.
     #[must_use]
     pub const fn new(
-        key: PortKey,
+        key: AudioPortKey,
         name: &'static str,
-        direction: PortDirection,
-        role: PortRole,
+        direction: AudioPortDirection,
+        role: AudioPortRole,
         optional: bool,
     ) -> Self {
         Self {
@@ -177,12 +177,12 @@ impl AudioPortDescriptor {
     pub fn owned(
         key: impl Into<String>,
         name: impl Into<String>,
-        direction: PortDirection,
-        role: PortRole,
+        direction: AudioPortDirection,
+        role: AudioPortRole,
         optional: bool,
     ) -> Self {
         Self {
-            key: PortKey::owned(key),
+            key: AudioPortKey::owned(key),
             name: Cow::Owned(name.into()),
             direction,
             role,
@@ -222,7 +222,7 @@ pub fn validate_audio_port_schema(
 #[must_use]
 pub fn audio_port_index(
     descriptors: &[AudioPortDescriptor],
-    key: &PortKey,
+    key: &AudioPortKey,
 ) -> Option<AudioPortIndex> {
     descriptors
         .iter()
@@ -238,7 +238,7 @@ pub fn audio_port_index(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfiguredAudioPort {
     /// Stable key of the active port.
-    pub key: PortKey,
+    pub key: AudioPortKey,
     /// Accepted semantic layout.
     pub layout: ChannelLayout,
 }
@@ -246,7 +246,7 @@ pub struct ConfiguredAudioPort {
 impl ConfiguredAudioPort {
     /// Construct a setup-facing active port selection.
     #[must_use]
-    pub const fn new(key: PortKey, layout: ChannelLayout) -> Self {
+    pub const fn new(key: AudioPortKey, layout: ChannelLayout) -> Self {
         Self { key, layout }
     }
 }
@@ -565,8 +565,8 @@ impl<'a> AudioIoConfiguration<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResolvedAudioPort {
     index: AudioPortIndex,
-    direction: PortDirection,
-    role: PortRole,
+    direction: AudioPortDirection,
+    role: AudioPortRole,
     layout: ChannelLayout,
 }
 
@@ -579,13 +579,13 @@ impl ResolvedAudioPort {
 
     /// Return whether this is an input or output port.
     #[must_use]
-    pub const fn direction(self) -> PortDirection {
+    pub const fn direction(self) -> AudioPortDirection {
         self.direction
     }
 
     /// Return the conventional semantic role.
     #[must_use]
-    pub const fn role(self) -> PortRole {
+    pub const fn role(self) -> AudioPortRole {
         self.role
     }
 
@@ -639,7 +639,7 @@ impl ResolvedAudioIoConfiguration {
         &self,
         port: AudioPortIndex,
         channel: u32,
-        expected_direction: PortDirection,
+        expected_direction: AudioPortDirection,
     ) -> Result<(), AudioEndpointError> {
         let raw = usize::try_from(port.get())
             .map_err(|_| AudioEndpointError::PortIndexNotRepresentable(port))?;
@@ -682,9 +682,9 @@ pub enum AudioEndpointError {
         /// Port whose direction is invalid for this endpoint.
         port: AudioPortIndex,
         /// Direction required by the endpoint kind.
-        expected: PortDirection,
+        expected: AudioPortDirection,
         /// Direction declared by the component schema.
-        actual: PortDirection,
+        actual: AudioPortDirection,
     },
     /// A process view carries neither an input nor an output endpoint.
     EmptyChannel,
@@ -775,13 +775,13 @@ pub enum AudioIoConfigurationError {
     /// A descriptor used an empty compatibility key.
     EmptyDescriptorKey,
     /// Two descriptors declared the same stable key.
-    DuplicateDescriptorPort(PortKey),
+    DuplicateDescriptorPort(AudioPortKey),
     /// The active configuration refers to no declared port.
-    UnknownConfiguredPort(PortKey),
+    UnknownConfiguredPort(AudioPortKey),
     /// The active configuration contains the same port more than once.
-    DuplicateConfiguredPort(PortKey),
+    DuplicateConfiguredPort(AudioPortKey),
     /// A non-optional descriptor is absent from the active configuration.
-    MissingRequiredPort(PortKey),
+    MissingRequiredPort(AudioPortKey),
     /// A schema position cannot be represented as `AudioPortIndex`.
     PortIndexNotRepresentable(usize),
 }
@@ -813,33 +813,33 @@ impl fmt::Display for AudioIoConfigurationError {
 impl std::error::Error for AudioIoConfigurationError {}
 
 /// Canonical main-input key for the default effect convention.
-pub const MAIN_INPUT: PortKey = PortKey::new("audio.main.in");
+pub const MAIN_INPUT: AudioPortKey = AudioPortKey::new("audio.main.in");
 /// Canonical main-output key for the default effect convention.
-pub const MAIN_OUTPUT: PortKey = PortKey::new("audio.main.out");
+pub const MAIN_OUTPUT: AudioPortKey = AudioPortKey::new("audio.main.out");
 /// Canonical sidechain key for the default effect convention.
-pub const SIDECHAIN_INPUT: PortKey = PortKey::new("audio.sidechain");
+pub const SIDECHAIN_INPUT: AudioPortKey = AudioPortKey::new("audio.sidechain");
 
 /// Conventional port schema for a stereo effect helper.
 pub static DEFAULT_EFFECT_PORTS: [AudioPortDescriptor; 3] = [
     AudioPortDescriptor::new(
         MAIN_INPUT,
         "Main Input",
-        PortDirection::Input,
-        PortRole::Main,
+        AudioPortDirection::Input,
+        AudioPortRole::Main,
         false,
     ),
     AudioPortDescriptor::new(
         MAIN_OUTPUT,
         "Main Output",
-        PortDirection::Output,
-        PortRole::Main,
+        AudioPortDirection::Output,
+        AudioPortRole::Main,
         false,
     ),
     AudioPortDescriptor::new(
         SIDECHAIN_INPUT,
         "Sidechain",
-        PortDirection::Input,
-        PortRole::Sidechain,
+        AudioPortDirection::Input,
+        AudioPortRole::Sidechain,
         true,
     ),
 ];
@@ -921,7 +921,7 @@ mod tests {
     #[test]
     fn policy_definition_rejects_invalid_and_duplicate_configurations() {
         let unknown = AudioIoPolicy::enumerated(vec![AudioIoConfigurationSpec::new(vec![
-            ConfiguredAudioPort::new(PortKey::new("audio.unknown"), ChannelLayout::Stereo),
+            ConfiguredAudioPort::new(AudioPortKey::new("audio.unknown"), ChannelLayout::Stereo),
         ])]);
         assert!(matches!(
             unknown.validate_for_ports(&DEFAULT_EFFECT_PORTS),
@@ -957,7 +957,7 @@ mod tests {
             resolved
                 .port(AudioPortIndex::new(1))
                 .map(ResolvedAudioPort::direction),
-            Some(PortDirection::Output)
+            Some(AudioPortDirection::Output)
         );
         assert_eq!(resolved.port(AudioPortIndex::new(2)), None);
         assert_eq!(resolved.active_ports().count(), 2);
@@ -969,19 +969,19 @@ mod tests {
             .resolve(&DEFAULT_EFFECT_PORTS)
             .expect("default effect configuration resolves");
         assert_eq!(
-            resolved.validate_endpoint(AudioPortIndex::new(0), 1, PortDirection::Input),
+            resolved.validate_endpoint(AudioPortIndex::new(0), 1, AudioPortDirection::Input),
             Ok(())
         );
         assert!(matches!(
-            resolved.validate_endpoint(AudioPortIndex::new(0), 0, PortDirection::Output),
+            resolved.validate_endpoint(AudioPortIndex::new(0), 0, AudioPortDirection::Output),
             Err(AudioEndpointError::WrongDirection { .. })
         ));
         assert_eq!(
-            resolved.validate_endpoint(AudioPortIndex::new(2), 0, PortDirection::Input),
+            resolved.validate_endpoint(AudioPortIndex::new(2), 0, AudioPortDirection::Input),
             Err(AudioEndpointError::InactivePort(AudioPortIndex::new(2)))
         );
         assert_eq!(
-            resolved.validate_endpoint(AudioPortIndex::new(0), 2, PortDirection::Input),
+            resolved.validate_endpoint(AudioPortIndex::new(0), 2, AudioPortDirection::Input),
             Err(AudioEndpointError::ChannelOutOfRange {
                 port: AudioPortIndex::new(0),
                 channel: 2,
@@ -989,7 +989,7 @@ mod tests {
             })
         );
         assert_eq!(
-            resolved.validate_endpoint(AudioPortIndex::new(99), 0, PortDirection::Input),
+            resolved.validate_endpoint(AudioPortIndex::new(99), 0, AudioPortDirection::Input),
             Err(AudioEndpointError::UnknownPort(AudioPortIndex::new(99)))
         );
     }
@@ -998,8 +998,13 @@ mod tests {
     fn audio_port_metadata_can_be_owned_at_runtime() {
         let key = String::from("audio.dynamic.in");
         let name = String::from("Dynamic Input");
-        let descriptor =
-            AudioPortDescriptor::owned(key, name, PortDirection::Input, PortRole::Auxiliary, true);
+        let descriptor = AudioPortDescriptor::owned(
+            key,
+            name,
+            AudioPortDirection::Input,
+            AudioPortRole::Auxiliary,
+            true,
+        );
         assert_eq!(descriptor.key.as_str(), "audio.dynamic.in");
         assert_eq!(descriptor.name.as_ref(), "Dynamic Input");
         assert_eq!(validate_audio_port_schema(&[descriptor]), Ok(()));
@@ -1013,7 +1018,7 @@ mod tests {
 
     #[test]
     fn configuration_rejects_unknown_ports() {
-        const UNKNOWN: PortKey = PortKey::new("audio.unknown");
+        const UNKNOWN: AudioPortKey = AudioPortKey::new("audio.unknown");
         let ports = [ConfiguredAudioPort::new(UNKNOWN, ChannelLayout::Stereo)];
 
         assert_eq!(

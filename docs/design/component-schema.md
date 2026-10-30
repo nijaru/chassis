@@ -82,7 +82,7 @@ Implemented details include:
 Stable identities exist for persistence, authoring, inspection, and setup. Dense indices exist for active processing.
 
 ```text
-PortKey       -> AudioPortIndex
+AudioPortKey       -> AudioPortIndex
 EventPortKey  -> EventPortIndex
 ParameterKey  -> ParameterIndex
 ```
@@ -150,7 +150,7 @@ Common effect authoring remains concise through `ComponentSchema::stereo_effect(
 
 ## Owned schema metadata
 
-Audio/event schema metadata supports both static and runtime-owned forms. `PortKey` / `EventPortKey` and their display metadata use borrowed-or-owned setup-domain storage; event dialect capability lists likewise may be borrowed static slices or owned vectors.
+Audio/event schema metadata supports both static and runtime-owned forms. `AudioPortKey` / `EventPortKey` and their display metadata use borrowed-or-owned setup-domain storage; event dialect capability lists likewise may be borrowed static slices or owned vectors.
 
 This preserves zero-allocation static product declarations while allowing dynamically discovered or hosted components to build ordinary `ComponentSchema` values from runtime metadata. Dense indices still remove stable strings from processing, so ownership generality does not change the callback contract.
 

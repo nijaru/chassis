@@ -10,7 +10,7 @@ use chassis_runtime::transport::TransportSnapshot;
 use chassis_runtime::{
     audio::{
         AudioIoConfiguration, AudioIoConfigurationSpec, AudioIoPolicy, AudioPortDescriptor,
-        ChannelLayout, ConfiguredAudioPort, PortDirection, PortKey, PortRole,
+        AudioPortDirection, AudioPortKey, AudioPortRole, ChannelLayout, ConfiguredAudioPort,
     },
     automation::ParameterEvents,
     buffer::{ChannelBuffer, OutputEndpoint},
@@ -23,15 +23,15 @@ use chassis_runtime::{
     schema::ComponentSchema,
 };
 
-const AUDIO_OUTPUT: PortKey = PortKey::new("audio.main.out");
+const AUDIO_OUTPUT: AudioPortKey = AudioPortKey::new("audio.main.out");
 const NOTE_INPUT: EventPortKey = EventPortKey::new("notes.in");
 const NOTE_DIALECTS: &[EventDialect] = &[EventDialect::Notes];
 
 static AUDIO_PORTS: &[AudioPortDescriptor] = &[AudioPortDescriptor::new(
     AUDIO_OUTPUT,
     "Main Output",
-    PortDirection::Output,
-    PortRole::Main,
+    AudioPortDirection::Output,
+    AudioPortRole::Main,
     false,
 )];
 
@@ -178,7 +178,10 @@ fn note_input_drives_stereo_output_without_audio_input() {
         InstanceRuntime::for_component(&component).expect("instrument schema is valid");
 
     assert_eq!(runtime.audio_ports().len(), 1);
-    assert_eq!(runtime.audio_ports()[0].direction, PortDirection::Output);
+    assert_eq!(
+        runtime.audio_ports()[0].direction,
+        AudioPortDirection::Output
+    );
     let output = runtime
         .audio_port_index(&AUDIO_OUTPUT)
         .expect("instrument output has a dense runtime index");

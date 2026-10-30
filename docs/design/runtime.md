@@ -50,7 +50,7 @@ Each mutable semantic guarantee has one authority. Host/shared/editor representa
 Persistent/setup identity and process-time identity are separate:
 
 ```text
-PortKey       -> AudioPortIndex
+AudioPortKey       -> AudioPortIndex
 EventPortKey  -> EventPortIndex
 ParameterKey  -> ParameterIndex
 ```
@@ -151,7 +151,7 @@ Tail is separate: `active_tail()` exposes the last completed activation/process/
 
 ## Audio configuration and process endpoints
 
-Stable audio configuration is selected while inactive from `PortKey` + layout metadata and accepted by the schema-owned `AudioIoPolicy`. Dense `AudioPortIndex` is the process-time identity.
+Stable audio configuration is selected while inactive from `AudioPortKey` + layout metadata and accepted by the schema-owned `AudioIoPolicy`. Dense `AudioPortIndex` is the process-time identity.
 
 The runtime resolves stable keys to dense indices once and owns a `ResolvedAudioIoConfiguration` for the active lifetime. `InputEndpoint` / `OutputEndpoint` carry only `AudioPortIndex` + channel:
 
@@ -188,7 +188,7 @@ A source must repeat the same finite topology and dimensions across traversals. 
 - canonical consumed base parameter state and held modulation baseline;
 - sample-accurate bounded parameter/note/event sources;
 - transport/process context;
-- one borrowed object-safe `dyn ProcessBufferSource<S>`, visiting uniform `ChannelBuffer` enum views through `for_each_channel` or early-stopping `try_for_each_channel`;
+- one borrowed object-safe `dyn ProcessBufferSource<S>`, lending a scoped iterator through `with_channels` for cross-channel DSP, or uniform views through `for_each_channel` / early-stopping `try_for_each_channel`;
 - one optional caller-owned bounded note/MIDI output sink, shared by native notes, MIDI 1/SysEx, and opaque MIDI 2/UMP.
 
 Adapters/embeddings prove raw pointer/alias facts before safe channel views enter core. Setup owns stable-to-dense endpoint translation and whole-I/O policy acceptance. Callback code consumes pre-resolved dense identities without callback-owned channel vectors or stable-string lookup.

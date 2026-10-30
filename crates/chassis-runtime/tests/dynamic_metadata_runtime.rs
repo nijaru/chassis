@@ -9,7 +9,8 @@ use chassis_runtime::transport::TransportSnapshot;
 use chassis_runtime::{
     audio::{
         AudioIoConfiguration, AudioIoConfigurationSpec, AudioIoPolicy, AudioPortDescriptor,
-        AudioPortIndex, ChannelLayout, ConfiguredAudioPort, PortDirection, PortKey, PortRole,
+        AudioPortDirection, AudioPortIndex, AudioPortKey, AudioPortRole, ChannelLayout,
+        ConfiguredAudioPort,
     },
     automation::ParameterEvents,
     buffer::{ChannelBuffer, OutputEndpoint},
@@ -39,8 +40,8 @@ impl HostedComponent {
         }
     }
 
-    fn audio_key(&self) -> PortKey {
-        PortKey::owned(self.audio_key.clone())
+    fn audio_key(&self) -> AudioPortKey {
+        AudioPortKey::owned(self.audio_key.clone())
     }
 
     fn event_key(&self) -> EventPortKey {
@@ -57,8 +58,8 @@ impl Component for HostedComponent {
         let audio_ports = vec![AudioPortDescriptor::owned(
             self.audio_key.clone(),
             self.audio_name.clone(),
-            PortDirection::Output,
-            PortRole::Main,
+            AudioPortDirection::Output,
+            AudioPortRole::Main,
             false,
         )];
         let policy = AudioIoPolicy::enumerated(vec![AudioIoConfigurationSpec::new(vec![
@@ -159,14 +160,14 @@ fn runtime_owned_metadata_resolves_to_dense_process_identities() {
     assert_eq!(runtime.event_ports()[0].name.as_ref(), "Discovered Notes");
 
     let output = runtime
-        .audio_port_index(&PortKey::owned(String::from("hosted.audio.out")))
+        .audio_port_index(&AudioPortKey::owned(String::from("hosted.audio.out")))
         .expect("owned audio key resolves by semantic identity");
     let note_port = runtime
         .event_port_index(&EventPortKey::owned(String::from("hosted.notes.in")))
         .expect("owned event key resolves by semantic identity");
 
     let audio = [ConfiguredAudioPort::new(
-        PortKey::owned(String::from("hosted.audio.out")),
+        AudioPortKey::owned(String::from("hosted.audio.out")),
         ChannelLayout::Stereo,
     )];
     runtime

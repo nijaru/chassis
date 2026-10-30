@@ -68,7 +68,7 @@ fn mapping_rejects_incomplete_ambiguous_and_lossy_port_metadata() {
     let mut bad = schema.clone();
     bad[0].direction = EventPortDirection::Input;
     assert!(ClapEventPorts::new(&bad, &mapping()).is_err());
-    for dialects in [vec![EventDialect::Midi1], vec![EventDialect::Midi2]] {
+    for dialects in [vec![EventDialect::Midi1], vec![EventDialect::Ump]] {
         let mut bad = schema.clone();
         bad[0].dialects = dialects.into();
         assert!(ClapEventPorts::new(&bad, &mapping()).is_err());

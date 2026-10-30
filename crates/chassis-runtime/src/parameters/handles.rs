@@ -1,8 +1,8 @@
 //! Setup-resolved typed parameter access. Handles belong to the schema that resolved them.
 
 use super::{
-    ChoiceIndex, ParameterEventValueError, ParameterIndex, ParameterKind, ParameterStore,
-    ParameterStoreError, ParameterType, ParameterValueError,
+    ChoiceIndex, ParameterDescriptor, ParameterEventValueError, ParameterIndex, ParameterKind,
+    ParameterStore, ParameterStoreError, ParameterType, ParameterValueError,
 };
 use crate::{
     automation::{
@@ -10,16 +10,21 @@ use crate::{
         IntegerParameterCursor, ParameterCursorError, ParameterEventValue,
     },
     modulation::{GlobalFloatModulation, ModulatedFloatCursor},
-    process::{ProcessBlock, ProcessBufferSource},
+    process::ProcessBlock,
 };
 
 /// A schema-local floating-point parameter resolved during setup.
 ///
 /// Like dense indices, handles must only be used with the schema that resolved
 /// them. Access detects unknown indices and wrong types, not another schema's
-/// coincidentally matching index and type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FloatParameter(ParameterIndex);
+/// coincidentally matching index and type. The domain and modulation capability
+/// are cached here during setup, keeping descriptor metadata off the callback.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FloatParameter {
+    index: ParameterIndex,
+    domain: GlobalFloatModulation,
+    modulated: bool,
+}
 
 /// A schema-local integer parameter resolved during setup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,8 +47,18 @@ impl ParameterStore {
         &self,
         key: impl AsRef<str>,
     ) -> Result<FloatParameter, ParameterStoreError> {
-        self.typed_index(key.as_ref(), ParameterType::Float)
-            .map(FloatParameter)
+        let (index, descriptor) = self.typed_parameter(key.as_ref(), ParameterType::Float)?;
+        let ParameterKind::Float {
+            minimum, maximum, ..
+        } = *descriptor.kind()
+        else {
+            unreachable!("typed_parameter checked the float type");
+        };
+        Ok(FloatParameter {
+            index,
+            domain: GlobalFloatModulation::new(minimum, maximum),
+            modulated: descriptor.global_modulation().is_some(),
+        })
     }
 
     /// Resolve an integer parameter and check its type off the audio thread.
@@ -54,8 +69,8 @@ impl ParameterStore {
         &self,
         key: impl AsRef<str>,
     ) -> Result<IntegerParameter, ParameterStoreError> {
-        self.typed_index(key.as_ref(), ParameterType::Integer)
-            .map(IntegerParameter)
+        self.typed_parameter(key.as_ref(), ParameterType::Integer)
+            .map(|(index, _)| IntegerParameter(index))
     }
 
     /// Resolve a Boolean parameter and check its type off the audio thread.
@@ -66,8 +81,8 @@ impl ParameterStore {
         &self,
         key: impl AsRef<str>,
     ) -> Result<BooleanParameter, ParameterStoreError> {
-        self.typed_index(key.as_ref(), ParameterType::Boolean)
-            .map(BooleanParameter)
+        self.typed_parameter(key.as_ref(), ParameterType::Boolean)
+            .map(|(index, _)| BooleanParameter(index))
     }
 
     /// Resolve a choice parameter and check its type off the audio thread.
@@ -78,22 +93,21 @@ impl ParameterStore {
         &self,
         key: impl AsRef<str>,
     ) -> Result<ChoiceParameter, ParameterStoreError> {
-        self.typed_index(key.as_ref(), ParameterType::Choice)
-            .map(ChoiceParameter)
+        self.typed_parameter(key.as_ref(), ParameterType::Choice)
+            .map(|(index, _)| ChoiceParameter(index))
     }
 
-    fn typed_index(
+    fn typed_parameter(
         &self,
         key: &str,
         expected: ParameterType,
-    ) -> Result<ParameterIndex, ParameterStoreError> {
+    ) -> Result<(ParameterIndex, &ParameterDescriptor), ParameterStoreError> {
         let index = self
             .index(key)
             .ok_or_else(|| ParameterStoreError::UnknownParameter(key.to_owned()))?;
-        let actual = self.descriptors
-            [usize::try_from(index.get()).expect("resolved index fits usize")]
-        .kind()
-        .value_type();
+        let descriptor =
+            &self.descriptors[usize::try_from(index.get()).expect("resolved index fits usize")];
+        let actual = descriptor.kind().value_type();
         if actual != expected {
             return Err(ParameterStoreError::WrongParameterType {
                 parameter: key.to_owned(),
@@ -101,7 +115,7 @@ impl ParameterStore {
                 actual,
             });
         }
-        Ok(index)
+        Ok((index, descriptor))
     }
 }
 
@@ -109,7 +123,7 @@ impl FloatParameter {
     /// Return the schema-local index for low-level event routing.
     #[must_use]
     pub const fn index(self) -> ParameterIndex {
-        self.0
+        self.index
     }
 
     /// Read the current base value without resolving a stable key.
@@ -117,7 +131,7 @@ impl FloatParameter {
     /// # Errors
     /// Rejects an unknown index or a handle used with a differently typed schema.
     pub fn value(self, parameters: &ParameterStore) -> Result<f64, ParameterEventValueError> {
-        match read(parameters, self.0, ParameterType::Float)? {
+        match read(parameters, self.index, ParameterType::Float)? {
             ParameterEventValue::Float(value) => Ok(value),
             _ => unreachable!("read checked the float type"),
         }
@@ -127,16 +141,13 @@ impl FloatParameter {
     ///
     /// # Errors
     /// Rejects a handle that does not identify a float in this block's schema.
-    pub fn base_cursor<'events, S, B>(
+    pub fn base_cursor<'events, S>(
         self,
-        block: &ProcessBlock<'_, 'events, '_, S, B>,
-    ) -> Result<FloatParameterCursor<'events>, ParameterCursorError>
-    where
-        B: ProcessBufferSource<S> + ?Sized,
-    {
+        block: &ProcessBlock<'events, S>,
+    ) -> Result<FloatParameterCursor<'events>, ParameterCursorError> {
         block
             .parameter_events()
-            .float_cursor(self.0, self.value(block.parameters())?)
+            .float_cursor(self.index, self.value(block.parameters())?)
     }
 
     /// Follow the effective trajectory from this block's consumed controls.
@@ -148,32 +159,20 @@ impl FloatParameter {
     ///
     /// # Errors
     /// Rejects a handle that does not identify a float in this block's schema.
-    pub fn cursor<'events, S, B>(
+    pub fn cursor<'events, S>(
         self,
-        block: &ProcessBlock<'_, 'events, '_, S, B>,
-    ) -> Result<ModulatedFloatCursor<'events>, ParameterCursorError>
-    where
-        B: ProcessBufferSource<S> + ?Sized,
-    {
+        block: &ProcessBlock<'events, S>,
+    ) -> Result<ModulatedFloatCursor<'events>, ParameterCursorError> {
         let base = self.value(block.parameters())?;
-        let descriptor = block
-            .parameters()
-            .descriptor(self.0)
-            .ok_or(ParameterEventValueError::UnknownParameter(self.0))?;
-        let ParameterKind::Float {
-            minimum, maximum, ..
-        } = *descriptor.kind()
-        else {
-            unreachable!("value checked the float type");
-        };
-        let domain = GlobalFloatModulation::new(minimum, maximum);
-        if descriptor.global_modulation().is_some() {
+        if self.modulated {
             let amount = block
-                .modulation(self.0)
-                .ok_or(ParameterEventValueError::UnknownParameter(self.0))?;
-            domain.cursor(block.parameter_events(), self.0, base, amount)
+                .modulation(self.index)
+                .ok_or(ParameterEventValueError::UnknownParameter(self.index))?;
+            self.domain
+                .cursor(block.parameter_events(), self.index, base, amount)
         } else {
-            domain.base_cursor(block.parameter_events(), self.0, base)
+            self.domain
+                .base_cursor(block.parameter_events(), self.index, base)
         }
     }
 }
@@ -200,13 +199,10 @@ impl IntegerParameter {
     ///
     /// # Errors
     /// Rejects a handle that does not identify an integer in this block's schema.
-    pub fn cursor<'events, S, B>(
+    pub fn cursor<'events, S>(
         self,
-        block: &ProcessBlock<'_, 'events, '_, S, B>,
-    ) -> Result<IntegerParameterCursor<'events>, ParameterCursorError>
-    where
-        B: ProcessBufferSource<S> + ?Sized,
-    {
+        block: &ProcessBlock<'events, S>,
+    ) -> Result<IntegerParameterCursor<'events>, ParameterCursorError> {
         Ok(block
             .parameter_events()
             .integer_cursor(self.0, self.value(block.parameters())?))
@@ -235,13 +231,10 @@ impl BooleanParameter {
     ///
     /// # Errors
     /// Rejects a handle that does not identify a Boolean in this block's schema.
-    pub fn cursor<'events, S, B>(
+    pub fn cursor<'events, S>(
         self,
-        block: &ProcessBlock<'_, 'events, '_, S, B>,
-    ) -> Result<BooleanParameterCursor<'events>, ParameterCursorError>
-    where
-        B: ProcessBufferSource<S> + ?Sized,
-    {
+        block: &ProcessBlock<'events, S>,
+    ) -> Result<BooleanParameterCursor<'events>, ParameterCursorError> {
         Ok(block
             .parameter_events()
             .boolean_cursor(self.0, self.value(block.parameters())?))
@@ -273,13 +266,10 @@ impl ChoiceParameter {
     ///
     /// # Errors
     /// Rejects a handle that does not identify a choice in this block's schema.
-    pub fn cursor<'events, S, B>(
+    pub fn cursor<'events, S>(
         self,
-        block: &ProcessBlock<'_, 'events, '_, S, B>,
-    ) -> Result<ChoiceParameterCursor<'events>, ParameterCursorError>
-    where
-        B: ProcessBufferSource<S> + ?Sized,
-    {
+        block: &ProcessBlock<'events, S>,
+    ) -> Result<ChoiceParameterCursor<'events>, ParameterCursorError> {
         Ok(block
             .parameter_events()
             .choice_cursor(self.0, self.value(block.parameters())?))

@@ -1,6 +1,6 @@
 # Processing and Audio Buffer Model
 
-Status: uniform safe channel views, object-safe allocation-free `ProcessBufferSource<S>` visitors, and mapped CLAP f32/f64 traversal are implemented. Author-facing higher-level bus views remain pre-alpha.
+Status: uniform safe channel views, scoped allocation-free channel iterators, cross-channel borrowing, and mapped CLAP f32/f64 traversal are implemented. The author-facing API remains pre-alpha.
 
 ## Safe relationships
 
@@ -42,14 +42,15 @@ The implemented boundary is:
 
 ```text
 ProcessBufferSource<S>
-  visit_channels(&mut dyn FnMut(ChannelBuffer<'_, S>) -> ControlFlow<()>)
-    -> ControlFlow<()>
+  with_channels(&mut dyn FnMut(&mut dyn Iterator<Item = ChannelBuffer<'_, S>>))
 
 ChannelBuffer<'_, S>
   uniform enum with semantic endpoints and safe sample slices
 ```
 
-A materialized slice uses `ChannelBufferSlice` and `ChannelBuffer::reborrow()`; a format adapter constructs the same enum lazily. There is no second channel trait or generic source type in the product process signature. Each view is borrowed only for one visitor call and cannot be retained across calls. Laziness changes when the safe view is produced, not the alias proof required for it. Sources must stop immediately and propagate `ControlFlow::Break` when requested.
+A materialized slice uses `ChannelBufferSlice` and `ChannelBuffer::reborrow()`; a format adapter constructs the same enum lazily. The source creates its iterator on the stack and invokes the visitor exactly once, including for an empty topology. There is no second channel trait or generic source type in the product process signature.
+
+Multiple views may coexist inside that traversal: stereo-linked or multichannel DSP can take successive iterator items and process their samples together without collecting them or copying input to scratch. Sample references cannot escape the closure. The complete alias proof must license all yielded views simultaneously, not just each view in isolation. Laziness changes when the safe view is produced, not the proof required for it. Consumers stop requesting iterator items on the first error.
 
 Every callback covers each active input/output endpoint exactly once, in any order, with paired or single-direction views. Missing/silent channels require explicit sample views; omission is not silence. Sources are finite and repeat the same topology, relationships, and dimensions across traversals. Runtime validation uses activation-owned endpoint coverage scratch, rejecting missing, duplicate, or endpoint-free views before DSP. Since each accepted view consumes a unique endpoint, even a repeated source is rejected within the activation's endpoint count plus one yielded view.
 
@@ -59,9 +60,9 @@ Every callback covers each active input/output endpoint exactly once, in any ord
 
 `ProcessBlock<'a, S>` exposes actual frame count, process mode/transport context, borrowed canonical base parameters, bounded ordered parameter and note events, and one borrowed buffer source. Activation configuration is used for validation, not retained as a public block accessor.
 
-`Process<S>::process(&mut self, block: &mut ProcessBlock<'_, S>)` has no source generic or independent source/context/parameter lifetimes. `block.for_each_channel(|channel| ...)` visits all views; `block.try_for_each_channel(|channel| -> Result<(), E> { ... })` stops on the first error. Neither helper allocates or rolls back earlier writes.
+`Process<S>::process(&mut self, block: &mut ProcessBlock<'_, S>)` has no source generic or independent source/context/parameter lifetimes. `block.with_channels(|channels| ...)` lends the iterator for cross-channel DSP and returns the closure's result. `block.for_each_channel(|channel| ...)` visits independent channels; `block.try_for_each_channel(|channel| -> Result<(), E> { ... })` stops on the first error. These helpers allocate nothing and do not roll back earlier writes.
 
-Before audio traversal, core rejects frame/event-bound or block-association failures. Before product DSP runs, it also validates complete audio topology, source dimensions, parameter type/domain, and note-port capabilities. Stable key/backend mapping belongs to setup and is not rediscovered per callback.
+Before audio traversal, core rejects frame/event-bound or block-association failures. One bounded source traversal validates complete audio topology and sample dimensions together. Parameter type/domain and event-port capabilities are checked before product DSP runs. Block construction only projects these accepted inputs; it does not repeat validation or traverse the source again. Stable key/backend mapping belongs to setup and is not rediscovered per callback.
 
 Float automation trajectories are evaluated lazily through cursors rather than expanded into per-sample event storage.
 
@@ -106,6 +107,6 @@ The CLAP adapter advertises f64 only through the explicit f64-capable export mar
 
 ## Remaining design work
 
-Higher-level bus/port helpers should come from real DSP clients. Useful candidates may include conventional stereo-main access, optional sidechain, and efficient explicit port lookup, but they must not add hidden per-block maps or allocation.
+Cross-channel algorithms already use `with_channels`; they do not depend on future bus helpers. Higher-level port discovery or sidechain views may simplify repeated endpoint selection, but must not add hidden per-block maps or allocation.
 
 Future interleaved/incompatible backend layouts require activation-owned bounded conversion scratch plus measured cost. Higher-channel-count/surround/ambisonics layouts remain product-driven roadmap work.

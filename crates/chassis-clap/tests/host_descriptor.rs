@@ -7,7 +7,7 @@ use std::ffi::{CStr, CString};
 use chassis_clap::{ClapComponent, ClapDescriptor, F32AndF64, SingleComponentEntry};
 use chassis_runtime::{
     parameters::ParameterStore,
-    process::{ActivationConfig, ProcessBlock, ProcessBufferSource},
+    process::{ActivationConfig, ProcessBlock},
     runtime::{Component, Process, ProcessError, Processor},
     schema::{ComponentSchema, ComponentSchemaError},
     state::StateEntry,
@@ -38,10 +38,7 @@ impl<const FULL: bool> Component for MetadataProbe<FULL> {
 impl<const FULL: bool> Processor for MetadataProbe<FULL> {}
 
 impl<S, const FULL: bool> Process<S> for MetadataProbe<FULL> {
-    fn process<B>(&mut self, _: &mut ProcessBlock<'_, '_, '_, S, B>) -> Result<(), ProcessError>
-    where
-        B: ProcessBufferSource<S> + ?Sized,
-    {
+    fn process(&mut self, _: &mut ProcessBlock<'_, S>) -> Result<(), ProcessError> {
         Ok(())
     }
 }

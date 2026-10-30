@@ -5,8 +5,8 @@ use chassis_clap::{
 };
 use chassis_runtime::{
     audio::{
-        AudioIoConfigurationSpec, AudioIoPolicy, AudioPortDescriptor, AudioPortIndex,
-        ChannelLayout, ConfiguredAudioPort, PortDirection, PortKey, PortRole,
+        AudioIoConfigurationSpec, AudioIoPolicy, AudioPortDescriptor, AudioPortDirection,
+        AudioPortIndex, AudioPortKey, AudioPortRole, ChannelLayout, ConfiguredAudioPort,
     },
     automation::{ParameterEventChange, ParameterEventValue},
     events::{
@@ -24,7 +24,7 @@ use core::{
     f64::consts::{FRAC_PI_2, TAU},
 };
 
-const OUTPUT: PortKey = PortKey::new("audio.out");
+const OUTPUT: AudioPortKey = AudioPortKey::new("audio.out");
 const PRIMARY: EventPortKey = EventPortKey::new("notes.primary");
 const SECONDARY: EventPortKey = EventPortKey::new("notes.secondary");
 const MAX_NOTES: u32 = 1024;
@@ -44,8 +44,8 @@ impl Component for NoteProbe {
             vec![AudioPortDescriptor::new(
                 OUTPUT,
                 "Main Output",
-                PortDirection::Output,
-                PortRole::Main,
+                AudioPortDirection::Output,
+                AudioPortRole::Main,
                 false,
             )],
             AudioIoPolicy::enumerated(vec![AudioIoConfigurationSpec::new(vec![

@@ -57,6 +57,7 @@ impl GlobalFloatModulation {
 }
 
 /// Lazy effective-value cursor over independent base and modulation controls.
+#[derive(Clone)]
 pub struct ModulatedFloatCursor<'events> {
     base: FloatParameterCursor<'events>,
     amount: Option<FloatParameterCursor<'events>>,

@@ -10,7 +10,7 @@ use std::vec::Vec;
 use crate::{
     audio::{
         AudioEndpointError, AudioIoConfiguration, AudioIoConfigurationError, AudioIoPolicyError,
-        AudioPortDescriptor, AudioPortIndex, ConfiguredAudioPort, PortKey,
+        AudioPortDescriptor, AudioPortIndex, AudioPortKey, ConfiguredAudioPort,
         ResolvedAudioIoConfiguration,
     },
     automation::ParameterEventChange,
@@ -597,7 +597,7 @@ where
 
     /// Resolve a stable audio-port key to its dense schema-local index.
     #[must_use]
-    pub fn audio_port_index(&self, key: &PortKey) -> Option<AudioPortIndex> {
+    pub fn audio_port_index(&self, key: &AudioPortKey) -> Option<AudioPortIndex> {
         self.schema.audio_port_index(key)
     }
 
@@ -924,11 +924,9 @@ where
             processor,
         } = active;
 
-        ProcessBlock::<S>::validate_context(*process, frame_count, context)
+        let frames = ProcessBlock::<S>::validate_context(*process, frame_count, context)
             .map_err(InstanceProcessError::InvalidBlock)?;
-        audio_buffers
-            .validate(source, resolved_audio)
-            .map_err(InstanceProcessError::InvalidAudioEndpoint)?;
+        audio_buffers.validate(source, resolved_audio, frames)?;
 
         let config =
             ActivationConfig::new(*process, AudioIoConfiguration::new(audio_ports), schema);
@@ -956,15 +954,14 @@ where
             Some(frozen) => (&frozen.parameters, frozen.modulation.as_slice()),
             None => (&*parameters, modulation.as_slice()),
         };
-        let mut block = ProcessBlock::new(
+        let mut block = ProcessBlock::from_validated(
             &config,
             dsp_parameters,
             dsp_modulation,
             frame_count,
             dsp_context,
             source,
-        )
-        .map_err(InstanceProcessError::InvalidBlock)?;
+        );
         if let Some(sink) = &mut sink {
             block.set_event_sink(Some(&mut **sink));
         }

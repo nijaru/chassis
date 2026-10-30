@@ -40,6 +40,8 @@ The framework roadmap uses focused conformance fixtures rather than migration of
 
 `Component` defines immutable schema, capabilities, and factories. `InstanceRuntime<P>` owns durable parameter and semantic state and coordinates activation. `Processor` owns active DSP history. The same processor model should remain usable through plugin adapters, directly inside another Rust application, as a graph node, in a standalone application, and during offline rendering.
 
+DSP implements `Process<S>` with a borrowed `ProcessBlock<'_, S>`. Safe channel enum views support in-place, separate input/output, and cross-channel algorithms without callback-owned collections. Setup-resolved typed parameter handles provide base/effective trajectories from the block's consumed controls. Complete persistence belongs to the instance runtime; CLAP export metadata is declared through one `ClapDescriptor`.
+
 Product-facing core APIs contain no plugin-format, GUI-toolkit, device-backend, or operating-system types. Realtime callbacks have activation-defined resource and event bounds. The test suite checks callback allocations, lifecycle failures, concurrent state publication, f32/f64 processing, malformed state, and other runtime invariants. `chassis_runtime::telemetry` provides the first reusable bounded DSP-to-control snapshot primitive without adding locks or callback allocation.
 
 Chassis may provide common DSP building blocks where doing so creates a coherent reusable audio foundation, but it should use strong existing Rust libraries where appropriate instead of reimplementing codecs, FFTs, resamplers, device backends, or other mature primitives merely for ownership.

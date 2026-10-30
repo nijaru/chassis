@@ -9,7 +9,8 @@ use chassis_runtime::transport::TransportSnapshot;
 use chassis_runtime::{
     audio::{
         AudioIoConfiguration, AudioIoConfigurationSpec, AudioIoPolicy, AudioPortDescriptor,
-        AudioPortIndex, ChannelLayout, ConfiguredAudioPort, PortDirection, PortKey, PortRole,
+        AudioPortDirection, AudioPortIndex, AudioPortKey, AudioPortRole, ChannelLayout,
+        ConfiguredAudioPort,
     },
     automation::ParameterEvents,
     buffer::{ChannelBuffer, OutputEndpoint},
@@ -18,22 +19,22 @@ use chassis_runtime::{
     schema::ComponentSchema,
 };
 
-const MAIN_OUTPUT: PortKey = PortKey::new("audio.main.out");
-const AUX_OUTPUT: PortKey = PortKey::new("audio.aux.out");
+const MAIN_OUTPUT: AudioPortKey = AudioPortKey::new("audio.main.out");
+const AUX_OUTPUT: AudioPortKey = AudioPortKey::new("audio.aux.out");
 
 static AUDIO_PORTS: &[AudioPortDescriptor] = &[
     AudioPortDescriptor::new(
         MAIN_OUTPUT,
         "Main Output",
-        PortDirection::Output,
-        PortRole::Main,
+        AudioPortDirection::Output,
+        AudioPortRole::Main,
         false,
     ),
     AudioPortDescriptor::new(
         AUX_OUTPUT,
         "Aux Output",
-        PortDirection::Output,
-        PortRole::Auxiliary,
+        AudioPortDirection::Output,
+        AudioPortRole::Auxiliary,
         false,
     ),
 ];

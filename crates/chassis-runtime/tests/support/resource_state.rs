@@ -2,8 +2,9 @@
 
 use chassis_runtime::{
     automation::ParameterEventValue,
-    modulation::GlobalFloatModulation,
-    parameters::{ChoiceOption, ParameterDescriptor, ParameterIndex, ParameterStore},
+    parameters::{
+        ChoiceOption, FloatParameter, ParameterDescriptor, ParameterIndex, ParameterStore,
+    },
     process::{ActivationConfig, ProcessBlock},
     runtime::{Component, ComponentStateError, Process, Processor},
     schema::{ComponentId, ComponentSchema, ComponentSchemaError, StateSchemaVersion},
@@ -143,11 +144,7 @@ impl Component for TableComponent {
         custom: &[StateEntry],
     ) -> Result<TableProcessor, Infallible> {
         Ok(TableProcessor {
-            modulation: parameters
-                .descriptor(ParameterIndex::new(0))
-                .unwrap()
-                .global_modulation()
-                .unwrap(),
+            index: parameters.float_parameter("index").unwrap(),
             table: table(custom).unwrap().to_vec(),
             incompatible: Arc::clone(&self.incompatible_controls),
             restart: false,
@@ -156,7 +153,7 @@ impl Component for TableComponent {
 }
 
 pub struct TableProcessor {
-    modulation: GlobalFloatModulation,
+    index: FloatParameter,
     table: Vec<u8>,
     incompatible: Arc<AtomicUsize>,
     restart: bool,
@@ -171,18 +168,9 @@ impl Process<f64> for TableProcessor {
         &mut self,
         block: &mut ProcessBlock<'_, f64>,
     ) -> Result<(), chassis_runtime::runtime::ProcessError> {
-        let Some(ParameterEventValue::Float(initial)) =
-            block.parameters().get_event_value(ParameterIndex::new(0))
-        else {
-            unreachable!("float schema");
-        };
-        let events = block.parameter_events();
-        let amount = block.modulation(ParameterIndex::new(0)).unwrap();
+        let cursor = self.index.cursor(block)?;
         block.for_each_channel(|mut channel| {
-            let mut cursor = self
-                .modulation
-                .cursor(events, ParameterIndex::new(0), initial, amount)
-                .unwrap();
+            let mut cursor = cursor.clone();
             for (offset, output) in channel.output_mut().unwrap().iter_mut().enumerate() {
                 let index =
                     usize::from(cursor.value_at(u32::try_from(offset).unwrap()).unwrap() >= 0.5);

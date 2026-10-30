@@ -18,12 +18,7 @@ use std::{
     {string::String, vec::Vec},
 };
 
-use crate::{
-    automation::{ParameterEventChange, ParameterEventValue, ParameterEvents},
-    state::{
-        StateDocument, StateDocumentError, StateEncodeError, StateEntry, StateLimits, StateValue,
-    },
-};
+use crate::automation::{ParameterEventChange, ParameterEventValue, ParameterEvents};
 
 /// Stable identity of a parameter.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -1541,6 +1536,9 @@ impl ParameterStore {
             .map(|position| self.lookup[position])
     }
 }
+
+/// An automation event does not match the active parameter schema.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParameterAutomationError {
     /// Event index did not identify a descriptor in the active schema.
     UnknownParameter {
@@ -1576,6 +1574,8 @@ impl fmt::Display for ParameterAutomationError {
 }
 
 impl std::error::Error for ParameterAutomationError {}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::automation::ParameterEvent;

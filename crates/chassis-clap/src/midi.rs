@@ -85,7 +85,7 @@ pub(crate) fn normalize(
             event.port_index(),
             MessageRecord::Ump(event.data()),
             0,
-            EventDialect::Midi2,
+            EventDialect::Ump,
         )
     } else {
         let event = event

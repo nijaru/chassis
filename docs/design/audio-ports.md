@@ -29,7 +29,7 @@ AudioPortDescriptor
 └── optionality
 ```
 
-`PortKey` and port display names can remain borrowed for static product definitions or own runtime-discovered text for dynamic/hosted components. This ownership lives entirely in setup/control-domain metadata.
+`AudioPortKey` and port display names can remain borrowed for static product definitions or own runtime-discovered text for dynamic/hosted components. This ownership lives entirely in setup/control-domain metadata.
 
 Adapters/runtime setup resolve stable keys to compact `AudioPortIndex` values after schema validation. Dense indices are **derived projections**, not author-facing compatibility identity and not serialized product state.
 
@@ -118,7 +118,7 @@ For each host proposal, an adapter must either:
 
 If a backend changes one bus at a time, the adapter still evaluates the resulting **whole** Chassis proposal before committing it. Backend API shape does not weaken cross-bus invariants.
 
-The current CLAP adapter derives its setup mapping from the coherent component schema and rejects a mapping outside `ComponentSchema::audio_io_policy()`. The callback process plan carries dense `AudioPortIndex` values and layouts, not stable `PortKey` strings.
+The current CLAP adapter derives its setup mapping from the coherent component schema and rejects a mapping outside `ComponentSchema::audio_io_policy()`. The callback process plan carries dense `AudioPortIndex` values and layouts, not stable `AudioPortKey` strings.
 
 ## Layout families
 

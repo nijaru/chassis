@@ -11,7 +11,7 @@ use std::vec::Vec;
 use crate::{
     audio::{
         AudioIoConfigurationError, AudioIoPolicy, AudioIoPolicyError, AudioPortDescriptor,
-        AudioPortIndex, DEFAULT_EFFECT_PORTS, PortKey, audio_port_index,
+        AudioPortIndex, AudioPortKey, DEFAULT_EFFECT_PORTS, audio_port_index,
         validate_audio_port_schema,
     },
     events::{
@@ -312,7 +312,7 @@ impl ComponentSchema {
 
     /// Resolve a stable audio-port key to its dense schema-local index.
     #[must_use]
-    pub fn audio_port_index(&self, key: &PortKey) -> Option<AudioPortIndex> {
+    pub fn audio_port_index(&self, key: &AudioPortKey) -> Option<AudioPortIndex> {
         audio_port_index(&self.audio_ports, key)
     }
 

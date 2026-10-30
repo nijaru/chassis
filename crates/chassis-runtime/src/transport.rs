@@ -54,7 +54,7 @@ pub struct TransportValues {
     /// Project timeline position in quarter notes.
     pub beat_position: Option<f64>,
     /// Start of the current bar in quarter notes.
-    pub bar_start: Option<f64>,
+    pub bar_start_beats: Option<f64>,
     /// Zero-based bar number at the project origin, if supplied by the source.
     pub bar_number: Option<i64>,
     /// Musical meter; both components must be nonzero.
@@ -96,7 +96,7 @@ impl TransportSnapshot {
         if [
             values.seconds_position,
             values.beat_position,
-            values.bar_start,
+            values.bar_start_beats,
         ]
         .into_iter()
         .flatten()
@@ -133,7 +133,7 @@ impl TransportSnapshot {
         sample_position: None,
         seconds_position: None,
         beat_position: None,
-        bar_start: None,
+        bar_start_beats: None,
         bar_number: None,
         time_signature: None,
         loop_beats: None,
@@ -200,7 +200,7 @@ mod tests {
             sample_position: Some(i64::MIN),
             seconds_position: Some(-2.5),
             beat_position: Some(-7.0),
-            bar_start: Some(-9.5),
+            bar_start_beats: Some(-9.5),
             bar_number: Some(-3),
             time_signature: Some(TimeSignature {
                 numerator: 7,
@@ -264,7 +264,7 @@ mod tests {
             match field {
                 0 => values.seconds_position = Some(f64::NAN),
                 1 => values.beat_position = Some(f64::INFINITY),
-                _ => values.bar_start = Some(f64::NEG_INFINITY),
+                _ => values.bar_start_beats = Some(f64::NEG_INFINITY),
             }
             assert_eq!(
                 TransportSnapshot::new(values),

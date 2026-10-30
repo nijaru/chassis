@@ -10,7 +10,7 @@ use crate::audio::AudioPortIndex;
 
 /// Dense process-time address of one input channel within an active audio port.
 ///
-/// Stable [`PortKey`](crate::audio::PortKey) identity is resolved before
+/// Stable [`AudioPortKey`](crate::audio::AudioPortKey) identity is resolved before
 /// processing. Callback data carries only this schema-local dense index and the
 /// zero-based channel index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

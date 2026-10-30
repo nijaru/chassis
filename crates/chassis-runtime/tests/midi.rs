@@ -158,11 +158,7 @@ fn input_requires_a_concrete_known_input_port_with_the_messages_dialect() {
             Err(MidiEventPortError::UnknownPort(PORT))
         );
         for direction in [EventPortDirection::Input, EventPortDirection::Output] {
-            for dialect in [
-                EventDialect::Notes,
-                EventDialect::Midi1,
-                EventDialect::Midi2,
-            ] {
+            for dialect in [EventDialect::Notes, EventDialect::Midi1, EventDialect::Ump] {
                 let ports = [EventPortDescriptor::owned(
                     "midi",
                     "MIDI",
@@ -186,7 +182,7 @@ fn input_requires_a_concrete_known_input_port_with_the_messages_dialect() {
             EventPortKey::new("in"),
             "Input",
             EventPortDirection::Input,
-            &[EventDialect::Midi1, EventDialect::Midi2],
+            &[EventDialect::Midi1, EventDialect::Ump],
         )];
         assert_eq!(view.validate_ports(&ports), Ok(()));
     }
@@ -209,7 +205,7 @@ fn ump_preserves_all_four_words_and_shares_counts_without_spending_sysex_bytes()
         event.with_port(EventPortIndex::new(9)).message(),
         MidiMessage::Ump(words)
     );
-    assert_eq!(event.message().dialect(), EventDialect::Midi2);
+    assert_eq!(event.message().dialect(), EventDialect::Ump);
     assert_eq!(
         MidiEvents::new(&events, 1, 1, 0).unwrap_err(),
         MidiEventsError::TooManyEvents {

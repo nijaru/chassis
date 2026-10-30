@@ -359,6 +359,7 @@ enum CursorKind {
 ///
 /// The cursor performs no allocation. It consumes only events for its target
 /// while preserving the source order of equal-offset events.
+#[derive(Clone)]
 pub struct FloatParameterCursor<'events> {
     kind: CursorKind,
     events: &'events [ParameterEvent],
@@ -463,6 +464,7 @@ impl FloatParameterCursor<'_> {
 }
 
 /// Lazy Boolean step trajectory over the existing bounded parameter stream.
+#[derive(Clone)]
 pub struct BooleanParameterCursor<'events>(StepCursor<'events>);
 
 impl BooleanParameterCursor<'_> {
@@ -479,6 +481,7 @@ impl BooleanParameterCursor<'_> {
 }
 
 /// Lazy integer step trajectory over the existing bounded parameter stream.
+#[derive(Clone)]
 pub struct IntegerParameterCursor<'events>(StepCursor<'events>);
 
 impl IntegerParameterCursor<'_> {
@@ -495,6 +498,7 @@ impl IntegerParameterCursor<'_> {
 }
 
 /// Lazy parameter-local choice trajectory; no stable IDs are read in processing.
+#[derive(Clone)]
 pub struct ChoiceParameterCursor<'events>(StepCursor<'events>);
 
 impl ChoiceParameterCursor<'_> {
@@ -510,6 +514,7 @@ impl ChoiceParameterCursor<'_> {
     }
 }
 
+#[derive(Clone)]
 struct StepCursor<'events> {
     events: &'events [ParameterEvent],
     frame_count: u32,

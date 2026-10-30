@@ -1,7 +1,5 @@
 //! Lazy safe process views of a completely validated raw CLAP sample topology.
 
-use core::ops::ControlFlow;
-
 pub(crate) use crate::raw_audio::{ClapSample, ClapSamplePrecision, sample_precision};
 use crate::{
     audio::ClapProcessSlot,
@@ -31,38 +29,33 @@ impl<'audio, 'scratch, S: ClapSample> ClapBufferSource<'audio, 'scratch, S> {
 }
 
 impl<S: ClapSample> ProcessBufferSource<S> for ClapBufferSource<'_, '_, S> {
-    fn visit_channels(
+    fn with_channels(
         &mut self,
-        visitor: &mut dyn FnMut(ChannelBuffer<'_, S>) -> ControlFlow<()>,
-    ) -> ControlFlow<()> {
-        for (pair, input, output) in self.raw.channels() {
-            // RawSource has already proved the whole alias topology and mapped
-            // endpoints. Construct only one short-lived safe view at a time.
-            let channel = match pair {
-                ChannelPair::InPlace(samples) => ChannelBuffer::InPlace {
-                    input: input.expect("in-place slot has an input"),
-                    output: output.expect("in-place slot has an output"),
-                    samples,
-                },
-                ChannelPair::InputOutput(input_samples, output_samples) => {
-                    ChannelBuffer::Separate {
-                        input: input.expect("paired slot has an input"),
-                        input_samples,
-                        output: output.expect("paired slot has an output"),
-                        output_samples,
-                    }
-                }
-                ChannelPair::InputOnly(samples) => ChannelBuffer::InputOnly {
-                    input: input.expect("input slot has an input"),
-                    samples,
-                },
-                ChannelPair::OutputOnly(samples) => ChannelBuffer::OutputOnly {
-                    output: output.expect("output slot has an output"),
-                    samples,
-                },
-            };
-            visitor(channel)?;
-        }
-        ControlFlow::Continue(())
+        visitor: &mut dyn FnMut(&mut dyn Iterator<Item = ChannelBuffer<'_, S>>),
+    ) {
+        // The raw boundary proves disjointness across the complete topology,
+        // so all lazily produced channel borrows may coexist during this call.
+        let mut channels = self.raw.channels().map(|(pair, input, output)| match pair {
+            ChannelPair::InPlace(samples) => ChannelBuffer::InPlace {
+                input: input.expect("in-place slot has an input"),
+                output: output.expect("in-place slot has an output"),
+                samples,
+            },
+            ChannelPair::InputOutput(input_samples, output_samples) => ChannelBuffer::Separate {
+                input: input.expect("paired slot has an input"),
+                input_samples,
+                output: output.expect("paired slot has an output"),
+                output_samples,
+            },
+            ChannelPair::InputOnly(samples) => ChannelBuffer::InputOnly {
+                input: input.expect("input slot has an input"),
+                samples,
+            },
+            ChannelPair::OutputOnly(samples) => ChannelBuffer::OutputOnly {
+                output: output.expect("output slot has an output"),
+                samples,
+            },
+        });
+        visitor(&mut channels);
     }
 }

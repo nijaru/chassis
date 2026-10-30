@@ -31,7 +31,7 @@ impl MidiMessage<'_> {
     pub const fn dialect(self) -> EventDialect {
         match self {
             Self::Short(_) | Self::SysEx(_) => EventDialect::Midi1,
-            Self::Ump(_) => EventDialect::Midi2,
+            Self::Ump(_) => EventDialect::Ump,
         }
     }
 }

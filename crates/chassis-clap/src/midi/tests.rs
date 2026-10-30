@@ -38,17 +38,13 @@ fn ports() -> ClapEventPorts {
                 midi_out.clone(),
                 "MIDI Output",
                 EventPortDirection::Output,
-                &[EventDialect::Midi1, EventDialect::Midi2],
+                &[EventDialect::Midi1, EventDialect::Ump],
             ),
             EventPortDescriptor::new(
                 midi_in.clone(),
                 "Mixed Input",
                 EventPortDirection::Input,
-                &[
-                    EventDialect::Notes,
-                    EventDialect::Midi1,
-                    EventDialect::Midi2,
-                ],
+                &[EventDialect::Notes, EventDialect::Midi1, EventDialect::Ump],
             ),
         ],
         &[

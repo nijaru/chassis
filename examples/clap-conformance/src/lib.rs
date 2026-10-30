@@ -6,12 +6,10 @@ use core::convert::Infallible;
 
 use chassis_clap::{ClapComponent, F32AndF64, SingleComponentEntry, clack_export_entry};
 use chassis_runtime::{
-    automation::ParameterEventValue,
-    buffer::BufferRelationship,
-    modulation::GlobalFloatModulation,
-    parameters::{ChoiceOption, ParameterDescriptor, ParameterIndex},
+    buffer::ChannelBuffer,
+    parameters::{BooleanParameter, ChoiceOption, FloatParameter, ParameterDescriptor},
     process::{ActivationConfig, ProcessBlock},
-    runtime::{Component, Process, Processor},
+    runtime::{Component, Process, ProcessError, Processor},
 };
 
 struct ConformanceEffect {
@@ -79,15 +77,11 @@ impl Component for ConformanceEffect {
         parameters: &chassis_runtime::parameters::ParameterStore,
         _custom_state: &[chassis_runtime::state::StateEntry],
     ) -> Result<Self::Processor, Self::ActivationError> {
-        let trim = parameters.index("trim").expect("conformance trim exists");
         Ok(ConformanceProcessor {
-            bypass: parameters.index("bypass").expect("bypass exists"),
-            trim,
-            modulation: parameters
-                .descriptor(trim)
-                .expect("trim descriptor exists")
-                .global_modulation()
-                .expect("trim opts into modulation"),
+            bypass: parameters
+                .boolean_parameter("bypass")
+                .expect("bypass is Boolean"),
+            trim: parameters.float_parameter("trim").expect("trim is a float"),
         })
     }
 }
@@ -106,59 +100,58 @@ impl ClapComponent for ConformanceEffect {
 }
 
 struct ConformanceProcessor {
-    bypass: ParameterIndex,
-    trim: ParameterIndex,
-    modulation: GlobalFloatModulation,
+    bypass: BooleanParameter,
+    trim: FloatParameter,
 }
 
 impl Processor for ConformanceProcessor {}
 
 impl ConformanceProcessor {
-    fn process_trim<S: Copy>(&self, block: &mut ProcessBlock<'_, S>, apply: impl Fn(&mut S, f64)) {
-        let Some(ParameterEventValue::Float(base)) = block.parameters().get_event_value(self.trim)
-        else {
-            panic!("conformance trim is a float");
-        };
-        let Some(ParameterEventValue::Boolean(bypassed)) =
-            block.parameters().get_event_value(self.bypass)
-        else {
-            panic!("conformance bypass is Boolean");
-        };
-        let amount = block.modulation(self.trim).expect("trim has a held signal");
-        let events = block.parameter_events();
-        block.for_each_channel(|mut buffer| {
-            match buffer.relationship() {
-                BufferRelationship::InPlace | BufferRelationship::Separate => {
-                    let mut bypass = events.boolean_cursor(self.bypass, bypassed);
-                    let mut trim = self
-                        .modulation
-                        .cursor(events, self.trim, base, amount)
-                        .expect("consumed trim controls are finite");
-                    for (offset, sample) in buffer
-                        .copy_input_to_output()
-                        .expect("paired main channel has input and output")
-                        .iter_mut()
-                        .enumerate()
-                    {
-                        let offset = u32::try_from(offset).expect("callback offset fits u32");
-                        let gain = trim.value_at(offset).expect("valid trim query");
-                        // Product policy: immediate unity-gain dry path, with
-                        // the same subnormal cleanup as normal processing.
-                        // No latency/history or crossfade needs preservation.
-                        let gain = if bypass.value_at(offset).expect("valid bypass query") {
-                            1.0
-                        } else {
-                            gain
-                        };
-                        apply(sample, gain);
+    fn process_trim<S: Copy>(
+        &self,
+        block: &mut ProcessBlock<'_, S>,
+        apply: impl Fn(&mut S, f64),
+    ) -> Result<(), ProcessError> {
+        let bypass = self.bypass.cursor(block)?;
+        let trim = self.trim.cursor(block)?;
+        block.try_for_each_channel(|buffer| {
+            let mut bypass = bypass.clone();
+            let mut trim = trim.clone();
+            let mut process_sample =
+                |offset: usize, source: S, destination: &mut S| -> Result<(), ProcessError> {
+                    let offset = u32::try_from(offset).expect("callback frame count fits u32");
+                    let gain = trim.value_at(offset)?;
+                    // Product policy: immediate unity-gain dry path, with the same
+                    // subnormal cleanup. This effect has no latency or DSP history.
+                    let gain = if bypass.value_at(offset)? { 1.0 } else { gain };
+                    *destination = source;
+                    apply(destination, gain);
+                    Ok(())
+                };
+            match buffer {
+                ChannelBuffer::InPlace { samples, .. } => {
+                    for (offset, sample) in samples.iter_mut().enumerate() {
+                        process_sample(offset, *sample, sample)?;
                     }
                 }
-                BufferRelationship::InputOnly => {}
-                BufferRelationship::OutputOnly => {
-                    panic!("conformance effect has no output-only channels")
+                ChannelBuffer::Separate {
+                    input_samples,
+                    output_samples,
+                    ..
+                } => {
+                    for (offset, (input, output)) in
+                        input_samples.iter().zip(output_samples).enumerate()
+                    {
+                        process_sample(offset, *input, output)?;
+                    }
+                }
+                ChannelBuffer::InputOnly { .. } => {}
+                ChannelBuffer::OutputOnly { .. } => {
+                    return Err(ProcessError::Message("effect output requires an input"));
                 }
             }
-        });
+            Ok(())
+        })
     }
 }
 
@@ -167,8 +160,7 @@ impl Process<f32> for ConformanceProcessor {
         &mut self,
         block: &mut ProcessBlock<'_, f32>,
     ) -> Result<(), chassis_runtime::runtime::ProcessError> {
-        self.process_trim(block, apply_trim_f32);
-        Ok(())
+        self.process_trim(block, apply_trim_f32)
     }
 }
 
@@ -177,8 +169,7 @@ impl Process<f64> for ConformanceProcessor {
         &mut self,
         block: &mut ProcessBlock<'_, f64>,
     ) -> Result<(), chassis_runtime::runtime::ProcessError> {
-        self.process_trim(block, apply_trim_f64);
-        Ok(())
+        self.process_trim(block, apply_trim_f64)
     }
 }
 

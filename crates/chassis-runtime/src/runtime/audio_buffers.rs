@@ -1,9 +1,9 @@
 //! Activation-owned scratch for whole callback topology validation.
 
-use core::ops::ControlFlow;
-
+use super::InstanceProcessError;
 use crate::{
-    audio::{AudioEndpointError, AudioPortIndex, PortDirection, ResolvedAudioIoConfiguration},
+    audio::{AudioEndpointError, AudioPortDirection, AudioPortIndex, ResolvedAudioIoConfiguration},
+    process::ProcessBlockError,
     process::ProcessBufferSource,
 };
 
@@ -36,50 +36,67 @@ impl AudioBufferValidation {
         &mut self,
         source: &mut dyn ProcessBufferSource<S>,
         resolved: &ResolvedAudioIoConfiguration,
-    ) -> Result<(), AudioEndpointError> {
+        expected_frames: usize,
+    ) -> Result<(), InstanceProcessError> {
         self.seen.fill(false);
         let mut count = 0;
         let mut result = Ok(());
-        let _ = source.visit_channels(&mut |channel| {
+        source.with_channels(&mut |channels| {
             result = (|| {
-                let input = channel.input_endpoint();
-                let output = channel.output_endpoint();
-                if input.is_none() && output.is_none() {
-                    return Err(AudioEndpointError::EmptyChannel);
-                }
-                if let Some(endpoint) = input {
-                    self.visit(
-                        resolved,
-                        endpoint.port_index(),
-                        endpoint.channel(),
-                        PortDirection::Input,
-                    )?;
-                    count += 1;
-                }
-                if let Some(endpoint) = output {
-                    self.visit(
-                        resolved,
-                        endpoint.port_index(),
-                        endpoint.channel(),
-                        PortDirection::Output,
-                    )?;
-                    count += 1;
+                for mut channel in channels {
+                    let input = channel.input_endpoint();
+                    let output = channel.output_endpoint();
+                    if input.is_none() && output.is_none() {
+                        return Err(InstanceProcessError::InvalidAudioEndpoint(
+                            AudioEndpointError::EmptyChannel,
+                        ));
+                    }
+                    if let Some(endpoint) = input {
+                        self.visit(
+                            resolved,
+                            endpoint.port_index(),
+                            endpoint.channel(),
+                            AudioPortDirection::Input,
+                        )
+                        .map_err(InstanceProcessError::InvalidAudioEndpoint)?;
+                        count += 1;
+                    }
+                    if let Some(endpoint) = output {
+                        self.visit(
+                            resolved,
+                            endpoint.port_index(),
+                            endpoint.channel(),
+                            AudioPortDirection::Output,
+                        )
+                        .map_err(InstanceProcessError::InvalidAudioEndpoint)?;
+                        count += 1;
+                    }
+                    let lengths = [
+                        channel.input().map(<[S]>::len),
+                        channel.output_mut().map(|samples| samples.len()),
+                    ];
+                    for actual in lengths.into_iter().flatten() {
+                        if actual != expected_frames {
+                            return Err(InstanceProcessError::InvalidBlock(
+                                ProcessBlockError::BufferFrameCountMismatch {
+                                    expected: expected_frames,
+                                    actual,
+                                },
+                            ));
+                        }
+                    }
                 }
                 Ok(())
             })();
-            // Every view consumes a unique endpoint, or stops traversal now.
-            if result.is_err() {
-                ControlFlow::Break(())
-            } else {
-                ControlFlow::Continue(())
-            }
         });
         result?;
         if count != self.seen.len() {
-            return Err(AudioEndpointError::IncompleteTopology {
-                expected: self.seen.len(),
-                actual: count,
-            });
+            return Err(InstanceProcessError::InvalidAudioEndpoint(
+                AudioEndpointError::IncompleteTopology {
+                    expected: self.seen.len(),
+                    actual: count,
+                },
+            ));
         }
         Ok(())
     }
@@ -89,7 +106,7 @@ impl AudioBufferValidation {
         resolved: &ResolvedAudioIoConfiguration,
         port: AudioPortIndex,
         channel: u32,
-        direction: PortDirection,
+        direction: AudioPortDirection,
     ) -> Result<(), AudioEndpointError> {
         resolved.validate_endpoint(port, channel, direction)?;
         // Endpoint validation proves the port is active and the channel is in

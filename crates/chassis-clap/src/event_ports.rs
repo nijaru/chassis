@@ -48,7 +48,7 @@ fn dialect(value: EventDialect) -> Result<NoteDialect, NoteMappingError> {
     match value {
         EventDialect::Notes => Ok(NoteDialect::Clap),
         EventDialect::Midi1 => Ok(NoteDialect::Midi),
-        EventDialect::Midi2 => Ok(NoteDialect::Midi2),
+        EventDialect::Ump => Ok(NoteDialect::Midi2),
         _ => Err(NoteMappingError("Unsupported CLAP event dialect")),
     }
 }

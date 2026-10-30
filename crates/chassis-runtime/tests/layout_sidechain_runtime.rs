@@ -10,7 +10,8 @@ use chassis_runtime::transport::TransportSnapshot;
 use chassis_runtime::{
     audio::{
         AudioIoConfiguration, AudioIoConfigurationSpec, AudioIoPolicy, AudioPortDescriptor,
-        AudioPortIndex, ChannelLayout, ConfiguredAudioPort, PortDirection, PortKey, PortRole,
+        AudioPortDirection, AudioPortIndex, AudioPortKey, AudioPortRole, ChannelLayout,
+        ConfiguredAudioPort,
     },
     automation::ParameterEvents,
     buffer::{ChannelBuffer, InputEndpoint, OutputEndpoint},
@@ -19,30 +20,30 @@ use chassis_runtime::{
     schema::ComponentSchema,
 };
 
-const MAIN_INPUT: PortKey = PortKey::new("audio.main.in");
-const MAIN_OUTPUT: PortKey = PortKey::new("audio.main.out");
-const SIDECHAIN: PortKey = PortKey::new("audio.sidechain");
+const MAIN_INPUT: AudioPortKey = AudioPortKey::new("audio.main.in");
+const MAIN_OUTPUT: AudioPortKey = AudioPortKey::new("audio.main.out");
+const SIDECHAIN: AudioPortKey = AudioPortKey::new("audio.sidechain");
 
 static AUDIO_PORTS: &[AudioPortDescriptor] = &[
     AudioPortDescriptor::new(
         MAIN_INPUT,
         "Main Input",
-        PortDirection::Input,
-        PortRole::Main,
+        AudioPortDirection::Input,
+        AudioPortRole::Main,
         false,
     ),
     AudioPortDescriptor::new(
         MAIN_OUTPUT,
         "Main Output",
-        PortDirection::Output,
-        PortRole::Main,
+        AudioPortDirection::Output,
+        AudioPortRole::Main,
         false,
     ),
     AudioPortDescriptor::new(
         SIDECHAIN,
         "Sidechain",
-        PortDirection::Input,
-        PortRole::Sidechain,
+        AudioPortDirection::Input,
+        AudioPortRole::Sidechain,
         true,
     ),
 ];

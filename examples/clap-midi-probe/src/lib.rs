@@ -43,7 +43,7 @@ impl Component for MidiProbe {
                     PRIMARY_IN,
                     "Primary MIDI Input",
                     EventPortDirection::Input,
-                    &[EventDialect::Midi1, EventDialect::Midi2],
+                    &[EventDialect::Midi1, EventDialect::Ump],
                 ),
                 EventPortDescriptor::new(
                     SECONDARY_OUT,
@@ -61,19 +61,19 @@ impl Component for MidiProbe {
                     PRIMARY_OUT,
                     "Primary MIDI Output",
                     EventPortDirection::Output,
-                    &[EventDialect::Midi1, EventDialect::Midi2],
+                    &[EventDialect::Midi1, EventDialect::Ump],
                 ),
                 EventPortDescriptor::new(
                     UMP_OUT,
                     "UMP Output",
                     EventPortDirection::Output,
-                    &[EventDialect::Midi2],
+                    &[EventDialect::Ump],
                 ),
                 EventPortDescriptor::new(
                     UMP_IN,
                     "UMP Input",
                     EventPortDirection::Input,
-                    &[EventDialect::Midi2],
+                    &[EventDialect::Ump],
                 ),
             ],
             vec![
@@ -118,12 +118,12 @@ impl ClapComponent for MidiProbe {
     };
     const CLAP_AUDIO_PORTS: &'static [ClapAudioPort] = &[];
     const CLAP_NOTE_PORTS: &'static [ClapNotePort] = &[
-        ClapNotePort::new(PRIMARY_IN, 90, EventDialect::Midi2),
+        ClapNotePort::new(PRIMARY_IN, 90, EventDialect::Ump),
         ClapNotePort::new(SECONDARY_OUT, 80, EventDialect::Midi1),
         ClapNotePort::new(SECONDARY_IN, 10, EventDialect::Midi1),
-        ClapNotePort::new(PRIMARY_OUT, 20, EventDialect::Midi2),
-        ClapNotePort::new(UMP_IN, 120, EventDialect::Midi2),
-        ClapNotePort::new(UMP_OUT, 100, EventDialect::Midi2),
+        ClapNotePort::new(PRIMARY_OUT, 20, EventDialect::Ump),
+        ClapNotePort::new(UMP_IN, 120, EventDialect::Ump),
+        ClapNotePort::new(UMP_OUT, 100, EventDialect::Ump),
     ];
     const CLAP_PARAMETER_IDS: &'static [(&'static str, u32)] = &[("enabled", 7008)];
     const CLAP_MAX_PARAMETER_EVENTS: u32 = 512;

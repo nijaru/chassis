@@ -100,7 +100,7 @@ CLAP authoring supplies `ClapComponent::CLAP_DESCRIPTOR: ClapDescriptor` separat
 Authoring/setup identity and realtime identity are intentionally different:
 
 ```text
-PortKey       -> AudioPortIndex
+AudioPortKey       -> AudioPortIndex
 EventPortKey  -> EventPortIndex
 ParameterKey  -> ParameterIndex
 ```
@@ -150,14 +150,14 @@ The initial policy forms are deliberately small:
 
 That is sufficient for current effect, instrument, sidechain/layout-switching, multi-output, and dynamically constructed fixtures. Do not add a rule language until a real component needs a configuration family that is impractical to enumerate.
 
-`ChannelBuffer<S>` / `ProcessChannel<S>` preserve already-proved relationships:
+`ChannelBuffer<S>` preserves already-proved relationships:
 
 - exact in-place;
 - separate input/output;
 - input-only;
 - output-only.
 
-`ProcessBufferSource<S>` lets adapters, devices, graphs, and embeddings expose arbitrary channel storage lazily without constructing callback-owned channel vectors.
+`ProcessBufferSource<S>` lends a stack-owned iterator over safe channel views. `ProcessBlock<'_, S>` hides the source type: use `for_each_channel` for independent channels, `try_for_each_channel` for early-stopping fallible work, or `with_channels` to retain multiple views together for stereo/multichannel DSP. No callback-owned channel vector or scratch copy is required. Match `ChannelBuffer::Separate` to borrow disjoint input/output slices simultaneously; match `InPlace` for its single mutable slice.
 
 `InstanceRuntime` validates dense endpoints against the activation-owned resolved configuration before product DSP, rejecting unknown/inactive ports, wrong direction, and out-of-range channels. Adapters still own raw-pointer, aliasing, null-buffer, and other backend-specific proofs before constructing safe core views.
 
@@ -174,7 +174,9 @@ Processing distinguishes:
 3. modulation;
 4. effective DSP value after product policy.
 
-These are implemented for explicitly opted-in global additive float modulation. Declare `.with_global_modulation()?`, then cache the descriptor's `GlobalFloatModulation` and dense index during activation. Build its cursor from `block.parameter_events()`, the consumed base value, and `block.modulation(index)`; it adds/clamps without changing either source. Per-note and non-float modulation are unsupported, not silently approximated.
+Resolve typed handles during activation with `parameters.float_parameter("gain")?`, `integer_parameter`, `boolean_parameter`, or `choice_parameter`, and store those handles in the processor. `handle.value(block.parameters())` reads the consumed base value without enum matching. `handle.cursor(block)?` follows the correctly typed trajectory; for floats it also composes opted-in global modulation with the consumed baseline and clamps to the declared domain. `FloatParameter::base_cursor` explicitly requests automation without modulation. Clone a freshly constructed cursor for each independent channel, or share one cursor while processing linked channels sample-by-sample.
+
+Handles, like dense indices, belong to their resolving schema; they are not portable identities or cross-schema tokens. Raw indices and tagged process values remain available for adapters and dynamic routing. Declare `.with_global_modulation()?` to opt in; per-note and non-float modulation are unsupported, not silently approximated.
 
 Complete semantic state derives component identity/version from `ComponentSchema`. Runtime save/load has one identity authority:
 
@@ -207,7 +209,7 @@ trim.format_value(&plain, &mut text)?; // "25.0 %"
 
 Declare stable event-port keys and `EventDialect::Notes` in the schema. Resolve dense indices at setup; CLAP additionally requires explicit `ClapNotePort` IDs, one supported preferred dialect, and input/output attempt bounds. `ProcessContext::ordered_events()` exposes a source-defined mixed order only when supplied, otherwise returning `None`.
 
-Declare `EventDialect::Midi1` for opaque three-byte MIDI and borrowed SysEx. Supply `MidiEventLimits` for count and aggregate payload bounds; CLAP declares corresponding input/output constants. A callback-local `MidiEventSource` can expose host payloads without storing borrowed slices in activation scratch. Declare `EventDialect::Midi2` for `MidiMessage::Ump([u32; 4])`: preserve numeric words, including unused storage, without packet parsing or conversion. Both dialects share MIDI event/attempt capacity; UMP uses no SysEx-byte budget. Each message requires its own declared port capability. The [MIDI probe](../../examples/clap-midi-probe/src/lib.rs) demonstrates zero-audio, mixed-dialect processing and order-sensitive routing.
+Declare `EventDialect::Midi1` for opaque three-byte MIDI and borrowed SysEx. Supply `MidiEventLimits` for count and aggregate payload bounds; CLAP declares corresponding input/output constants. A callback-local `MidiEventSource` can expose host payloads without storing borrowed slices in activation scratch. Declare `EventDialect::Ump` for `MidiMessage::Ump([u32; 4])`: preserve numeric words, including unused storage, without packet parsing or conversion. Both dialects share MIDI event/attempt capacity; UMP uses no SysEx-byte budget. Each message requires its own declared port capability. The [MIDI probe](../../examples/clap-midi-probe/src/lib.rs) demonstrates zero-audio, mixed-dialect processing and order-sensitive routing.
 
 `ProcessBlock::try_push_note_event` and `try_push_midi_event` forward to one borrowed `EventSink`, with a shared successful-output order, bounded per-family attempts, and explicit rejection. SysEx byte attempts are charged without refund. Voice-end feedback uses the original input address, not an output port. Propagate essential failure with `?` from `Process::process`; the runtime does not complete parameter/modulation endpoints or tail metadata on error, and deployments need not resume the failed run. [Events/transport](events-transport.md) owns the detailed contract; the [note probe](../../examples/clap-note-probe/src/lib.rs) is the executable CLAP example.
 

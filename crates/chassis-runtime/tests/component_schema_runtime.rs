@@ -4,29 +4,30 @@ use std::{convert::Infallible, num::NonZeroU32};
 
 use chassis_runtime::{
     audio::{
-        AudioIoConfiguration, AudioPortDescriptor, AudioPortIndex, DEFAULT_EFFECT_CONFIGURATION,
-        DEFAULT_EFFECT_PORTS, MAIN_INPUT, PortDirection, PortKey, PortRole,
+        AudioIoConfiguration, AudioPortDescriptor, AudioPortDirection, AudioPortIndex,
+        AudioPortKey, AudioPortRole, DEFAULT_EFFECT_CONFIGURATION, DEFAULT_EFFECT_PORTS,
+        MAIN_INPUT,
     },
     process::{ActivationConfig, ProcessConfig},
     runtime::{ActivateError, Component, InstanceRuntime, Processor},
     schema::{ComponentId, ComponentSchema, StateSchemaVersion},
 };
 
-const OTHER_INPUT: PortKey = PortKey::new("audio.other.in");
-const OTHER_OUTPUT: PortKey = PortKey::new("audio.other.out");
+const OTHER_INPUT: AudioPortKey = AudioPortKey::new("audio.other.in");
+const OTHER_OUTPUT: AudioPortKey = AudioPortKey::new("audio.other.out");
 const OTHER_PORTS: &[AudioPortDescriptor] = &[
     AudioPortDescriptor::new(
         OTHER_INPUT,
         "Other Input",
-        PortDirection::Input,
-        PortRole::Main,
+        AudioPortDirection::Input,
+        AudioPortRole::Main,
         false,
     ),
     AudioPortDescriptor::new(
         OTHER_OUTPUT,
         "Other Output",
-        PortDirection::Output,
-        PortRole::Main,
+        AudioPortDirection::Output,
+        AudioPortRole::Main,
         false,
     ),
 ];

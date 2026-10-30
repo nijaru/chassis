@@ -109,11 +109,7 @@ impl Component for Probe {
             EventPortKey::new("in"),
             "Input",
             EventPortDirection::Input,
-            &[
-                EventDialect::Notes,
-                EventDialect::Midi1,
-                EventDialect::Midi2,
-            ],
+            &[EventDialect::Notes, EventDialect::Midi1, EventDialect::Ump],
         )];
         if !self.input_only {
             ports.extend([
@@ -121,11 +117,7 @@ impl Component for Probe {
                     EventPortKey::new("out"),
                     "Output",
                     EventPortDirection::Output,
-                    &[
-                        EventDialect::Notes,
-                        EventDialect::Midi1,
-                        EventDialect::Midi2,
-                    ],
+                    &[EventDialect::Notes, EventDialect::Midi1, EventDialect::Ump],
                 ),
                 EventPortDescriptor::new(
                     EventPortKey::new("midi"),
