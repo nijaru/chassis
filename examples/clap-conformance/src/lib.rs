@@ -66,10 +66,8 @@ impl Component for ConformanceEffect {
         chassis_runtime::schema::ComponentSchemaError,
     > {
         chassis_runtime::schema::ComponentSchema::stereo_effect_with_state(
-            chassis_runtime::schema::ComponentId::new(
-                "org.nijaru.chassis.semantic.examples.clap-conformance.src.lib.conformanceeffect",
-            )
-            .expect("semantic component identity is valid"),
+            chassis_runtime::schema::ComponentId::new("org.nijaru.chassis.conformance")
+                .expect("semantic component identity is valid"),
             chassis_runtime::schema::StateSchemaVersion::new(1),
             self.parameters.clone(),
         )
@@ -95,9 +93,13 @@ impl Component for ConformanceEffect {
 }
 
 impl ClapComponent for ConformanceEffect {
-    const CLAP_ID: &'static str = "com.nijaru.chassis.conformance";
-    const CLAP_NAME: &'static str = "Chassis Conformance";
-    const CLAP_FEATURES: &'static [&'static std::ffi::CStr] = &[c"audio-effect", c"stereo"];
+    const CLAP_DESCRIPTOR: chassis_clap::ClapDescriptor = chassis_clap::ClapDescriptor {
+        features: &[c"audio-effect", c"stereo"],
+        vendor: "Nijaru",
+        version: env!("CARGO_PKG_VERSION"),
+        description: "Deterministic stereo effect for Chassis CLAP conformance qualification",
+        ..chassis_clap::ClapDescriptor::new("com.nijaru.chassis.conformance", "Chassis Conformance")
+    };
     const CLAP_PARAMETER_IDS: &'static [(&'static str, u32)] =
         &[("mode", 7001), ("trim", 7002), ("bypass", 7003)];
     const CLAP_MAX_PARAMETER_EVENTS: u32 = 512;

@@ -56,9 +56,14 @@ impl Process<f32> for ActivationProcessor {
 }
 
 impl ClapComponent for ActivationProbe {
-    const CLAP_ID: &'static str = "org.nijaru.chassis.activation-probe";
-    const CLAP_NAME: &'static str = "Chassis Activation Probe";
-    const CLAP_FEATURES: &'static [&'static std::ffi::CStr] = &[c"audio-effect", c"stereo"];
+    const CLAP_DESCRIPTOR: chassis_clap::ClapDescriptor = chassis_clap::ClapDescriptor {
+        features: &[c"audio-effect", c"stereo"],
+        version: env!("CARGO_PKG_VERSION"),
+        ..chassis_clap::ClapDescriptor::new(
+            "org.nijaru.chassis.activation-probe",
+            "Chassis Activation Probe",
+        )
+    };
 }
 
 #[derive(Default)]
@@ -105,9 +110,11 @@ impl Component for EventProbe {
 }
 
 impl ClapComponent for EventProbe {
-    const CLAP_ID: &'static str = "org.nijaru.chassis.event-probe";
-    const CLAP_NAME: &'static str = "Chassis Event Probe";
-    const CLAP_FEATURES: &'static [&'static std::ffi::CStr] = &[c"note-effect"];
+    const CLAP_DESCRIPTOR: chassis_clap::ClapDescriptor = chassis_clap::ClapDescriptor {
+        features: &[c"note-effect"],
+        version: env!("CARGO_PKG_VERSION"),
+        ..chassis_clap::ClapDescriptor::new("org.nijaru.chassis.event-probe", "Chassis Event Probe")
+    };
     const CLAP_AUDIO_PORTS: &'static [chassis_clap::ClapAudioPort] = &[];
 }
 

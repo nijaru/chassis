@@ -117,9 +117,11 @@ impl Component for Definition {
     }
 }
 impl ClapComponent for Definition {
-    const CLAP_ID: &'static str = "test.control-text";
-    const CLAP_NAME: &'static str = "Control Text";
-    const CLAP_FEATURES: &'static [&'static std::ffi::CStr] = &[c"audio-effect", c"stereo"];
+    const CLAP_DESCRIPTOR: chassis_clap::ClapDescriptor = chassis_clap::ClapDescriptor {
+        features: &[c"audio-effect", c"stereo"],
+        version: env!("CARGO_PKG_VERSION"),
+        ..chassis_clap::ClapDescriptor::new("test.control-text", "Control Text")
+    };
     const CLAP_PARAMETER_IDS: &'static [(&'static str, u32)] = &[("text", 1), ("mode", 2)];
     const CLAP_MAX_PARAMETER_EVENTS: u32 = 2;
 }

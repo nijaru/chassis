@@ -8,6 +8,7 @@
 //! including native voice-lifetime feedback.
 
 mod audio;
+mod descriptor;
 mod event_ports;
 mod input_events;
 // SysEx loans and immediate egress are contained at this FFI boundary.
@@ -76,6 +77,8 @@ use process_audio::{ClapBufferSource, ClapSample, ClapSamplePrecision, sample_pr
 pub use audio::{ClapAudioPort, DEFAULT_CLAP_AUDIO_PORTS};
 /// Re-export of Clack's CLAP entry macro for Chassis export crates.
 pub use clack_plugin::clack_export_entry;
+/// Author-supplied CLAP export metadata.
+pub use descriptor::ClapDescriptor;
 /// Explicit CLAP event-port identity and preferred-dialect projection.
 pub use event_ports::ClapNotePort;
 
@@ -90,14 +93,8 @@ pub use event_ports::ClapNotePort;
 /// persistence compatibility hazard. Audio layouts and in-place relationships
 /// are validated at setup and projected into an allocation-free process plan.
 pub trait ClapComponent: Component + Default + 'static {
-    /// Stable reverse-domain CLAP plugin identifier.
-    const CLAP_ID: &'static str;
-
-    /// Human-readable CLAP plugin name.
-    const CLAP_NAME: &'static str;
-
-    /// CLAP feature strings describing this export, without inferred product roles.
-    const CLAP_FEATURES: &'static [&'static std::ffi::CStr];
+    /// Coherent CLAP export identity, classification, and product metadata.
+    const CLAP_DESCRIPTOR: ClapDescriptor;
 
     /// Stable CLAP audio-port IDs and layouts keyed by canonical Chassis port key.
     ///
@@ -272,8 +269,7 @@ where
     C::Processor: ChassisProcess<f32> + Send + 'static,
 {
     fn get_descriptor() -> PluginDescriptor {
-        PluginDescriptor::new(C::CLAP_ID, C::CLAP_NAME)
-            .with_features(C::CLAP_FEATURES.iter().copied())
+        C::CLAP_DESCRIPTOR.into_plugin_descriptor()
     }
 
     fn new_shared(_host: HostSharedHandle) -> Result<ChassisShared, PluginError> {
@@ -318,8 +314,7 @@ where
     C::Processor: ChassisProcess<f32> + ChassisProcess<f64> + Send + 'static,
 {
     fn get_descriptor() -> PluginDescriptor {
-        PluginDescriptor::new(C::CLAP_ID, C::CLAP_NAME)
-            .with_features(C::CLAP_FEATURES.iter().copied())
+        C::CLAP_DESCRIPTOR.into_plugin_descriptor()
     }
 
     fn new_shared(_host: HostSharedHandle) -> Result<ChassisShared, PluginError> {
@@ -1135,9 +1130,11 @@ mod tests {
     }
     impl<const COUNT: u32> Processor for UmpOnly<COUNT> {}
     impl<const COUNT: u32> ClapComponent for UmpOnly<COUNT> {
-        const CLAP_ID: &'static str = "test.ump-only";
-        const CLAP_NAME: &'static str = "UMP only";
-        const CLAP_FEATURES: &'static [&'static std::ffi::CStr] = &[c"note-effect"];
+        const CLAP_DESCRIPTOR: ClapDescriptor = ClapDescriptor {
+            features: &[c"note-effect"],
+            version: env!("CARGO_PKG_VERSION"),
+            ..ClapDescriptor::new("test.ump-only", "UMP only")
+        };
         const CLAP_AUDIO_PORTS: &'static [ClapAudioPort] = &[];
         const CLAP_NOTE_PORTS: &'static [ClapNotePort] = &[ClapNotePort::new(
             chassis_runtime::events::EventPortKey::new("ump"),

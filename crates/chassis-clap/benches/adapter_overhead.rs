@@ -87,9 +87,14 @@ impl Process<f64> for BenchProcessor {
 }
 
 impl ClapComponent for BenchComponent {
-    const CLAP_ID: &'static str = "org.nijaru.chassis.adapter-bench";
-    const CLAP_NAME: &'static str = "Chassis Adapter Benchmark";
-    const CLAP_FEATURES: &'static [&'static std::ffi::CStr] = &[c"audio-effect", c"stereo"];
+    const CLAP_DESCRIPTOR: chassis_clap::ClapDescriptor = chassis_clap::ClapDescriptor {
+        features: &[c"audio-effect", c"stereo"],
+        version: env!("CARGO_PKG_VERSION"),
+        ..chassis_clap::ClapDescriptor::new(
+            "org.nijaru.chassis.adapter-bench",
+            "Chassis Adapter Benchmark",
+        )
+    };
     const CLAP_PARAMETER_IDS: &'static [(&'static str, u32)] = &[("value", PARAMETER_ID)];
     const CLAP_MAX_PARAMETER_EVENTS: u32 = MAX_EVENTS;
 }

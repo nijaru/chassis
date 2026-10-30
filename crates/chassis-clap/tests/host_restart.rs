@@ -146,9 +146,14 @@ impl Process<f32> for DelayedProcessor {
 impl ClapComponent for DelayedProbe {
     const CLAP_MAX_PARAMETER_EVENTS: u32 = 1;
     const CLAP_PARAMETER_IDS: &'static [(&'static str, u32)] = &[("phase", 17)];
-    const CLAP_ID: &'static str = "org.nijaru.chassis.delayed-probe";
-    const CLAP_NAME: &'static str = "Chassis Delayed Probe";
-    const CLAP_FEATURES: &'static [&'static std::ffi::CStr] = &[c"audio-effect", c"stereo"];
+    const CLAP_DESCRIPTOR: chassis_clap::ClapDescriptor = chassis_clap::ClapDescriptor {
+        features: &[c"audio-effect", c"stereo"],
+        version: env!("CARGO_PKG_VERSION"),
+        ..chassis_clap::ClapDescriptor::new(
+            "org.nijaru.chassis.delayed-probe",
+            "Chassis Delayed Probe",
+        )
+    };
 }
 
 struct TestHostShared(Arc<AtomicUsize>);

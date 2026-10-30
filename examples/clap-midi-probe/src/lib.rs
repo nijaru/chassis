@@ -109,9 +109,13 @@ impl Component for MidiProbe {
 }
 
 impl ClapComponent for MidiProbe {
-    const CLAP_ID: &'static str = "com.nijaru.chassis.midi-probe";
-    const CLAP_NAME: &'static str = "Chassis MIDI Probe";
-    const CLAP_FEATURES: &'static [&'static std::ffi::CStr] = &[c"note-effect"];
+    const CLAP_DESCRIPTOR: chassis_clap::ClapDescriptor = chassis_clap::ClapDescriptor {
+        features: &[c"note-effect"],
+        vendor: "Nijaru",
+        version: env!("CARGO_PKG_VERSION"),
+        description: "Event-only probe for Chassis MIDI and SysEx qualification",
+        ..chassis_clap::ClapDescriptor::new("com.nijaru.chassis.midi-probe", "Chassis MIDI Probe")
+    };
     const CLAP_AUDIO_PORTS: &'static [ClapAudioPort] = &[];
     const CLAP_NOTE_PORTS: &'static [ClapNotePort] = &[
         ClapNotePort::new(PRIMARY_IN, 90, EventDialect::Midi2),

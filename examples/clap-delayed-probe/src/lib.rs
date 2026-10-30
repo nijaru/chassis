@@ -35,7 +35,7 @@ impl Component for DelayedProbeEffect {
         chassis_runtime::schema::ComponentSchemaError,
     > {
         chassis_runtime::schema::ComponentSchema::stereo_effect_with_state(
-            chassis_runtime::schema::ComponentId::new("org.nijaru.chassis.semantic.examples.clap-delayed-probe.src.lib.delayedprobeeffect")
+            chassis_runtime::schema::ComponentId::new("org.nijaru.chassis.delayed-probe")
                 .expect("semantic component identity is valid"),
             chassis_runtime::schema::StateSchemaVersion::new(1),
             vec![],
@@ -143,9 +143,16 @@ impl Process<f32> for DelayedProcessor {
 }
 
 impl ClapComponent for DelayedProbeEffect {
-    const CLAP_ID: &'static str = "com.nijaru.chassis.delayed-probe";
-    const CLAP_NAME: &'static str = "Chassis Delayed Probe";
-    const CLAP_FEATURES: &'static [&'static std::ffi::CStr] = &[c"audio-effect", c"stereo"];
+    const CLAP_DESCRIPTOR: chassis_clap::ClapDescriptor = chassis_clap::ClapDescriptor {
+        features: &[c"audio-effect", c"stereo"],
+        vendor: "Nijaru",
+        version: env!("CARGO_PKG_VERSION"),
+        description: "Stereo delay probe for Chassis latency compensation qualification",
+        ..chassis_clap::ClapDescriptor::new(
+            "com.nijaru.chassis.delayed-probe",
+            "Chassis Delayed Probe",
+        )
+    };
     const CLAP_PARAMETER_IDS: &'static [(&'static str, u32)] = &[];
     const CLAP_MAX_PARAMETER_EVENTS: u32 = 64;
 }

@@ -63,7 +63,7 @@ Audio Unit manufacturer code is explicit because it is a registered four-charact
 
 CLAP's string plugin ID naturally uses the canonical export ID. It is separate from semantic persistence identity.
 
-The current `ClapComponent` trait requires explicit CLAP ID, name, and feature strings. Future metadata generation may reduce repetition only where mappings are faithful; it must preserve shipped IDs and may not infer every component to be a stereo effect.
+`ClapComponent::CLAP_DESCRIPTOR` supplies one public, const-friendly `ClapDescriptor`: required ID/name plus features, vendor, version, description, homepage URL, manual URL, and support URL. `ClapDescriptor::new(id, name)` leaves every optional field empty; public fields and struct update syntax supply the declaration without inferred metadata. Both precision exports forward every field to Clack's factory-owned descriptor storage. Future metadata generation may reduce repetition only where mappings are faithful; it must preserve shipped IDs and may not infer every component to be a stereo effect.
 
 ## VST3
 

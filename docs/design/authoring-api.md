@@ -93,6 +93,8 @@ Identity-less schemas remain valid for transient/embedded components; a deployme
 
 The model has been exercised through direct non-plugin runtime clients and CLAP deployment with conventional effects, zero-audio event processors, instruments, multiple output buses, multiple legal layouts/sidechain, and runtime-owned dynamic metadata. These cases share the same component/runtime lifecycle.
 
+CLAP authoring supplies `ClapComponent::CLAP_DESCRIPTOR: ClapDescriptor` separately from the semantic schema. Start with `ClapDescriptor::new(id, name)` and use public fields/struct update syntax to declare features, vendor, version, description, `url`, `manual_url`, and `support_url`. Optional fields default to empty, not inferred product metadata; a one-product crate can explicitly use `env!("CARGO_PKG_VERSION")`. Both f32-only and dual-precision factories preserve the full declaration. [Identity/export metadata](identity-metadata.md#clap) owns the deployment identity contract.
+
 ## Stable versus dense identity
 
 Authoring/setup identity and realtime identity are intentionally different:

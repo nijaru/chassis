@@ -102,9 +102,13 @@ impl Component for NoteProbe {
 }
 
 impl ClapComponent for NoteProbe {
-    const CLAP_ID: &'static str = "com.nijaru.chassis.note-probe";
-    const CLAP_NAME: &'static str = "Chassis Note Probe";
-    const CLAP_FEATURES: &'static [&'static std::ffi::CStr] = &[c"instrument", c"stereo"];
+    const CLAP_DESCRIPTOR: chassis_clap::ClapDescriptor = chassis_clap::ClapDescriptor {
+        features: &[c"instrument", c"stereo"],
+        vendor: "Nijaru",
+        version: env!("CARGO_PKG_VERSION"),
+        description: "Instrument probe for Chassis native note and expression qualification",
+        ..chassis_clap::ClapDescriptor::new("com.nijaru.chassis.note-probe", "Chassis Note Probe")
+    };
     const CLAP_AUDIO_PORTS: &'static [ClapAudioPort] =
         &[ClapAudioPort::new(OUTPUT, 71, ChannelLayout::Stereo, None)];
     // Deliberately reverse declaration order: backend and schema indices differ.

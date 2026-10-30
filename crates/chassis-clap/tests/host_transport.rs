@@ -93,9 +93,11 @@ impl Component for TransportProbe {
 }
 impl Processor for TransportProbe {}
 impl ClapComponent for TransportProbe {
-    const CLAP_ID: &'static str = "test.transport";
-    const CLAP_NAME: &'static str = "Transport probe";
-    const CLAP_FEATURES: &'static [&'static std::ffi::CStr] = &[c"audio-effect", c"mono"];
+    const CLAP_DESCRIPTOR: chassis_clap::ClapDescriptor = chassis_clap::ClapDescriptor {
+        features: &[c"audio-effect", c"mono"],
+        version: env!("CARGO_PKG_VERSION"),
+        ..chassis_clap::ClapDescriptor::new("test.transport", "Transport probe")
+    };
     const CLAP_AUDIO_PORTS: &'static [ClapAudioPort] =
         &[ClapAudioPort::new(OUTPUT, 1, ChannelLayout::Mono, None)];
 }

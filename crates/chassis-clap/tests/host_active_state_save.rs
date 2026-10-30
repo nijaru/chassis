@@ -95,9 +95,14 @@ impl Process<f32> for StateProcessor {
 }
 
 impl ClapComponent for StateProbe {
-    const CLAP_ID: &'static str = "org.nijaru.chassis.active-state-probe";
-    const CLAP_NAME: &'static str = "Chassis Active State Probe";
-    const CLAP_FEATURES: &'static [&'static std::ffi::CStr] = &[c"audio-effect", c"stereo"];
+    const CLAP_DESCRIPTOR: chassis_clap::ClapDescriptor = chassis_clap::ClapDescriptor {
+        features: &[c"audio-effect", c"stereo"],
+        version: env!("CARGO_PKG_VERSION"),
+        ..chassis_clap::ClapDescriptor::new(
+            "org.nijaru.chassis.active-state-probe",
+            "Chassis Active State Probe",
+        )
+    };
     const CLAP_PARAMETER_IDS: &'static [(&'static str, u32)] =
         &[("first", FIRST_CLAP_ID), ("second", SECOND_CLAP_ID)];
     const CLAP_MAX_PARAMETER_EVENTS: u32 = 2;

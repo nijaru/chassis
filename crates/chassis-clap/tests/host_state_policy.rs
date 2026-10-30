@@ -130,9 +130,11 @@ impl Process<f32> for PolicyProcessor {
     }
 }
 impl<const KIND: u8> ClapComponent for PolicyProbe<KIND> {
-    const CLAP_ID: &'static str = "test.policy-export";
-    const CLAP_NAME: &'static str = "State Policy";
-    const CLAP_FEATURES: &'static [&'static std::ffi::CStr] = &[c"audio-effect", c"stereo"];
+    const CLAP_DESCRIPTOR: chassis_clap::ClapDescriptor = chassis_clap::ClapDescriptor {
+        features: &[c"audio-effect", c"stereo"],
+        version: env!("CARGO_PKG_VERSION"),
+        ..chassis_clap::ClapDescriptor::new("test.policy-export", "State Policy")
+    };
     const CLAP_PARAMETER_IDS: &'static [(&'static str, u32)] = &[("gate", 11)];
     const CLAP_MAX_PARAMETER_EVENTS: u32 = 8;
 }

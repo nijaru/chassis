@@ -40,7 +40,7 @@ Processor / ProcessBlock
 
 CLAP deployment
   |- one shared coherent ComponentSchema snapshot
-  |- CLAP_ID remains deployment/export identity
+  |- CLAP_DESCRIPTOR.id remains deployment/export identity
   |- setup audio mapping must satisfy ComponentSchema::audio_io_policy()
   `- state save/load uses ComponentSchema::state_identity()
 ```
@@ -73,8 +73,8 @@ Implemented details include:
 - runtime policy enforcement before product activation and failure-atomic rejection of structurally valid but unsupported layouts;
 - CLAP setup projecting audio and parameters from the same coherent `ComponentSchema` and rejecting mappings outside its audio-I/O policy;
 - CLAP shared/main-thread state retaining and comparing the coherent schema snapshot;
-- CLAP state save/load consuming semantic `StateIdentity` from the component schema instead of `CLAP_ID` / a duplicate deployment schema version;
-- CLAP exports requiring semantic state identity while `CLAP_ID` remains descriptor/export identity only;
+- CLAP state save/load consuming semantic `StateIdentity` from the component schema instead of `CLAP_DESCRIPTOR.id` / a duplicate deployment schema version;
+- CLAP exports requiring semantic state identity while `CLAP_DESCRIPTOR.id` remains descriptor/export identity only;
 - processor/conformance fixtures using dense process identity rather than stable-key comparisons.
 
 ## Stable identities versus dense indices
@@ -169,7 +169,7 @@ Distinguish:
 
 A product manifest may connect the two, but a plugin ABI identifier must not become core state identity accidentally.
 
-Runtime complete-state APIs and CLAP save/load use schema-owned identity. The duplicated `CLAP_STATE_SCHEMA`, runtime explicit-product-ID state APIs, and parameter-only runtime state compatibility paths are removed. `CLAP_ID` is deployment identity only.
+Runtime complete-state APIs and CLAP save/load use schema-owned identity. The duplicated `CLAP_STATE_SCHEMA`, runtime explicit-product-ID state APIs, and parameter-only runtime state compatibility paths are removed. `CLAP_DESCRIPTOR.id` is deployment identity only.
 
 Do not make state identity mandatory for every core component merely because plugin deployment needs it. Identity-less schemas remain useful for transient or embedded components until a real persistence requirement proves otherwise; deployments that persist state may require identity at their own boundary.
 
