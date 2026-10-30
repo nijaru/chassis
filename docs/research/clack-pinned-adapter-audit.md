@@ -98,6 +98,7 @@ CLAP note ports                -> explicit stable IDs + direction-local host ind
 CLAP native note/expression    -> checked ordered input + bounded caller-owned output
 CLAP NOTE_END                  -> original input-port/voice lifetime feedback
 CLAP MIDI 1/SysEx              -> opaque borrowed input + bounded shared output
+CLAP MIDI 2/UMP                -> opaque four-word input + same shared output
 CLAP state                     -> bounded CHSS save/load + coherent parameter/custom publication
 CLAP render                    -> ProcessMode::Realtime / ProcessMode::Offline
 CLAP latency                   -> activation snapshot + host change notification
@@ -106,7 +107,7 @@ CLAP transport                 -> bounded borrowed transport snapshot
 
 The deterministic conformance export has audible sample-accurate `trim` automation, typed float/choice state, f32/f64 processing, and zero declared latency. A separate in-process delayed probe proves nonzero reported latency matches actual delayed audio sample-for-sample.
 
-The output-only note probe exports two native input ports and both precisions, preserving actual mixed input order and reporting voice completion. The zero-audio MIDI probe routes opaque MIDI 1/SysEx with timed controls. MIDI 2/UMP, GUI/editor APIs, and broad application/host infrastructure remain deferred.
+The output-only note probe exports two native input ports and both precisions, preserving actual mixed input order and reporting voice completion. The zero-audio MIDI probe routes opaque MIDI 1/SysEx and MIDI 2/UMP with timed controls and independent per-port dialects. GUI/editor APIs and broad application/host infrastructure remain deferred.
 
 ## Global modulation boundary — reviewed 2026-10-24
 
@@ -154,13 +155,23 @@ A separate unused host-side defect remains at this pin: `extensions/src/note_por
 
 The same pinned [CLAP events contract](https://github.com/free-audio/clap/blob/a47f6badb49d948fd009998f28309cdab78979c9/include/clap/events.h#L304-L333) defines a concrete unsigned `u16` MIDI port, exactly three MIDI bytes, and a separately borrowed SysEx payload. It specifies neither unused-byte normalization nor additional byte grammar/framing. Chassis preserves opaque contents and boundaries, including empty SysEx and zero-velocity note-on. The [note-port contract](https://github.com/free-audio/clap/blob/a47f6badb49d948fd009998f28309cdab78979c9/include/clap/ext/note-ports.h) supplies independent supported bits and one supported preference per port; no MPE/MIDI 2 capability is inferred.
 
-`common/src/events/event_types/midi.rs::MidiEvent` gains `#[repr(C)]` required by its unsafe event/raw cast contract. `MidiSysExEvent` already has that layout. MIDI 2 remains rejected before a typed borrow. The adapter uses checked exact-size downcasts, not the raw helper constructors or unchecked core-space dispatcher. The pin's generated `from_raw`/reference helpers check type/space but not size; they are not validation for an untrusted record. `InputEvents::get` already assumes accessible storage covering the declared header extent.
+`common/src/events/event_types/midi.rs::MidiEvent` gains `#[repr(C)]` required by its unsafe event/raw cast contract. `MidiSysExEvent` already has that layout. The subsequent MIDI 2 review below covers its separate wrapper correction. The adapter uses checked exact-size downcasts, not the raw helper constructors or unchecked core-space dispatcher. The pin's generated `from_raw`/reference helpers check type/space but not size; they are not validation for an untrusted record. `InputEvents::get` already assumes accessible storage covering the declared header extent.
 
 Clack's unsafe `MidiSysExEvent::data<'a>()` permits an unconstrained return lifetime. The private adapter helper instead anchors its result to the checked callback event borrow, after byte/representability and positive-null checks. Empty data returns an empty slice without touching a null pointer. Activation scratch contains only copied metadata and host indices/sizes; a callback-local source reacquires records. Hosts must still provide initialized, immutable payload allocations of sufficient extent for process. Scalar checks cannot prove arbitrary pointer provenance, extent, or concurrency.
 
 Output construction loans a core slice only through the immediate `try_push`. A retaining host must copy both descriptor and payload before returning. Clack `EventBuffer` and wrapper copies do not deep-copy payloads; the exported fixture's test host uses a preallocated owned payload arena. MIDI wrapper equality also omits time/flags, while SysEx equality compares pointers, so tests inspect explicit fields and copied bytes. Known live/do-not-record flags map explicitly; unknown MIDI header bits reject rather than disappear through Clack's truncating `flags()` accessor.
 
 The event-only ABI fixture exposed a pre-existing empty-topology rejection in sample-precision discovery. With no audio ports there is no wire sample representation: after exact descriptor-count checks, Chassis dispatches the required f32 process capability while preserving the supplied callback frame count. A regression fails before this correction; unexpected audio descriptors remain invalid. Neither dummy audio buffers nor a second event-processing lifecycle are introduced.
+
+## MIDI 2/UMP boundary — reviewed 2026-10-30
+
+The pinned [CLAP MIDI 2 record](https://github.com/free-audio/clap/blob/a47f6badb49d948fd009998f28309cdab78979c9/include/clap/events.h#L336-L344) contains a concrete unsigned `u16` port and `uint32_t data[4]`, with no separate word-count field. Chassis copies all four numeric words without byte swapping, message-type validation, or unused-word normalization. MIDI 2's note-port bit and preferred dialect are independent of MIDI 1 and MPE; per-message input/output capability checks never infer one from another.
+
+`common/src/events/event_types/midi.rs::Midi2Event` also lacked the C layout required by its unsafe event/raw cast contract and now gains `#[repr(C)]` at the same pin. Checked exact-size downcasts precede typed input access. Egress constructs the same typed wrapper and pushes it immediately. Fixed words need no additional unsafe adapter boundary, pointer loans, SysEx-byte allowance, or separate ordering/sink lifecycle. Known flags map explicitly; unknown MIDI 2 flags reject under the same policy as MIDI 1.
+
+The [MIDI Association overview](https://midi.org/details-about-midi-2-0-midi-ci-profiles-and-property-exchange-updated-june-2023) distinguishes UMP, which can carry MIDI 1 or MIDI 2, from protocol/device compatibility requirements. This slice implements opaque four-word transport, not a variable-length UMP stream parser, discovery, reassembly, or MIDI 2 device compliance. File/container byte-order rules do not define the numeric CLAP in-memory word projection.
+
+The pinned validator's `src/tests/rng.rs` generates native notes, MIDI 1, and parameter traffic, but no UMP or SysEx. Its success cannot establish UMP fidelity. Packaged validation exposed a panic when that legacy generator selected a MIDI 2-only port with no applicable event. An isolated tool patch selects only ports whose note dialect it can generate, preserving original indices; it adds no UMP generation and does not weaken plugin capabilities or test assertions. Actual-entry tests inspect four-word contents, header fields, mixed ordering, independent port routes, malformed admission, backpressure, and shared count limits; focused Miri exercises the new casts. [Validation](../design/validation.md) owns executed revision-scoped results.
 
 ## Parameter text boundary — reviewed 2026-10-24
 

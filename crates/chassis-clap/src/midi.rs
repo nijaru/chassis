@@ -9,7 +9,7 @@ use chassis_runtime::{
 };
 use clack_plugin::events::{
     Event, EventFlags as ClapFlags, UnknownEvent,
-    event_types::{MidiEvent as ClapMidi, MidiSysExEvent},
+    event_types::{Midi2Event, MidiEvent as ClapMidi, MidiSysExEvent},
     io::{InputEvents, OutputEvents},
 };
 
@@ -18,6 +18,7 @@ use crate::event_ports::ClapEventPorts;
 #[derive(Clone, Copy)]
 enum MessageRecord {
     Short([u8; 3]),
+    Ump([u32; 4]),
     SysEx { input_index: u32, size: u32 },
 }
 
@@ -49,7 +50,11 @@ pub(crate) fn normalize(
     remaining_bytes: u32,
 ) -> Result<Option<(MidiInputRecord, u32)>, &'static str> {
     let header = event.header().as_raw();
-    if header.space_id != 0 || !matches!(header.type_, ClapMidi::TYPE_ID | MidiSysExEvent::TYPE_ID)
+    if header.space_id != 0
+        || !matches!(
+            header.type_,
+            ClapMidi::TYPE_ID | MidiSysExEvent::TYPE_ID | Midi2Event::TYPE_ID
+        )
     {
         return Ok(None);
     }
@@ -61,12 +66,27 @@ pub(crate) fn normalize(
         header.flags & ClapFlags::IS_LIVE.bits() != 0,
         header.flags & ClapFlags::DONT_RECORD.bits() != 0,
     );
-    let (port, message, bytes) = if header.type_ == ClapMidi::TYPE_ID {
+    let (port, message, bytes, dialect) = if header.type_ == ClapMidi::TYPE_ID {
         let raw = event
             .as_event::<ClapMidi>()
             .ok_or("Malformed CLAP MIDI event")?
             .as_raw();
-        (raw.port_index, MessageRecord::Short(raw.data), 0)
+        (
+            raw.port_index,
+            MessageRecord::Short(raw.data),
+            0,
+            EventDialect::Midi1,
+        )
+    } else if header.type_ == Midi2Event::TYPE_ID {
+        let event = event
+            .as_event::<Midi2Event>()
+            .ok_or("Malformed CLAP MIDI 2 event")?;
+        (
+            event.port_index(),
+            MessageRecord::Ump(event.data()),
+            0,
+            EventDialect::Midi2,
+        )
     } else {
         let event = event
             .as_event::<MidiSysExEvent>()
@@ -76,12 +96,13 @@ pub(crate) fn normalize(
             event.as_raw().port_index,
             MessageRecord::SysEx { input_index, size },
             size,
+            EventDialect::Midi1,
         )
     };
     Ok(Some((
         MidiInputRecord {
             offset: header.time,
-            port: ports.input_port(port, EventDialect::Midi1)?,
+            port: ports.input_port(port, dialect)?,
             flags,
             message,
         },
@@ -119,6 +140,7 @@ impl MidiEventSource for ClapMidiInput<'_, '_> {
         let record = self.records.get(index)?;
         let message = match record.message {
             MessageRecord::Short(bytes) => MidiMessage::Short(bytes),
+            MessageRecord::Ump(words) => MidiMessage::Ump(words),
             MessageRecord::SysEx { input_index, size } => {
                 if input_index >= self.input.len() {
                     return None;
@@ -139,13 +161,16 @@ pub(crate) fn push(
     output: &mut OutputEvents<'_>,
     event: MidiEvent<'_>,
 ) -> Result<(), EventOutputError> {
-    let port = ports.mapped_port(event.port(), false, EventDialect::Midi1)?;
+    let port = ports.mapped_port(event.port(), false, event.message().dialect())?;
     let mut flags = ClapFlags::empty();
     flags.set(ClapFlags::IS_LIVE, event.flags().is_live());
     flags.set(ClapFlags::DONT_RECORD, event.flags().do_not_record());
     let result = match event.message() {
         MidiMessage::Short(bytes) => {
             output.try_push(ClapMidi::new(event.offset(), port, bytes).with_flags(flags))
+        }
+        MidiMessage::Ump(words) => {
+            output.try_push(Midi2Event::new(event.offset(), port, words).with_flags(flags))
         }
         MidiMessage::SysEx(bytes) => {
             u32::try_from(bytes.len()).map_err(|_| EventOutputError::SysExBytesExceeded)?;

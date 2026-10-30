@@ -1,4 +1,4 @@
-//! Opaque MIDI 1/SysEx qualification router with no audio or retained payloads.
+//! Opaque MIDI 1/SysEx and MIDI 2/UMP router with no audio or retained payloads.
 #![deny(unsafe_code)]
 
 use chassis_clap::{
@@ -18,6 +18,8 @@ use core::convert::Infallible;
 
 const PRIMARY_IN: EventPortKey = EventPortKey::new("midi.primary.in");
 const SECONDARY_IN: EventPortKey = EventPortKey::new("midi.secondary.in");
+const UMP_IN: EventPortKey = EventPortKey::new("ump.in");
+const UMP_OUT: EventPortKey = EventPortKey::new("ump.out");
 const PRIMARY_OUT: EventPortKey = EventPortKey::new("midi.primary.out");
 const SECONDARY_OUT: EventPortKey = EventPortKey::new("midi.secondary.out");
 
@@ -35,13 +37,13 @@ impl Component for MidiProbe {
             StateSchemaVersion::new(1),
             vec![],
             AudioIoPolicy::enumerated(vec![AudioIoConfigurationSpec::new(vec![])]),
-            // Each direction's declaration order is the reverse of its host ID order.
+            // Schema indices differ from direction-local host indices.
             vec![
                 EventPortDescriptor::new(
                     PRIMARY_IN,
                     "Primary MIDI Input",
                     EventPortDirection::Input,
-                    &[EventDialect::Midi1],
+                    &[EventDialect::Midi1, EventDialect::Midi2],
                 ),
                 EventPortDescriptor::new(
                     SECONDARY_OUT,
@@ -59,7 +61,19 @@ impl Component for MidiProbe {
                     PRIMARY_OUT,
                     "Primary MIDI Output",
                     EventPortDirection::Output,
-                    &[EventDialect::Midi1],
+                    &[EventDialect::Midi1, EventDialect::Midi2],
+                ),
+                EventPortDescriptor::new(
+                    UMP_OUT,
+                    "UMP Output",
+                    EventPortDirection::Output,
+                    &[EventDialect::Midi2],
+                ),
+                EventPortDescriptor::new(
+                    UMP_IN,
+                    "UMP Input",
+                    EventPortDirection::Input,
+                    &[EventDialect::Midi2],
                 ),
             ],
             vec![
@@ -85,6 +99,7 @@ impl Component for MidiProbe {
             routes: [
                 (port(&PRIMARY_IN), port(&PRIMARY_OUT)),
                 (port(&SECONDARY_IN), port(&SECONDARY_OUT)),
+                (port(&UMP_IN), port(&UMP_OUT)),
             ],
             enabled: parameters
                 .index("enabled")
@@ -99,10 +114,12 @@ impl ClapComponent for MidiProbe {
     const CLAP_FEATURES: &'static [&'static std::ffi::CStr] = &[c"note-effect"];
     const CLAP_AUDIO_PORTS: &'static [ClapAudioPort] = &[];
     const CLAP_NOTE_PORTS: &'static [ClapNotePort] = &[
-        ClapNotePort::new(PRIMARY_IN, 90, EventDialect::Midi1),
+        ClapNotePort::new(PRIMARY_IN, 90, EventDialect::Midi2),
         ClapNotePort::new(SECONDARY_OUT, 80, EventDialect::Midi1),
         ClapNotePort::new(SECONDARY_IN, 10, EventDialect::Midi1),
-        ClapNotePort::new(PRIMARY_OUT, 20, EventDialect::Midi1),
+        ClapNotePort::new(PRIMARY_OUT, 20, EventDialect::Midi2),
+        ClapNotePort::new(UMP_IN, 120, EventDialect::Midi2),
+        ClapNotePort::new(UMP_OUT, 100, EventDialect::Midi2),
     ];
     const CLAP_PARAMETER_IDS: &'static [(&'static str, u32)] = &[("enabled", 7008)];
     const CLAP_MAX_PARAMETER_EVENTS: u32 = 512;
@@ -115,7 +132,7 @@ impl ClapComponent for MidiProbe {
 
 /// Activation-cached dense routes; no payloads or process history are owned here.
 pub struct MidiProbeProcessor {
-    routes: [(EventPortIndex, EventPortIndex); 2],
+    routes: [(EventPortIndex, EventPortIndex); 3],
     enabled: ParameterIndex,
 }
 

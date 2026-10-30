@@ -9,7 +9,7 @@ use clack_extensions::{
 use clack_host::{
     events::{
         UnknownEvent,
-        event_types::{MidiEvent, MidiSysExEvent, NoteOnEvent, ParamValueEvent},
+        event_types::{Midi2Event, MidiEvent, MidiSysExEvent, NoteOnEvent, ParamValueEvent},
         io::{InputEventBuffer, OutputEventBuffer, TryPushError},
     },
     prelude::*,
@@ -116,6 +116,7 @@ fn assert_enabled(plugin: &mut PluginInstance<Host>, expected: bool) {
 #[derive(Debug)]
 enum Message {
     Short([u8; 3]),
+    Ump([u32; 4]),
     SysEx { start: usize, length: usize },
 }
 #[derive(Debug)]
@@ -140,6 +141,31 @@ impl Capture {
             bytes: Vec::with_capacity(64 * 1024),
             reject_after: None,
         }
+    }
+    fn check_ump(&self, index: usize, time: u32, flags: u32, port: u16, words: [u32; 4]) {
+        let record = &self.records[index];
+        assert_eq!(
+            (
+                record.size,
+                record.space,
+                record.kind,
+                record.time,
+                record.flags,
+                record.port
+            ),
+            (
+                wire_size::<clap_event_midi2>(),
+                0,
+                CLAP_EVENT_MIDI2,
+                time,
+                flags,
+                port
+            )
+        );
+        let Message::Ump(actual) = record.message else {
+            panic!("expected UMP")
+        };
+        assert_eq!(actual, words);
     }
     fn clear(&mut self) {
         self.records.clear();
@@ -179,6 +205,8 @@ impl OutputEventBuffer for Capture {
         }
         let (port, message) = if let Some(event) = event.as_event::<MidiEvent>() {
             (event.port_index(), Message::Short(event.data()))
+        } else if let Some(event) = event.as_event::<Midi2Event>() {
+            (event.port_index(), Message::Ump(event.data()))
         } else if let Some(event) = event.as_event::<MidiSysExEvent>() {
             let length = usize::try_from(event.buffer_size()).map_err(|_| TryPushError::new())?;
             if length > self.bytes.capacity() - self.bytes.len() {
@@ -305,6 +333,13 @@ fn short(time: u32, port: u16, flags: u32, data: [u8; 3]) -> Record {
         data,
     })
 }
+fn ump(time: u32, port: u16, flags: u32, words: [u32; 4]) -> Record {
+    Record::Midi2(clap_event_midi2 {
+        header: header::<clap_event_midi2>(CLAP_EVENT_MIDI2, time, flags),
+        port_index: port,
+        data: words,
+    })
+}
 fn sysex(time: u32, port: u16, flags: u32, bytes: &[u8]) -> Record {
     Record::SysEx(clap_event_midi_sysex {
         header: header::<clap_event_midi_sysex>(CLAP_EVENT_MIDI_SYSEX, time, flags),
@@ -335,30 +370,62 @@ fn exported_ports_are_midi_only_and_audio_topology_is_empty() {
         (
             true,
             [
-                (10, b"Secondary MIDI Input".as_slice()),
-                (90, b"Primary MIDI Input".as_slice()),
+                (
+                    10,
+                    b"Secondary MIDI Input".as_slice(),
+                    NoteDialects::MIDI,
+                    NoteDialect::Midi,
+                ),
+                (
+                    90,
+                    b"Primary MIDI Input".as_slice(),
+                    NoteDialects::MIDI | NoteDialects::MIDI2,
+                    NoteDialect::Midi2,
+                ),
+                (
+                    120,
+                    b"UMP Input".as_slice(),
+                    NoteDialects::MIDI2,
+                    NoteDialect::Midi2,
+                ),
             ],
         ),
         (
             false,
             [
-                (20, b"Primary MIDI Output".as_slice()),
-                (80, b"Secondary MIDI Output".as_slice()),
+                (
+                    20,
+                    b"Primary MIDI Output".as_slice(),
+                    NoteDialects::MIDI | NoteDialects::MIDI2,
+                    NoteDialect::Midi2,
+                ),
+                (
+                    80,
+                    b"Secondary MIDI Output".as_slice(),
+                    NoteDialects::MIDI,
+                    NoteDialect::Midi,
+                ),
+                (
+                    100,
+                    b"UMP Output".as_slice(),
+                    NoteDialects::MIDI2,
+                    NoteDialect::Midi2,
+                ),
             ],
         ),
     ] {
-        assert_eq!(ports.count(&handle, input), 2);
-        for (index, (id, name)) in expected.into_iter().enumerate() {
+        assert_eq!(ports.count(&handle, input), 3);
+        for (index, (id, name, supported, preferred)) in expected.into_iter().enumerate() {
             let mut buffer = NotePortInfoBuffer::new();
             let info = ports
                 .get(&handle, u32::try_from(index).unwrap(), input, &mut buffer)
                 .unwrap();
             assert_eq!(info.id, ClapId::new(id));
             assert_eq!(info.name, name);
-            assert_eq!(info.supported_dialects, NoteDialects::MIDI);
-            assert_eq!(info.preferred_dialect, Some(NoteDialect::Midi));
+            assert_eq!(info.supported_dialects, supported);
+            assert_eq!(info.preferred_dialect, Some(preferred));
         }
-        for index in [2, u32::MAX] {
+        for index in [3, u32::MAX] {
             assert!(
                 ports
                     .get(&handle, index, input, &mut NotePortInfoBuffer::new())
@@ -439,6 +506,41 @@ fn opaque_bytes_offsets_flags_and_independent_port_routes_survive_the_abi() {
 }
 
 #[test]
+fn ump_all_message_types_preserve_four_numeric_words_flags_and_two_routes() {
+    let mut plugin = plugin();
+    let mut processor = activate(&mut plugin);
+    let mut capture = Capture::new();
+    // No packet-length inference or grammar check: unused words and reserved
+    // message types are just as opaque as the source's significant words.
+    let words = |kind: u32| {
+        [
+            (kind << 28) | 0x0abc_def0,
+            0x0123_4567,
+            0x89ab_cdef,
+            u32::MAX,
+        ]
+    };
+    let records: Vec<_> = (0..16)
+        .flat_map(|kind| [1, 2].map(|port| ump(kind / 2, port, kind % 4, words(kind))))
+        .collect();
+    assert!(process(&mut processor, &Batch(&records), &mut capture));
+    assert_eq!(capture.records.len(), 32);
+    for kind in 0..16 {
+        for (route, port) in [0, 2].into_iter().enumerate() {
+            capture.check_ump(
+                usize::try_from(kind).unwrap() * 2 + route,
+                kind / 2,
+                kind % 4,
+                port,
+                words(kind),
+            );
+        }
+    }
+    assert_eq!(capture.bytes, [] as [u8; 0]);
+    plugin.deactivate(processor.stop_processing());
+}
+
+#[test]
 fn equal_time_controls_follow_list_order_and_publish_the_next_blocks_baseline() {
     let mut plugin = plugin();
     let mut processor = activate(&mut plugin);
@@ -448,12 +550,17 @@ fn equal_time_controls_follow_list_order_and_publish_the_next_blocks_baseline() 
         short(0, 1, 0, [1, 2, 3]),
         set(0, true),
         short(0, 0, 0, [4, 5, 6]),
+        ump(0, 1, CLAP_EVENT_IS_LIVE, [1, 2, 3, u32::MAX]),
+        sysex(0, 0, CLAP_EVENT_DONT_RECORD, &[0xff, 0]),
         set(0, false),
+        ump(0, 2, 0, [9; 4]),
         short(0, 1, 0, [7, 8, 9]),
     ];
     assert!(process(&mut processor, &Batch(&records), &mut capture));
-    assert_eq!(capture.records.len(), 1);
+    assert_eq!(capture.records.len(), 3);
     capture.check(0, 0, 0, 1, &[4, 5, 6], false);
+    capture.check_ump(1, 0, CLAP_EVENT_IS_LIVE, 0, [1, 2, 3, u32::MAX]);
+    capture.check(2, 0, CLAP_EVENT_DONT_RECORD, 1, &[0xff, 0], true);
     assert_enabled(&mut plugin, false);
     capture.clear();
     assert!(process(
@@ -507,7 +614,7 @@ fn malformed_record_after_valid_input_rejects_the_whole_batch_before_dsp() {
     let mut large = sx;
     large.header.type_ = CLAP_EVENT_MIDI;
     let mut bad_port = base;
-    bad_port.port_index = 2; // Host indices are direction-local, not schema indices.
+    bad_port.port_index = 2; // MIDI 2-only input rejects MIDI 1, even on a known port.
     let mut late = base;
     late.header.time = 8;
     let mut flags = base;
@@ -527,7 +634,31 @@ fn malformed_record_after_valid_input_rejects_the_whole_batch_before_dsp() {
         port_index: 0,
         data: [0; 4],
     };
+    let mut ump_small = midi2;
+    ump_small.port_index = 1;
+    ump_small.header.size -= 1;
+    let mut ump_flags = midi2;
+    ump_flags.port_index = 2;
+    ump_flags.header.flags = 4;
+    let mut ump_port = midi2;
+    ump_port.port_index = u16::MAX;
+    let mut ump_late = midi2;
+    ump_late.port_index = 1;
+    ump_late.header.time = 8;
+    let Record::Parameter(mut ump_large) = set(0, false) else {
+        unreachable!()
+    };
+    ump_large.header = midi2.header;
+    ump_large.header.size += 1; // Param record provides the full declared extent.
+    let mut sysex_dialect = sx;
+    sysex_dialect.port_index = 2;
     for bad in [
+        Record::Midi2(ump_small),
+        Record::Midi2(ump_flags),
+        Record::Midi2(ump_port),
+        Record::Midi2(ump_late),
+        Record::Parameter(ump_large),
+        Record::SysEx(sysex_dialect),
         Record::Short(small),
         Record::SysEx(large),
         Record::Short(bad_port),
@@ -557,7 +688,7 @@ fn host_rejection_is_fatal_without_rolling_back_prior_outputs_or_publishing_cont
         let mut payload = vec![0xf0, 0xff, 3, 0xf7];
         let records = [
             sysex(0, 1, CLAP_EVENT_IS_LIVE, &payload),
-            short(1, 0, 0, [0x90, 60, 0]),
+            ump(1, 2, CLAP_EVENT_DONT_RECORD, [0x4090_3cff, u32::MAX, 2, 3]),
             set(2, false),
         ];
         assert!(!process(&mut processor, &Batch(&records), &mut capture));
@@ -623,6 +754,48 @@ fn accepted_maximum_and_independent_overflow_bounds_are_allocation_free() {
     plugin.deactivate(processor.stop_processing());
 
     assert_enabled(&mut plugin, false);
+
+    // The same count admits pure UMP or mixed short/UMP/SysEx, not a fresh
+    // capacity for every encoding. Fixed words consume no SysEx arena bytes.
+    for mixed in [false, true] {
+        let mut records: Vec<_> = (0..1024)
+            .map(|index| {
+                if mixed && index % 3 == 0 {
+                    short(0, 0, 0, [1, 2, 3])
+                } else if mixed && index % 3 == 1 {
+                    sysex(0, 1, 0, &[0xff])
+                } else {
+                    ump(0, 2, 3, [index, u32::MAX, 0x0123_4567, 0x89ab_cdef])
+                }
+            })
+            .collect();
+        let mut plugin = self::plugin();
+        let mut processor = activate(&mut plugin);
+        let mut capture = Capture::new();
+        assert!(process(&mut processor, &Batch(&records), &mut capture));
+        assert_eq!(capture.records.len(), 1024);
+        assert_eq!(capture.bytes.len(), if mixed { 341 } else { 0 });
+        for index in 0..1024 {
+            if !mixed || index % 3 == 2 {
+                capture.check_ump(
+                    index,
+                    0,
+                    3,
+                    2,
+                    [
+                        u32::try_from(index).unwrap(),
+                        u32::MAX,
+                        0x0123_4567,
+                        0x89ab_cdef,
+                    ],
+                );
+            }
+        }
+        plugin.deactivate(processor.stop_processing());
+        records.push(ump(0, 1, 0, [0; 4]));
+        records.push(set(0, false));
+        rejected_before_dsp(&records);
+    }
 
     // Count overflow independent of byte budget, with a state-changing control.
     let mut too_many = vec![short(0, 0, 0, [0, 0, 0]); 1025];

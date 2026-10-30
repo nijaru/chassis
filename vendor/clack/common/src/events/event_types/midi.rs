@@ -231,6 +231,7 @@ impl Debug for MidiSysExEvent {
 /// While it is possible to use a series of MIDI 2.0 events to send sysex data,
 /// it is recommended to use the [`MidiSysExEvent`] type instead for efficiency.
 #[derive(Copy, Clone)]
+#[repr(C)]
 pub struct Midi2Event {
     inner: clap_event_midi2,
 }

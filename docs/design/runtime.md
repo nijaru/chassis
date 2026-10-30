@@ -189,7 +189,7 @@ A source must repeat the same finite topology and dimensions across traversals. 
 - sample-accurate bounded parameter/note/event sources;
 - transport/process context;
 - a safe `ProcessBufferSource<S>`;
-- one optional caller-owned bounded note/MIDI output sink.
+- one optional caller-owned bounded note/MIDI output sink, shared by native notes, MIDI 1/SysEx, and opaque MIDI 2/UMP.
 
 Adapters/embeddings prove raw pointer/alias facts before safe channel views enter core. Setup owns stable-to-dense endpoint translation and whole-I/O policy acceptance. Callback code consumes pre-resolved dense identities without callback-owned channel vectors or stable-string lookup.
 
@@ -233,9 +233,8 @@ Future background tasks, callbacks, editors, deferred reclamation, devices, grap
 The ownership/schema/identity migration is no longer the blocker. Remaining core work should be driven by concrete audio semantics:
 
 1. extend the qualified global float modulation subset only when a client needs per-note parameter modulation or other domains; keep external signals separate from durable state;
-2. add MIDI 2/UMP contracts beyond the implemented native notes and MIDI 1/SysEx without lossy down-conversion;
-3. add bounded control -> DSP non-parameter publication and background-work/reclamation lifecycle;
-4. add bus/port convenience or a richer `AudioIoPolicy` only if materially different clients show the current explicit model is insufficient;
-5. continue cross-platform, allocation, concurrency, adapter, and real-host qualification as these contracts change.
+2. add bounded control -> DSP non-parameter publication and background-work/reclamation lifecycle;
+3. add bus/port convenience or a richer `AudioIoPolicy` only if materially different clients show the current explicit model is insufficient;
+4. continue cross-platform, allocation, concurrency, adapter, and real-host qualification as these contracts change.
 
 The current `ComponentSchema` / `InstanceRuntime` ownership shape is a candidate-stable architecture. Do not reopen it merely to add speculative generality; change it when a concrete client exposes a semantic or ergonomic deficiency.

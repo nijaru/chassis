@@ -122,7 +122,6 @@ pub(crate) fn normalize(
             }
         }
         NoteEndEvent::TYPE_ID => return Err("CLAP note-end events are plugin-to-host only"),
-        clap_sys::events::CLAP_EVENT_MIDI2 => return Err("CLAP MIDI 2 is unsupported"),
         _ => return Ok(None),
     };
     Ok(Some(NoteEvent::new(header.time, kind)))

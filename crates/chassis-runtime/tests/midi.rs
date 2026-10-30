@@ -145,44 +145,76 @@ fn aggregate_length_overflow_is_checked_without_copying_large_payloads() {
 }
 
 #[test]
-fn input_requires_a_concrete_known_input_midi1_port() {
-    let events = [MidiEvent::new(0, PORT, MidiMessage::Short([0; 3]))];
-    let view = MidiEvents::new(&events, 1, 1, 0).unwrap();
-    assert_eq!(
-        view.validate_ports(&[]),
-        Err(MidiEventPortError::UnknownPort(PORT))
-    );
-    for (direction, dialect, expected) in [
-        (
-            EventPortDirection::Output,
-            EventDialect::Midi1,
-            Err(MidiEventPortError::PortIsNotInput(PORT)),
-        ),
-        (
-            EventPortDirection::Input,
-            EventDialect::Notes,
-            Err(MidiEventPortError::PortDoesNotSupportMidi1(PORT)),
-        ),
-        (
-            EventPortDirection::Input,
-            EventDialect::Midi2,
-            Err(MidiEventPortError::PortDoesNotSupportMidi1(PORT)),
-        ),
-        (EventPortDirection::Input, EventDialect::Midi1, Ok(())),
+fn input_requires_a_concrete_known_input_port_with_the_messages_dialect() {
+    for message in [
+        MidiMessage::Short([0; 3]),
+        MidiMessage::SysEx(&[]),
+        MidiMessage::Ump([u32::MAX, 0, 1, 0x1234_abcd]),
     ] {
-        let ports = [EventPortDescriptor::owned(
-            "midi",
-            "MIDI",
-            direction,
-            vec![dialect],
+        let events = [MidiEvent::new(0, PORT, message)];
+        let view = MidiEvents::new(&events, 1, 1, 0).unwrap();
+        assert_eq!(
+            view.validate_ports(&[]),
+            Err(MidiEventPortError::UnknownPort(PORT))
+        );
+        for direction in [EventPortDirection::Input, EventPortDirection::Output] {
+            for dialect in [
+                EventDialect::Notes,
+                EventDialect::Midi1,
+                EventDialect::Midi2,
+            ] {
+                let ports = [EventPortDescriptor::owned(
+                    "midi",
+                    "MIDI",
+                    direction,
+                    vec![dialect],
+                )];
+                let expected = if direction != EventPortDirection::Input {
+                    Err(MidiEventPortError::PortIsNotInput(PORT))
+                } else if dialect != message.dialect() {
+                    Err(MidiEventPortError::PortDoesNotSupportDialect {
+                        port: PORT,
+                        dialect: message.dialect(),
+                    })
+                } else {
+                    Ok(())
+                };
+                assert_eq!(view.validate_ports(&ports), expected);
+            }
+        }
+        let ports = [EventPortDescriptor::new(
+            EventPortKey::new("in"),
+            "Input",
+            EventPortDirection::Input,
+            &[EventDialect::Midi1, EventDialect::Midi2],
         )];
-        assert_eq!(view.validate_ports(&ports), expected);
+        assert_eq!(view.validate_ports(&ports), Ok(()));
     }
-    let ports = [EventPortDescriptor::new(
-        EventPortKey::new("in"),
-        "Input",
-        EventPortDirection::Input,
-        &[EventDialect::Midi1],
-    )];
-    assert_eq!(view.validate_ports(&ports), Ok(()));
+}
+
+#[test]
+fn ump_preserves_all_four_words_and_shares_counts_without_spending_sysex_bytes() {
+    let words = [0x2090_3cff, 0x89ab_cdef, u32::MAX, 0x1234_5678];
+    // Even unused words of a one-word message remain opaque storage.
+    let event =
+        MidiEvent::new(0, PORT, MidiMessage::Ump(words)).with_flags(EventFlags::new(true, true));
+    let events = [
+        event,
+        MidiEvent::new(0, PORT, MidiMessage::Short([0xff; 3])),
+    ];
+    let view = MidiEvents::new(&events, 1, 2, 0).unwrap();
+    assert_eq!(view.sysex_bytes(), 0);
+    assert_eq!(view.iter().next(), Some(event));
+    assert_eq!(
+        event.with_port(EventPortIndex::new(9)).message(),
+        MidiMessage::Ump(words)
+    );
+    assert_eq!(event.message().dialect(), EventDialect::Midi2);
+    assert_eq!(
+        MidiEvents::new(&events, 1, 1, 0).unwrap_err(),
+        MidiEventsError::TooManyEvents {
+            actual: 2,
+            maximum: 1
+        }
+    );
 }

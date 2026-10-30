@@ -68,9 +68,15 @@ Core and CLAP now preserve opaque three-byte messages, borrowed SysEx payload bo
 
 The zero-audio MIDI probe routes two inputs to two outputs with deliberate host/schema index differences and a timed Boolean enable control. The same-pin Clack delta adds the required MIDI wrapper layout annotation. [Events/transport](design/events-transport.md) owns semantics, the [source audit](research/clack-pinned-adapter-audit.md) owns the FFI boundary, and [validation](design/validation.md) owns revision-scoped evidence.
 
-## Next — MIDI 2/UMP
+## Closed — MIDI 2/UMP transport
 
-Add MIDI 2/UMP with explicit capabilities, bounded payload lifetime, faithful deployment projection, and a focused client. Do not silently convert native identity/expression into a lossy MIDI representation. Per-note parameter modulation and span processing remain separate follow-up.
+Core and CLAP preserve all four numeric UMP storage words, concrete ports, flags, and mixed-event timing through the existing MIDI family and shared sink. Dialect checks are per message; event/attempt capacity is shared with MIDI 1/SysEx, while UMP consumes no SysEx-byte budget. The existing MIDI probe now exercises mixed, MIDI 1-only, and MIDI 2-only port pairs without a new lifecycle or package. The same-pin Clack delta adds `Midi2Event`'s required C layout.
+
+This is opaque four-word transport, not a variable-length UMP stream parser or MIDI 2 protocol/device-compliance implementation. The pinned validator does not generate UMP; focused actual-entry tests and Miri supply separate fidelity evidence. [Events/transport](design/events-transport.md) owns semantics, the [source audit](research/clack-pinned-adapter-audit.md) owns the boundary, and [validation](design/validation.md) owns revision-scoped qualification.
+
+## Next — client-driven runtime extensions
+
+Per-note parameter modulation, span processing, and prepared resource adoption remain separate follow-up. Select the next contract from a concrete client's requirements rather than extending the event model speculatively.
 
 Speaker layouts and richer I/O policies remain demand-driven. Core proof is not format support, and additional formats/editors/devices/graphs do not justify freezing incomplete semantic surfaces.
 

@@ -28,9 +28,9 @@ The repository selects the stable Rust toolchain and Edition 2024. CLAP dependen
 | [clap-conformance](examples/clap-conformance) | Focused parameter/automation/state conformance component |
 | [clap-delayed-probe](examples/clap-delayed-probe) | Fixed-delay component for latency/PDC qualification |
 | [clap-note-probe](examples/clap-note-probe) | Output-only native-note instrument for ordering, expression, and voice-feedback qualification |
-| [clap-midi-probe](examples/clap-midi-probe) | Zero-audio MIDI/SysEx processor for payload ownership, routing, and backpressure qualification |
+| [clap-midi-probe](examples/clap-midi-probe) | Zero-audio MIDI 1/SysEx and MIDI 2/UMP processor for routing, ownership, and backpressure qualification |
 
-CLAP projects native notes/expression and opaque MIDI 1/SysEx, preserves mixed parameter/note/MIDI ordering, and shares bounded output including native voice-end feedback. MIDI 2/UMP remains unsupported; dialects are never converted implicitly. Complete parameter/custom state supports deferred resource reactivation. Accepted and deterministic rejected callbacks pass allocation checks; arbitrary boxed errors and DSP panics remain outside realtime qualification.
+CLAP projects native notes/expression, opaque MIDI 1/SysEx, and four-word MIDI 2/UMP events. It preserves mixed parameter/note/MIDI ordering and shares bounded output including native voice-end feedback. Dialects are never converted implicitly; UMP transport does not imply protocol parsing or device compliance. Complete parameter/custom state supports deferred resource reactivation. Accepted and deterministic rejected callbacks pass allocation checks; arbitrary boxed errors and DSP panics remain outside realtime qualification.
 
 Planned framework layers include common DSP utilities, editor integration, VST3/Audio Unit deployment, audio/MIDI devices, standalone deployment, graph/scheduling, plugin hosting, media/offline processing integration, and release/conformance tooling. Package boundaries are created only where dependency, safety, optionality, or release boundaries justify them.
 

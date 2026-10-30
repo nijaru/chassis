@@ -381,13 +381,21 @@ impl Component for EventEcho {
                     EventPortKey::new("notes.in"),
                     "Input",
                     EventPortDirection::Input,
-                    &[EventDialect::Notes, EventDialect::Midi1],
+                    &[
+                        EventDialect::Notes,
+                        EventDialect::Midi1,
+                        EventDialect::Midi2,
+                    ],
                 ),
                 EventPortDescriptor::new(
                     EventPortKey::new("notes.out"),
                     "Output",
                     EventPortDirection::Output,
-                    &[EventDialect::Notes, EventDialect::Midi1],
+                    &[
+                        EventDialect::Notes,
+                        EventDialect::Midi1,
+                        EventDialect::Midi2,
+                    ],
                 ),
             ],
             vec![ParameterDescriptor::float("gain", "Gain", 0.0, 1.0, 0.5).unwrap()],
@@ -457,8 +465,8 @@ fn mixed_event_callbacks_do_not_allocate_or_reclaim() {
             process_config()
                 .with_max_note_events(2)
                 .with_max_output_note_events(2)
-                .with_midi_input_limits(MidiEventLimits::new(2, 128))
-                .with_midi_output_limits(MidiEventLimits::new(2, 128)),
+                .with_midi_input_limits(MidiEventLimits::new(3, 128))
+                .with_midi_output_limits(MidiEventLimits::new(3, 128)),
             chassis_runtime::audio::AudioIoConfiguration::new(&[]),
         )
         .unwrap();
@@ -489,6 +497,11 @@ fn mixed_event_callbacks_do_not_allocate_or_reclaim() {
         MidiEvent::new(0, EventPortIndex::new(0), MidiMessage::Short([0x90, 60, 0]))
             .with_flags(EventFlags::new(true, true)),
         MidiEvent::new(1, EventPortIndex::new(0), MidiMessage::SysEx(&payload)),
+        MidiEvent::new(
+            1,
+            EventPortIndex::new(0),
+            MidiMessage::Ump([u32::MAX, 1, 2, 3]),
+        ),
     ];
     let order = [
         InputEventIndex::Parameter(0),
@@ -496,6 +509,7 @@ fn mixed_event_callbacks_do_not_allocate_or_reclaim() {
         InputEventIndex::Note(0),
         InputEventIndex::Note(1),
         InputEventIndex::Midi(1),
+        InputEventIndex::Midi(2),
     ];
     let mut sink = CountingEventSink {
         reject: false,
@@ -503,43 +517,36 @@ fn mixed_event_callbacks_do_not_allocate_or_reclaim() {
     };
     let mut buffers: [ChannelBuffer<'_, f32>; 0] = [];
     let mut source = ChannelBufferSlice::new(&mut buffers);
-    ALLOCATIONS.store(0, Ordering::Relaxed);
-    DEALLOCATIONS.store(0, Ordering::Relaxed);
-    COUNT_THIS_THREAD.with(|counting| counting.set(true));
-    for block in 0..1000 {
-        let context = ProcessContext::with_events(
+    let context = || {
+        ProcessContext::with_events(
             ProcessMode::Realtime,
             TransportSnapshot::unknown(),
             ParameterEvents::new(&parameters, 512, 1).unwrap(),
             NoteEvents::new(&notes, 512, 2).unwrap(),
-            MidiEvents::new(&midi, 512, 2, 128).unwrap(),
+            MidiEvents::new(&midi, 512, 3, 128).unwrap(),
         )
         .with_input_order(&order)
-        .unwrap();
+        .unwrap()
+    };
+    ALLOCATIONS.store(0, Ordering::Relaxed);
+    DEALLOCATIONS.store(0, Ordering::Relaxed);
+    COUNT_THIS_THREAD.with(|counting| counting.set(true));
+    for block in 0..1000 {
         let context = if block % 2 == 0 {
-            context.without_parameter_events()
+            context().without_parameter_events()
         } else {
-            context
+            context()
         };
         runtime
             .process_source_with_output(512, context, &mut source, &mut sink)
             .unwrap();
     }
-    assert_eq!(sink.accepted, 4000);
+    assert_eq!(sink.accepted, 5000);
     sink.reject = true;
     // Essential-output failure uses the same allocation-free error path. Do
     // not continue DSP after this failed run.
-    let context = ProcessContext::with_events(
-        ProcessMode::Realtime,
-        TransportSnapshot::unknown(),
-        ParameterEvents::new(&parameters, 512, 1).unwrap(),
-        NoteEvents::new(&notes, 512, 2).unwrap(),
-        MidiEvents::new(&midi, 512, 2, 128).unwrap(),
-    )
-    .with_input_order(&order)
-    .unwrap();
     assert_eq!(
-        runtime.process_source_with_output(512, context, &mut source, &mut sink),
+        runtime.process_source_with_output(512, context(), &mut source, &mut sink),
         Err(InstanceProcessError::Processor(ProcessError::EventOutput(
             EventOutputError::Rejected
         )))

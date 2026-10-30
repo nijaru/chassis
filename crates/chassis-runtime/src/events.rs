@@ -538,7 +538,7 @@ impl EventFlags {
 pub enum OutputEvent<'a> {
     /// Semantic note operation or expression.
     Note(NoteEvent),
-    /// Opaque MIDI 1 message or borrowed `SysEx`.
+    /// Opaque MIDI 1/SysEx or four-word MIDI 2/UMP event.
     Midi(crate::midi::MidiEvent<'a>),
 }
 

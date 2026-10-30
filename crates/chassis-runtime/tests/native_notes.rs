@@ -109,7 +109,11 @@ impl Component for Probe {
             EventPortKey::new("in"),
             "Input",
             EventPortDirection::Input,
-            &[EventDialect::Notes, EventDialect::Midi1],
+            &[
+                EventDialect::Notes,
+                EventDialect::Midi1,
+                EventDialect::Midi2,
+            ],
         )];
         if !self.input_only {
             ports.extend([
@@ -117,7 +121,11 @@ impl Component for Probe {
                     EventPortKey::new("out"),
                     "Output",
                     EventPortDirection::Output,
-                    &[EventDialect::Notes, EventDialect::Midi1],
+                    &[
+                        EventDialect::Notes,
+                        EventDialect::Midi1,
+                        EventDialect::Midi2,
+                    ],
                 ),
                 EventPortDescriptor::new(
                     EventPortKey::new("midi"),
@@ -398,7 +406,7 @@ fn custom_resource_gate_withholds_parameters_but_preserves_typed_and_ordered_not
     let payload = [1, 0xff, 3];
     let midi = [
         MidiEvent::new(0, INPUT, MidiMessage::SysEx(&payload)),
-        MidiEvent::new(3, INPUT, MidiMessage::Short([0x90, 60, 0])),
+        MidiEvent::new(3, INPUT, MidiMessage::Ump([0x4090_3c00, u32::MAX, 2, 3])),
     ];
     let notes = [on(Some(INPUT), 0), end(Some(INPUT), 3)];
     let order = [Midi(0), Parameter(0), Note(0), Midi(1), Note(1)];
@@ -637,7 +645,7 @@ fn three_family_order_requires_exact_coverage_family_order_and_monotonic_times()
     let notes = [on(Some(INPUT), 1)];
     let midi = [
         MidiEvent::new(1, INPUT, MidiMessage::SysEx(&[1, 2])),
-        MidiEvent::new(2, INPUT, MidiMessage::Short([1, 2, 3])),
+        MidiEvent::new(2, INPUT, MidiMessage::Ump([1, 2, 3, u32::MAX])),
     ];
     let context = ProcessContext::with_events(
         ProcessMode::Realtime,
@@ -774,6 +782,7 @@ fn output_shares_one_order_across_families_in_both_directions_and_preserves_opaq
         MidiMessage::Short([0x90, 0xff, 0]),
         MidiMessage::SysEx(&[]),
         MidiMessage::SysEx(&[1, 0xff, 3, 4]),
+        MidiMessage::Ump([0x2090_3c00, u32::MAX, 0x1234_5678, 0x90ab_cdef]),
     ] {
         let midi = MidiEvent::new(3, OUTPUT, message).with_flags(EventFlags::new(true, true));
         let probe = Probe {
@@ -824,6 +833,34 @@ fn output_shares_one_order_across_families_in_both_directions_and_preserves_opaq
         &sink.delivered[..sink.count],
         &[Some((3, true)), Some((3, false))]
     );
+}
+
+#[test]
+fn midi_output_checks_the_messages_dialect_without_conversion() {
+    let probe = Probe {
+        script: vec![
+            (
+                OutputEvent::Midi(MidiEvent::new(
+                    0,
+                    EventPortIndex::new(2),
+                    MidiMessage::Ump([0; 4]),
+                )),
+                Err(EventOutputError::TargetRejected),
+            ), // MIDI 1-only output
+            (
+                OutputEvent::Midi(MidiEvent::new(0, INPUT, MidiMessage::Ump([0; 4]))),
+                Err(EventOutputError::TargetRejected),
+            ), // correct dialect, wrong direction
+            (
+                OutputEvent::Midi(MidiEvent::new(0, OUTPUT, MidiMessage::Ump([u32::MAX; 4]))),
+                Ok(()),
+            ),
+        ],
+        ..Probe::default()
+    };
+    let mut sink = MixedSink::default();
+    render(&mut active(&probe, 3), context(&[], &[]), Some(&mut sink)).unwrap();
+    assert_eq!(sink.count, 1);
 }
 
 #[test]
@@ -895,13 +932,17 @@ fn midi_attempts_include_invalid_and_byte_rejections_backpressure_does_not_refun
 
 #[test]
 fn product_error_retains_neither_tail_nor_base_or_modulation_endpoints() {
-    for failure in 0..3 {
+    for failure in 0..4 {
         let essential_output = failure != 0;
         let probe = Probe {
             script: match failure {
                 1 => note_script(vec![(end(Some(INPUT), 0), Ok(()))]),
                 2 => vec![(
                     OutputEvent::Midi(MidiEvent::new(0, OUTPUT, MidiMessage::SysEx(&[1, 2, 3, 4]))),
+                    Ok(()),
+                )],
+                3 => vec![(
+                    OutputEvent::Midi(MidiEvent::new(0, OUTPUT, MidiMessage::Ump([0; 4]))),
                     Ok(()),
                 )],
                 _ => vec![],

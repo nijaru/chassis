@@ -4,8 +4,8 @@
 //! parameter/custom state into CLAP. Process-time audio is driven by the validated
 //! setup mapping rather than a hard-coded stereo buffer shape. The audio path
 //! supports f32 exports and explicit f64-capable exports, native note/expression
-//! ports, opaque MIDI 1/SysEx, and bounded shared event output including native
-//! voice-lifetime feedback.
+//! ports, opaque MIDI 1/SysEx and MIDI 2/UMP, and bounded shared event output
+//! including native voice-lifetime feedback.
 
 mod audio;
 mod event_ports;
@@ -84,7 +84,8 @@ pub use event_ports::ClapNotePort;
 /// CLAP deployment metadata for a Chassis component.
 ///
 /// The projection supports mapped audio, native notes/expression, opaque MIDI
-/// 1/SysEx, and complete semantic state. Unsupported event dialects are rejected at setup.
+/// 1/SysEx, opaque MIDI 2/UMP words, and complete semantic state. Unsupported
+/// event dialects are rejected at setup.
 ///
 /// Parameter and audio-port IDs are explicit because stable Chassis keys cannot
 /// be silently hashed or assigned from declaration order without creating a
@@ -120,7 +121,7 @@ pub trait ClapComponent: Component + Default + 'static {
     /// Stable CLAP note-port IDs keyed by canonical component event-port key.
     ///
     /// Every event port requires one mapping with an explicit supported preference.
-    /// Native notes and MIDI 1/SysEx are preserved without implicit conversion.
+    /// Native notes, MIDI 1/SysEx, and MIDI 2/UMP are preserved without conversion.
     const CLAP_NOTE_PORTS: &'static [ClapNotePort] = &[];
 
     /// Maximum native note/expression input records accepted per callback.
@@ -132,7 +133,7 @@ pub trait ClapComponent: Component + Default + 'static {
     /// port. Products own failure/retry policy within this bound.
     const CLAP_MAX_OUTPUT_NOTE_EVENTS: u32 = 0;
 
-    /// Maximum MIDI 1/SysEx input records per callback.
+    /// Maximum combined MIDI 1/SysEx and MIDI 2/UMP input records per callback.
     const CLAP_MAX_MIDI_EVENTS: u32 = 0;
 
     /// Maximum aggregate input `SysEx` bytes per callback.
@@ -398,11 +399,19 @@ where
             "CLAP note event bound exceeds total input event bound",
         ));
     }
-    if notes.has_input_dialect(chassis_runtime::events::EventDialect::Midi1)
-        && (C::CLAP_MAX_MIDI_EVENTS == 0 || C::CLAP_MAX_INPUT_SYSEX_BYTES == 0)
+    if (notes.has_input_dialect(chassis_runtime::events::EventDialect::Midi1)
+        || notes.has_input_dialect(chassis_runtime::events::EventDialect::Midi2))
+        && C::CLAP_MAX_MIDI_EVENTS == 0
     {
         return Err(PluginError::Message(
-            "CLAP MIDI input requires positive event and SysEx byte bounds",
+            "CLAP MIDI input requires a positive event bound",
+        ));
+    }
+    if notes.has_input_dialect(chassis_runtime::events::EventDialect::Midi1)
+        && C::CLAP_MAX_INPUT_SYSEX_BYTES == 0
+    {
+        return Err(PluginError::Message(
+            "CLAP MIDI 1 input requires a positive SysEx byte bound",
         ));
     }
     if C::CLAP_MAX_MIDI_EVENTS > C::CLAP_MAX_INPUT_EVENTS {
@@ -1130,6 +1139,82 @@ mod tests {
             time_signature_numerator: 4,
             time_signature_denominator: 4,
         }
+    }
+
+    // A MIDI 2-only deployment needs a count bound, not a fictitious SysEx
+    // capacity. Exercise instance setup, not just note-port metadata.
+    #[derive(Default)]
+    struct UmpOnly<const COUNT: u32>;
+    impl<const COUNT: u32> Component for UmpOnly<COUNT> {
+        type Processor = Self;
+        type ActivationError = core::convert::Infallible;
+        fn schema(&self) -> Result<ComponentSchema, chassis_runtime::schema::ComponentSchemaError> {
+            use chassis_runtime::{
+                audio::{AudioIoConfigurationSpec, AudioIoPolicy},
+                events::{EventDialect, EventPortDescriptor, EventPortDirection, EventPortKey},
+                schema::{ComponentId, StateSchemaVersion},
+            };
+            ComponentSchema::new(
+                ComponentId::new("test.ump-only").unwrap(),
+                StateSchemaVersion::new(1),
+                vec![],
+                AudioIoPolicy::enumerated(vec![AudioIoConfigurationSpec::new(vec![])]),
+                vec![EventPortDescriptor::new(
+                    EventPortKey::new("ump"),
+                    "UMP",
+                    EventPortDirection::Input,
+                    &[EventDialect::Midi2],
+                )],
+                vec![],
+            )
+        }
+        fn activate(
+            &self,
+            _: &chassis_runtime::process::ActivationConfig<'_>,
+            _: &chassis_runtime::parameters::ParameterStore,
+            _: &[chassis_runtime::state::StateEntry],
+        ) -> Result<Self, Self::ActivationError> {
+            Ok(Self)
+        }
+    }
+    impl<const COUNT: u32> Processor for UmpOnly<COUNT> {}
+    impl<const COUNT: u32> ClapComponent for UmpOnly<COUNT> {
+        const CLAP_ID: &'static str = "test.ump-only";
+        const CLAP_NAME: &'static str = "UMP only";
+        const CLAP_FEATURES: &'static [&'static std::ffi::CStr] = &[c"note-effect"];
+        const CLAP_AUDIO_PORTS: &'static [ClapAudioPort] = &[];
+        const CLAP_NOTE_PORTS: &'static [ClapNotePort] = &[ClapNotePort::new(
+            chassis_runtime::events::EventPortKey::new("ump"),
+            1,
+            chassis_runtime::events::EventDialect::Midi2,
+        )];
+        const CLAP_MAX_MIDI_EVENTS: u32 = COUNT;
+    }
+    #[test]
+    fn midi2_only_setup_requires_event_capacity_but_no_sysex_capacity() {
+        assert!(new_shared::<UmpOnly<0>>().is_err());
+        let shared = new_shared::<UmpOnly<1>>().unwrap();
+        let events = [clack_plugin::events::event_types::Midi2Event::new(
+            0,
+            0,
+            [u32::MAX; 4],
+        )];
+        let input = InputEvents::from_buffer(&events);
+        let mut scratch = InputScratch::new(0, 0, 1, MidiEventLimits::new(1, 0)).unwrap();
+        scratch
+            .normalize(&shared.parameters, &shared.notes, &input, 8)
+            .unwrap();
+        let source = ClapMidiInput {
+            input: &input,
+            records: &scratch.midi,
+        };
+        let admitted = MidiEvents::new(&source, 8, 1, 0).unwrap();
+        assert_eq!(admitted.sysex_bytes(), 0);
+        assert_eq!(
+            admitted.iter().next().unwrap().message(),
+            chassis_runtime::midi::MidiMessage::Ump([u32::MAX; 4])
+        );
+        assert!(new_shared::<UmpOnly<1025>>().is_err());
     }
 
     #[test]

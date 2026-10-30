@@ -131,7 +131,7 @@ pub enum InputEventIndex {
     Parameter(u32),
     /// Index in the semantic note stream.
     Note(u32),
-    /// Index in the opaque MIDI 1 stream.
+    /// Index in the opaque MIDI 1/SysEx and MIDI 2/UMP stream.
     Midi(u32),
 }
 
@@ -142,7 +142,7 @@ pub enum InputEventRef<'a> {
     Parameter(&'a ParameterEvent),
     /// Semantic note operation or expression.
     Note(&'a NoteEvent),
-    /// Opaque MIDI 1 event borrowing its source payload.
+    /// Opaque MIDI event, borrowing source storage for SysEx.
     Midi(MidiEvent<'a>),
 }
 
@@ -998,8 +998,8 @@ where
         self.push_output(OutputEvent::Note(event))
     }
 
-    /// Attempt opaque MIDI output on a concrete OUTPUT MIDI 1 port. Every call
-    /// consumes a MIDI attempt. `SysEx` bytes are charged before validation/dispatch
+    /// Attempt opaque MIDI output on a concrete, dialect-compatible OUTPUT port.
+    /// Every call consumes a MIDI attempt. `SysEx` bytes are charged before validation/dispatch
     /// and never refunded, even on target rejection. An over-budget payload is
     /// not dispatched. Payloads are borrowed only until the sink returns.
     ///
@@ -1045,7 +1045,7 @@ where
             OutputEvent::Midi(midi) => (
                 Some(midi.port()),
                 EventPortDirection::Output,
-                EventDialect::Midi1,
+                midi.message().dialect(),
             ),
         };
         let compatible = |port: &EventPortDescriptor| {

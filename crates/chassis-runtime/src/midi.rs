@@ -1,4 +1,4 @@
-//! Opaque, borrowed MIDI 1 input and bounded payload admission.
+//! Opaque MIDI 1 and MIDI 2/UMP input with bounded payload admission.
 //!
 //! No status/data interpretation, padding normalization, `SysEx` framing, or
 //! conversion to semantic notes occurs here. Payload ownership stays with the
@@ -11,13 +11,29 @@ use crate::events::{
     EventDialect, EventFlags, EventPortDescriptor, EventPortDirection, EventPortIndex,
 };
 
-/// Opaque MIDI 1 bytes. Even empty or unframed `SysEx` is preserved verbatim.
+/// Opaque MIDI transport storage, without protocol parsing or conversion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MidiMessage<'a> {
     /// Exactly three opaque bytes, including unused padding supplied by a source.
     Short([u8; 3]),
     /// Borrowed payload, valid only for the lifetime of its source storage.
     SysEx(&'a [u8]),
+    /// Four numeric UMP storage words, including any unused words from the source.
+    ///
+    /// This envelope does not infer packet length, validate message grammar,
+    /// normalize unused words, or convert byte order. It is not a UMP stream.
+    Ump([u32; 4]),
+}
+
+impl MidiMessage<'_> {
+    /// Required port capability, independent of the encoded musical message.
+    #[must_use]
+    pub const fn dialect(self) -> EventDialect {
+        match self {
+            Self::Short(_) | Self::SysEx(_) => EventDialect::Midi1,
+            Self::Ump(_) => EventDialect::Midi2,
+        }
+    }
 }
 
 /// A sample-positioned MIDI message with a concrete activation-local port.
@@ -296,10 +312,10 @@ impl<'a> MidiEvents<'a> {
         })
     }
 
-    /// Validate concrete input ports and MIDI 1 capability.
+    /// Validate concrete input ports and each message's required dialect.
     ///
     /// # Errors
-    /// Rejects unknown, output-only, or non-MIDI-1 targets.
+    /// Rejects unknown, output-only, or dialect-incompatible targets.
     pub fn validate_ports(
         self,
         descriptors: &[EventPortDescriptor],
@@ -314,8 +330,9 @@ impl<'a> MidiEvents<'a> {
             if descriptor.direction != EventPortDirection::Input {
                 return Err(MidiEventPortError::PortIsNotInput(port));
             }
-            if !descriptor.dialects.contains(&EventDialect::Midi1) {
-                return Err(MidiEventPortError::PortDoesNotSupportMidi1(port));
+            let dialect = event.message().dialect();
+            if !descriptor.dialects.contains(&dialect) {
+                return Err(MidiEventPortError::PortDoesNotSupportDialect { port, dialect });
             }
         }
         Ok(())
@@ -381,8 +398,13 @@ pub enum MidiEventPortError {
     UnknownPort(EventPortIndex),
     /// MIDI input targeted an output port.
     PortIsNotInput(EventPortIndex),
-    /// Port does not support MIDI 1.
-    PortDoesNotSupportMidi1(EventPortIndex),
+    /// Port does not support this message's dialect.
+    PortDoesNotSupportDialect {
+        /// Target port.
+        port: EventPortIndex,
+        /// Required capability.
+        dialect: EventDialect,
+    },
 }
 impl fmt::Display for MidiEventPortError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
