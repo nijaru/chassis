@@ -9,6 +9,7 @@ use std::{
     },
 };
 
+use chassis_runtime::transport::TransportSnapshot;
 use chassis_runtime::{
     audio::AudioIoConfiguration,
     automation::ParameterEvents,
@@ -19,7 +20,7 @@ use chassis_runtime::{
     },
     process::{
         ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessConfig, ProcessContext,
-        ProcessMode, TransportSnapshot,
+        ProcessMode,
     },
     runtime::{Component, InstanceRuntime, Process, Processor},
 };
@@ -161,7 +162,7 @@ fn zero_audio_processor_receives_bounded_semantic_note_events() {
     let note_events = NoteEvents::new(&raw_notes, 32, 8).expect("test note events are valid");
     let context = ProcessContext::with_note_events(
         ProcessMode::Realtime,
-        TransportSnapshot::unknown(),
+        &TransportSnapshot::UNKNOWN,
         ParameterEvents::empty_for_block(32),
         note_events,
     );

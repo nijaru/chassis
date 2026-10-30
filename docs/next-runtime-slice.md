@@ -74,9 +74,15 @@ Core and CLAP preserve all four numeric UMP storage words, concrete ports, flags
 
 This is opaque four-word transport, not a variable-length UMP stream parser or MIDI 2 protocol/device-compliance implementation. The pinned validator does not generate UMP; focused actual-entry tests and Miri supply separate fidelity evidence. [Events/transport](design/events-transport.md) owns semantics, the [source audit](research/clack-pinned-adapter-audit.md) owns the boundary, and [validation](design/validation.md) owns revision-scoped qualification.
 
-## Next — client-driven runtime extensions
+## Closed — musical block-start transport
 
-Per-note parameter modulation, span processing, and prepared resource adoption remain separate follow-up. Select the next contract from a concrete client's requirements rather than extending the event model speculatively.
+Core now validates independently available song/sample/beat positions, meter/bar data, loop endpoints/state, recording pre-roll, and tempo/increment. CLAP projects its advertised block-start metadata without substituting its monotonic process clock for song time or fabricating missing fields. Contexts borrow snapshots; malformed available meter/active-loop/slope data fails before DSP, while invalid optional BPM retains the established unavailable-value recovery. Actual-entry coverage exercises availability, stopped/negative timelines, discontinuities, and allocation-free acceptance/rejection. [Events/transport](design/events-transport.md#transport) owns semantics; [validation](design/validation.md) owns revision-scoped evidence.
+
+This unblocks ordinary host-synced phase/position consumption; it does not expose timestamped transport updates or supply a sequencer, clock engine, or product DSP.
+
+## Next — evidence-driven runtime and authoring extensions
+
+Derive the next bounded requirement from established audio software and the intended framework uses, not only from a user-named new client. Concrete source/workload evidence is enough; a separate product migration is not required. Per-note parameter modulation, parameter gestures, span processing, and prepared resource adoption remain separate follow-up contracts, not an automatic event-model expansion.
 
 Speaker layouts and richer I/O policies remain demand-driven. Core proof is not format support, and additional formats/editors/devices/graphs do not justify freezing incomplete semantic surfaces.
 

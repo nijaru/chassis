@@ -1,5 +1,6 @@
 //! Native note semantics through the public runtime, without a format adapter.
 
+use chassis_runtime::transport::TransportSnapshot;
 use chassis_runtime::{
     audio::{AudioIoConfiguration, AudioIoPolicy},
     automation::{ParameterEvent, ParameterEventValue, ParameterEvents},
@@ -14,7 +15,6 @@ use chassis_runtime::{
     process::{
         ActivationConfig, ChannelBufferSlice, InputEventIndex, InputEventOrderError, InputEventRef,
         ProcessBlock, ProcessBufferSource, ProcessConfig, ProcessContext, ProcessMode,
-        TransportSnapshot,
     },
     runtime::{
         Component, ComponentStateError, InstanceProcessError, InstanceRuntime, Process,
@@ -59,7 +59,7 @@ fn end(port: Option<EventPortIndex>, offset: u32) -> NoteEvent {
 fn context<'a>(parameters: &'a [ParameterEvent], notes: &'a [NoteEvent]) -> ProcessContext<'a> {
     ProcessContext::with_note_events(
         ProcessMode::Realtime,
-        TransportSnapshot::unknown(),
+        &TransportSnapshot::UNKNOWN,
         ParameterEvents::new(parameters, 8, 16).unwrap(),
         NoteEvents::new(notes, 8, 16).unwrap(),
     )
@@ -374,7 +374,7 @@ fn bad_index_duplicate_missing_family_reordering_and_decreasing_mixed_offsets_ar
     );
     let mismatched = ProcessContext::with_note_events(
         ProcessMode::Realtime,
-        TransportSnapshot::unknown(),
+        &TransportSnapshot::UNKNOWN,
         ParameterEvents::empty_for_block(4),
         NoteEvents::empty_for_block(8),
     );
@@ -412,7 +412,7 @@ fn custom_resource_gate_withholds_parameters_but_preserves_typed_and_ordered_not
     let order = [Midi(0), Parameter(0), Note(0), Midi(1), Note(1)];
     let context = ProcessContext::with_events(
         ProcessMode::Realtime,
-        TransportSnapshot::unknown(),
+        &TransportSnapshot::UNKNOWN,
         ParameterEvents::new(&parameters, 8, 8).unwrap(),
         NoteEvents::new(&notes, 8, 8).unwrap(),
         MidiEvents::new(&midi, 8, 8, 16).unwrap(),
@@ -627,7 +627,7 @@ fn sink_backpressure_consumes_attempt_budget_and_product_owns_bounded_retry() {
 fn midi_context(events: MidiEvents<'_>) -> ProcessContext<'_> {
     ProcessContext::with_events(
         ProcessMode::Realtime,
-        TransportSnapshot::unknown(),
+        &TransportSnapshot::UNKNOWN,
         ParameterEvents::empty_for_block(8),
         NoteEvents::empty_for_block(8),
         events,
@@ -649,7 +649,7 @@ fn three_family_order_requires_exact_coverage_family_order_and_monotonic_times()
     ];
     let context = ProcessContext::with_events(
         ProcessMode::Realtime,
-        TransportSnapshot::unknown(),
+        &TransportSnapshot::UNKNOWN,
         ParameterEvents::new(&parameters, 8, 1).unwrap(),
         NoteEvents::new(&notes, 8, 1).unwrap(),
         MidiEvents::new(&midi, 8, 2, 2).unwrap(),

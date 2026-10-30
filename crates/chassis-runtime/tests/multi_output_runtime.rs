@@ -5,6 +5,7 @@
 
 use std::{convert::Infallible, num::NonZeroU32};
 
+use chassis_runtime::transport::TransportSnapshot;
 use chassis_runtime::{
     audio::{
         AudioIoConfiguration, AudioIoConfigurationSpec, AudioIoPolicy, AudioPortDescriptor,
@@ -14,7 +15,7 @@ use chassis_runtime::{
     buffer::{ChannelBuffer, OutputEndpoint},
     process::{
         ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessChannel, ProcessConfig,
-        ProcessContext, ProcessMode, TransportSnapshot,
+        ProcessContext, ProcessMode,
     },
     runtime::{Component, InstanceRuntime, Process, Processor},
     schema::ComponentSchema,
@@ -124,7 +125,7 @@ fn process_config() -> ProcessConfig {
 fn process_context(frame_count: u32) -> ProcessContext<'static> {
     ProcessContext::new(
         ProcessMode::Realtime,
-        TransportSnapshot::unknown(),
+        &TransportSnapshot::UNKNOWN,
         ParameterEvents::empty_for_block(frame_count),
     )
 }

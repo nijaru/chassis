@@ -5,12 +5,13 @@
 #[path = "support/resource_state.rs"]
 mod resource_state;
 
+use chassis_runtime::transport::TransportSnapshot;
 use chassis_runtime::{
     audio::{AudioPortIndex, DEFAULT_EFFECT_CONFIGURATION},
     automation::{ParameterEvent, ParameterEventValue, ParameterEvents},
     buffer::{ChannelBuffer, InputEndpoint, OutputEndpoint},
     parameters::{ChoiceIndex, ParameterIndex, ParameterStore, ParameterValue},
-    process::{ActivationConfig, ProcessConfig, ProcessContext, ProcessMode, TransportSnapshot},
+    process::{ActivationConfig, ProcessConfig, ProcessContext, ProcessMode},
     runtime::{
         ActivateError, Component, ComponentStateError, InstanceRuntime, InstanceRuntimeError,
         InstanceSemanticStateError,
@@ -55,7 +56,7 @@ fn render(
         4,
         ProcessContext::new(
             ProcessMode::Realtime,
-            TransportSnapshot::unknown(),
+            &TransportSnapshot::UNKNOWN,
             ParameterEvents::new(events, 4, 16).unwrap(),
         ),
         &mut buffers,

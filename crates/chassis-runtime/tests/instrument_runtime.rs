@@ -6,6 +6,7 @@
 
 use std::{convert::Infallible, num::NonZeroU32};
 
+use chassis_runtime::transport::TransportSnapshot;
 use chassis_runtime::{
     audio::{
         AudioIoConfiguration, AudioIoConfigurationSpec, AudioIoPolicy, AudioPortDescriptor,
@@ -19,7 +20,7 @@ use chassis_runtime::{
     },
     process::{
         ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessChannel, ProcessConfig,
-        ProcessContext, ProcessMode, TransportSnapshot,
+        ProcessContext, ProcessMode,
     },
     runtime::{Component, InstanceRuntime, Process, Processor},
     schema::ComponentSchema,
@@ -222,7 +223,7 @@ fn note_input_drives_stereo_output_without_audio_input() {
     let note_events = NoteEvents::new(&notes, 8, 8).expect("instrument notes are valid");
     let context = ProcessContext::with_note_events(
         ProcessMode::Realtime,
-        TransportSnapshot::unknown(),
+        &TransportSnapshot::UNKNOWN,
         ParameterEvents::empty_for_block(8),
         note_events,
     );

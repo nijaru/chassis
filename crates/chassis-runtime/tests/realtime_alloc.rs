@@ -10,6 +10,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
+use chassis_runtime::transport::TransportSnapshot;
 use chassis_runtime::{
     audio::{AudioPortIndex, DEFAULT_EFFECT_CONFIGURATION},
     automation::{ParameterEvent, ParameterEventValue, ParameterEvents},
@@ -27,7 +28,6 @@ use chassis_runtime::{
     process::{
         ActivationConfig, ChannelBufferSlice, InputEventIndex, InputEventRef, ProcessBlock,
         ProcessBufferSource, ProcessChannel, ProcessConfig, ProcessContext, ProcessMode,
-        TransportSnapshot,
     },
     runtime::{Component, InstanceProcessError, InstanceRuntime, Process, ProcessError, Processor},
     state::{StateDocument, StateLimits},
@@ -176,7 +176,7 @@ fn process_config() -> ProcessConfig {
 fn process_context(events: &[ParameterEvent]) -> ProcessContext<'_> {
     ProcessContext::new(
         ProcessMode::Realtime,
-        TransportSnapshot::unknown(),
+        &TransportSnapshot::UNKNOWN,
         ParameterEvents::new(events, 512, 64).expect("bounded events are valid"),
     )
 }
@@ -342,7 +342,7 @@ fn pending_resource_callbacks_do_not_allocate_or_reclaim() {
                 512,
                 ProcessContext::new(
                     ProcessMode::Realtime,
-                    TransportSnapshot::unknown(),
+                    &TransportSnapshot::UNKNOWN,
                     ParameterEvents::new(&automation, 512, 8).unwrap(),
                 ),
                 &mut buffers,
@@ -520,7 +520,7 @@ fn mixed_event_callbacks_do_not_allocate_or_reclaim() {
     let context = || {
         ProcessContext::with_events(
             ProcessMode::Realtime,
-            TransportSnapshot::unknown(),
+            &TransportSnapshot::UNKNOWN,
             ParameterEvents::new(&parameters, 512, 1).unwrap(),
             NoteEvents::new(&notes, 512, 2).unwrap(),
             MidiEvents::new(&midi, 512, 3, 128).unwrap(),

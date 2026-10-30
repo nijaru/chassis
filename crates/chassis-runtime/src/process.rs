@@ -13,6 +13,7 @@ use crate::{
     midi::{MidiEvent, MidiEventLimits, MidiEvents, MidiMessage},
     parameters::{ParameterAutomationError, ParameterStore},
     schema::ComponentSchema,
+    transport::TransportSnapshot,
 };
 
 /// Scheduling/quality context for one processing call.
@@ -32,97 +33,6 @@ pub enum ProcessMode {
     /// expensive offline-quality path if it supports one.
     Offline,
 }
-
-/// Best-known transport values at the start of one processing block.
-///
-/// Every field is optional because a backend may not provide it. Values are a
-/// snapshot, not a promise of timestamped intra-block transport changes.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct TransportSnapshot {
-    playing: Option<bool>,
-    recording: Option<bool>,
-    tempo_bpm: Option<f64>,
-    sample_position: Option<i64>,
-}
-
-impl TransportSnapshot {
-    /// Construct a snapshot, validating an available tempo.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`TransportSnapshotError::InvalidTempo`] when `tempo_bpm` is
-    /// non-finite or not positive.
-    pub fn new(
-        playing: Option<bool>,
-        recording: Option<bool>,
-        tempo_bpm: Option<f64>,
-        sample_position: Option<i64>,
-    ) -> Result<Self, TransportSnapshotError> {
-        if tempo_bpm.is_some_and(|tempo| !tempo.is_finite() || tempo <= 0.0) {
-            return Err(TransportSnapshotError::InvalidTempo);
-        }
-        Ok(Self {
-            playing,
-            recording,
-            tempo_bpm,
-            sample_position,
-        })
-    }
-
-    /// Construct a snapshot with no available transport values.
-    #[must_use]
-    pub const fn unknown() -> Self {
-        Self {
-            playing: None,
-            recording: None,
-            tempo_bpm: None,
-            sample_position: None,
-        }
-    }
-
-    /// Return the known playing state.
-    #[must_use]
-    pub const fn playing(self) -> Option<bool> {
-        self.playing
-    }
-
-    /// Return the known recording state.
-    #[must_use]
-    pub const fn recording(self) -> Option<bool> {
-        self.recording
-    }
-
-    /// Return the known tempo in beats per minute.
-    #[must_use]
-    pub const fn tempo_bpm(self) -> Option<f64> {
-        self.tempo_bpm
-    }
-
-    /// Return the known absolute sample position.
-    #[must_use]
-    pub const fn sample_position(self) -> Option<i64> {
-        self.sample_position
-    }
-}
-
-/// Invalid block-start transport metadata.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TransportSnapshotError {
-    /// An available tempo was zero, negative, NaN, or infinite.
-    InvalidTempo,
-}
-
-impl fmt::Display for TransportSnapshotError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidTempo => {
-                formatter.write_str("transport tempo must be finite and positive")
-            }
-        }
-    }
-}
-
-impl std::error::Error for TransportSnapshotError {}
 
 /// Reference into one of the normalized borrowed input families.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -196,11 +106,11 @@ impl fmt::Display for InputEventOrderError {
 
 impl std::error::Error for InputEventOrderError {}
 
-/// Semantic context for one process block.
+/// Borrowed semantic context for one process block.
 #[derive(Debug, Clone, Copy)]
 pub struct ProcessContext<'a> {
     mode: ProcessMode,
-    transport: TransportSnapshot,
+    transport: &'a TransportSnapshot,
     parameter_events: ParameterEvents<'a>,
     note_events: NoteEvents<'a>,
     midi_events: MidiEvents<'a>,
@@ -213,7 +123,7 @@ impl<'a> ProcessContext<'a> {
     #[must_use]
     pub const fn new(
         mode: ProcessMode,
-        transport: TransportSnapshot,
+        transport: &'a TransportSnapshot,
         parameter_events: ParameterEvents<'a>,
     ) -> Self {
         let frame_count = parameter_events.frame_count();
@@ -233,7 +143,7 @@ impl<'a> ProcessContext<'a> {
     #[must_use]
     pub const fn with_note_events(
         mode: ProcessMode,
-        transport: TransportSnapshot,
+        transport: &'a TransportSnapshot,
         parameter_events: ParameterEvents<'a>,
         note_events: NoteEvents<'a>,
     ) -> Self {
@@ -252,7 +162,7 @@ impl<'a> ProcessContext<'a> {
     #[must_use]
     pub const fn with_events(
         mode: ProcessMode,
-        transport: TransportSnapshot,
+        transport: &'a TransportSnapshot,
         parameter_events: ParameterEvents<'a>,
         note_events: NoteEvents<'a>,
         midi_events: MidiEvents<'a>,
@@ -364,7 +274,7 @@ impl<'a> ProcessContext<'a> {
 
     /// Return the block-start transport snapshot.
     #[must_use]
-    pub const fn transport(self) -> TransportSnapshot {
+    pub const fn transport(self) -> &'a TransportSnapshot {
         self.transport
     }
 
@@ -947,7 +857,7 @@ where
 
     /// Return the block-start transport snapshot.
     #[must_use]
-    pub const fn transport(&self) -> TransportSnapshot {
+    pub const fn transport(&self) -> &'context TransportSnapshot {
         self.context.transport()
     }
 
@@ -1392,7 +1302,7 @@ mod tests {
         };
         let context = ProcessContext::new(
             ProcessMode::Realtime,
-            TransportSnapshot::unknown(),
+            &TransportSnapshot::UNKNOWN,
             ParameterEvents::empty_for_block(2),
         );
         let mut block = ProcessBlock::new(&activation, &parameters, &[], 2, context, &mut source)
@@ -1433,7 +1343,7 @@ mod tests {
 
         let context = ProcessContext::new(
             ProcessMode::Realtime,
-            TransportSnapshot::unknown(),
+            &TransportSnapshot::UNKNOWN,
             ParameterEvents::empty_for_block(2),
         );
         assert!(matches!(
@@ -1466,27 +1376,29 @@ mod tests {
 
     #[test]
     fn process_context_carries_optional_transport_and_events() {
-        let transport = TransportSnapshot::new(Some(true), Some(false), Some(120.0), Some(12))
-            .expect("transport snapshot is valid");
+        let transport = TransportSnapshot::new(crate::transport::TransportValues {
+            playing: Some(true),
+            recording: Some(false),
+            tempo_bpm: Some(120.0),
+            sample_position: Some(12),
+            ..crate::transport::TransportValues::default()
+        })
+        .expect("transport snapshot is valid");
         let context = ProcessContext::new(
             ProcessMode::Offline,
-            transport,
+            &transport,
             ParameterEvents::empty_for_block(4),
         );
 
         assert_eq!(context.mode(), ProcessMode::Offline);
-        assert_eq!(context.transport().playing(), Some(true));
-        assert_eq!(context.transport().recording(), Some(false));
-        assert_eq!(context.transport().tempo_bpm(), Some(120.0));
-        assert_eq!(context.transport().sample_position(), Some(12));
+        assert_eq!(context.transport().values().playing, Some(true));
+        assert_eq!(context.transport().values().recording, Some(false));
+        assert_eq!(context.transport().values().tempo_bpm, Some(120.0));
+        assert_eq!(context.transport().values().sample_position, Some(12));
         assert!(context.parameter_events().is_empty());
         assert_eq!(context.parameter_events().frame_count(), 4);
         assert!(context.note_events().is_empty());
         assert_eq!(context.note_events().frame_count(), 4);
-        assert_eq!(
-            TransportSnapshot::new(None, None, Some(0.0), None),
-            Err(TransportSnapshotError::InvalidTempo)
-        );
     }
 
     #[test]
@@ -1507,7 +1419,7 @@ mod tests {
         let notes = NoteEvents::new(&raw_notes, 2, 2).expect("note events are valid");
         let context = ProcessContext::with_note_events(
             ProcessMode::Realtime,
-            TransportSnapshot::unknown(),
+            &TransportSnapshot::UNKNOWN,
             ParameterEvents::empty_for_block(2),
             notes,
         );
@@ -1529,7 +1441,7 @@ mod tests {
         let parameters = empty_parameters();
         let context = ProcessContext::new(
             ProcessMode::Realtime,
-            TransportSnapshot::unknown(),
+            &TransportSnapshot::UNKNOWN,
             ParameterEvents::empty_for_block(1),
         );
         let mut buffers: [ChannelBuffer<'_, f32>; 0] = [];
@@ -1550,7 +1462,7 @@ mod tests {
         )];
         let events = ParameterEvents::new(&raw_events, 2, 1).expect("event shape is valid");
         let context =
-            ProcessContext::new(ProcessMode::Realtime, TransportSnapshot::unknown(), events);
+            ProcessContext::new(ProcessMode::Realtime, &TransportSnapshot::UNKNOWN, events);
         assert!(matches!(
             ProcessBlock::new(&activation, &parameters, &[], 2, context, &mut source),
             Err(ProcessBlockError::ParameterEventCountTooLarge {
@@ -1577,7 +1489,7 @@ mod tests {
         let wrong_frames = NoteEvents::new(&raw_notes, 1, 1).expect("note event shape is valid");
         let context = ProcessContext::with_note_events(
             ProcessMode::Realtime,
-            TransportSnapshot::unknown(),
+            &TransportSnapshot::UNKNOWN,
             ParameterEvents::empty_for_block(2),
             wrong_frames,
         );
@@ -1595,7 +1507,7 @@ mod tests {
         let notes = NoteEvents::new(&raw_notes, 2, 1).expect("note event shape is valid");
         let context = ProcessContext::with_note_events(
             ProcessMode::Realtime,
-            TransportSnapshot::unknown(),
+            &TransportSnapshot::UNKNOWN,
             ParameterEvents::empty_for_block(2),
             notes,
         );

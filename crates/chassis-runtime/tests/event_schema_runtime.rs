@@ -2,6 +2,7 @@
 
 use std::{convert::Infallible, num::NonZeroU32};
 
+use chassis_runtime::transport::TransportSnapshot;
 use chassis_runtime::{
     audio::AudioIoConfiguration,
     automation::ParameterEvents,
@@ -13,7 +14,7 @@ use chassis_runtime::{
     },
     process::{
         ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessConfig, ProcessContext,
-        ProcessMode, TransportSnapshot,
+        ProcessMode,
     },
     runtime::{
         ActivateError, Component, InstanceProcessError, InstanceRuntime, InstanceRuntimeError,
@@ -156,7 +157,7 @@ fn process_rejects_unknown_note_port_before_product_dsp() {
     let notes = NoteEvents::new(&raw_notes, 1, 8).expect("note event shape is valid");
     let context = ProcessContext::with_note_events(
         ProcessMode::Realtime,
-        TransportSnapshot::unknown(),
+        &TransportSnapshot::UNKNOWN,
         ParameterEvents::empty_for_block(1),
         notes,
     );

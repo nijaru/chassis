@@ -3,6 +3,7 @@ use crate::{
     event_ports::ClapNotePort, input_events::InputScratch, output_events::ClapEventOutput,
     parameters::ClapStateProjection,
 };
+use chassis_runtime::transport::TransportSnapshot;
 use chassis_runtime::{
     automation::ParameterEvents,
     events::{
@@ -10,7 +11,7 @@ use chassis_runtime::{
     },
     midi::{MidiEventLimits, MidiEvents},
     parameters::ParameterDescriptor,
-    process::{InputEventIndex, InputEventRef, ProcessContext, ProcessMode, TransportSnapshot},
+    process::{InputEventIndex, InputEventRef, ProcessContext, ProcessMode},
 };
 use clack_plugin::{
     events::{
@@ -123,7 +124,7 @@ fn mixed_admission_preserves_three_family_order_and_borrowed_payload_when_contro
     assert_eq!(loan.as_ptr(), bytes.as_ptr());
     let context = ProcessContext::with_events(
         ProcessMode::Realtime,
-        TransportSnapshot::unknown(),
+        &TransportSnapshot::UNKNOWN,
         ParameterEvents::new(&scratch.parameters, 8, 1).unwrap(),
         NoteEvents::new(&scratch.notes, 8, 1).unwrap(),
         midi,

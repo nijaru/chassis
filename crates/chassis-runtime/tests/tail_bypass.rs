@@ -1,5 +1,6 @@
 //! Explicit bypass identity, product-owned delayed-dry policy, and completed tail metadata.
 
+use chassis_runtime::transport::TransportSnapshot;
 use chassis_runtime::{
     audio::{AudioPortIndex, DEFAULT_EFFECT_CONFIGURATION},
     automation::{ParameterCursorError, ParameterEvent, ParameterEventValue, ParameterEvents},
@@ -10,7 +11,7 @@ use chassis_runtime::{
     },
     process::{
         ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessChannel, ProcessConfig,
-        ProcessContext, ProcessMode, TransportSnapshot,
+        ProcessContext, ProcessMode,
     },
     runtime::{
         Component, ComponentStateError, InstanceRuntime, LatencySamples, Process, Processor,
@@ -206,7 +207,7 @@ fn render(
         8,
         ProcessContext::new(
             ProcessMode::Realtime,
-            TransportSnapshot::unknown(),
+            &TransportSnapshot::UNKNOWN,
             ParameterEvents::new(events, 8, 8).unwrap(),
         ),
         &mut channels,

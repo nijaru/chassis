@@ -2,6 +2,7 @@
 
 use std::{convert::Infallible, num::NonZeroU32};
 
+use chassis_runtime::transport::TransportSnapshot;
 use chassis_runtime::{
     audio::{AudioPortIndex, DEFAULT_EFFECT_CONFIGURATION},
     automation::{ParameterEvent, ParameterEventValue, ParameterEvents},
@@ -12,7 +13,7 @@ use chassis_runtime::{
     },
     process::{
         ActivationConfig, ProcessBlock, ProcessBlockError, ProcessBufferSource, ProcessChannel,
-        ProcessConfig, ProcessContext, ProcessMode, TransportSnapshot,
+        ProcessConfig, ProcessContext, ProcessMode,
     },
     runtime::{Component, InstanceProcessError, InstanceRuntime, Process, Processor},
     schema::{ComponentId, ComponentSchema, ComponentSchemaError, StateSchemaVersion},
@@ -126,7 +127,7 @@ fn render(runtime: &mut InstanceRuntime<Gain>, events: &[ParameterEvent]) -> [f6
     ];
     let context = ProcessContext::new(
         ProcessMode::Realtime,
-        TransportSnapshot::unknown(),
+        &TransportSnapshot::UNKNOWN,
         ParameterEvents::new(events, 4, 8).unwrap(),
     );
     runtime.process(4, context, &mut channels).unwrap();
@@ -263,7 +264,7 @@ fn invalid_batch_cannot_partially_retain_valid_endpoints() {
         ];
         let context = ProcessContext::new(
             ProcessMode::Realtime,
-            TransportSnapshot::unknown(),
+            &TransportSnapshot::UNKNOWN,
             ParameterEvents::new(&events, 4, 8).unwrap(),
         );
         assert_eq!(

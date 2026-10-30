@@ -1,6 +1,6 @@
 # Events, Notes, MIDI, and Transport
 
-Status: semantic notes, seven native expressions, opaque MIDI 1/SysEx and MIDI 2/UMP, bounded shared output, source-defined mixed ordering, and parameter automation/global float modulation are implemented in core and projected through CLAP. Per-note parameter modulation and span processing remain design direction; public API is not frozen.
+Status: semantic notes, seven native expressions, opaque MIDI 1/SysEx and MIDI 2/UMP, bounded shared output, source-defined mixed ordering, parameter automation/global float modulation, and musical block-start transport are implemented in core and projected through CLAP. Per-note parameter modulation and span processing remain design direction; public API is not frozen.
 
 ## Goal
 
@@ -41,20 +41,27 @@ Output events are emitted in the order required by the target backend; Chassis r
 
 ## Transport
 
-The current `TransportSnapshot` exposes optional playing, recording, tempo, and sample position. CLAP currently maps the first three and leaves sample position unavailable. It does not yet expose beats, bars, time signatures, looping, or pre-roll.
+`chassis_runtime::transport` owns validated `TransportSnapshot` observations. `TransportValues` is the candidate input; `TransportSnapshot::new` validates it, and `values()` borrows the immutable result. `ProcessContext` borrows the snapshot for one callback, just as it borrows event streams. `TransportSnapshot::UNKNOWN` supplies an all-unavailable observation without allocation or an inferred clock.
 
-The intended broader block-start snapshot retains explicit availability for every field:
+The block-start fields are independently optional:
 
-- play/record/pre-roll state where available;
-- tempo;
-- song/sample/beat position;
-- time signature;
-- bar information;
-- loop/cycle range/state.
+- play, record, loop-active, and recording-pre-roll state;
+- tempo in quarter notes per minute, and source-supplied tempo increment in BPM per sample;
+- project position in samples, seconds, and quarter notes;
+- time-signature numerator/denominator, current bar start in quarter notes, and zero-based bar number;
+- loop endpoints in quarter notes and seconds.
 
-Do not imply intra-block transport changes universally. Core CLAP `clap_process` supplies a transport snapshot at sample zero and a sample-sorted event list; VST3 provides `ProcessContext` separately for the process call. If a backend/extension genuinely supplies timestamped transport changes, Chassis may expose them as a capability-specific timed source.
+BPM alone cannot recover song phase after seeking or looping. Ordinary song-synced LFOs and sequencers need the host's musical position; the [Surge LFO](https://github.com/surge-synthesizer/surge/blob/main/src/common/dsp/modulators/LFOModulationSource.cpp) uses it for freerun phase. [JUCE's `PositionInfo`](https://docs.juce.com/master/classAudioPlayHead_1_1PositionInfo.html) likewise distinguishes optional timelines, meter, bars, and loop points. These are existing audio-software needs, not a requirement to invent a new Chassis client product.
 
-Products needing only ordinary synchronization read the block snapshot. Products requiring intra-block tempo/transport changes can declare/check that capability rather than receiving fabricated events.
+Positions may be negative during pre-roll or before the project origin. Beats always mean quarter notes, including in meters such as 7/8. Stopped is distinct from unavailable, and an inactive loop can retain known endpoints. Each callback is a fresh observation: no accumulation, automatic seek detection, beat-to-second conversion, or inferred bar geometry. No default 120 BPM or 4/4 is fabricated. Tempo increments require an available positive tempo; absence of an increment does not assert constant tempo. Validation rejects non-finite floating positions/tempo/slope, nonpositive tempo, zero meter components, and reversed or non-finite loop ranges; equal loop endpoints are allowed. It does not require a power-of-two denominator or nonnegative timeline.
+
+CLAP's [transport flags and fields](https://github.com/free-audio/clap/blob/main/include/clap/events.h) control availability. `HAS_TEMPO` supplies BPM/increment; `HAS_BEATS_TIMELINE` supplies song/bar beat fields; `HAS_SECONDS_TIMELINE` supplies song seconds; `HAS_TIME_SIGNATURE` supplies meter. Loop ranges additionally require `IS_LOOP_ACTIVE` and the corresponding timeline flag. CLAP does not establish the validity of inactive endpoints: the pinned validator deliberately poisons them and [NIH-plug's CLAP projection](https://github.com/robbert-vdh/nih-plug/blob/master/src/wrapper/clap/wrapper.rs) also gates their availability on active looping. Core applications may provide known inactive endpoints, but CLAP leaves them unavailable rather than interpreting unspecified storage. Present transport supplies known Boolean states; a null pointer makes every field unavailable.
+
+Malformed available meter, active-loop ranges, or a non-finite slope with a valid tempo reject the callback before DSP. Invalid optional BPM retains the adapter's established recovery behavior: zero, negative, or non-finite BPM and its dependent slope become unavailable, not a fabricated default. The core constructor still rejects invalid supplied BPM. Unavailable fields are not validated. Fixed-point positions become floating semantic units; extreme values may lose sub-unit precision through `f64` rounding.
+
+CLAP has no project-sample-position field. Its [monotonic `steady_time`](https://github.com/free-audio/clap/blob/main/include/clap/process.h) is not song time, and converting rounded seconds to samples would invent precision. Sample position therefore remains unavailable in CLAP even when beat/second timelines are known. Other deployments may supply it independently.
+
+This contract is **block-start only**. CLAP also defines timestamped `CLAP_EVENT_TRANSPORT` updates; they are not exposed by the current input families. A tempo slope is retained as supplied metadata, not a claim that no later update occurs. VST3's separate `ProcessContext` is a mapping reference, not an implemented Chassis deployment. Products requiring intra-block transport changes need a separately qualified timed-source capability; this slice does not supply one. No implicit transport events or source ordering are fabricated.
 
 ## Event ports
 

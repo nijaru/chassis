@@ -19,6 +19,7 @@ mod parameters;
 mod process_audio;
 mod raw_audio;
 mod tail;
+mod transport;
 
 use core::{marker::PhantomData, num::NonZeroU32};
 use std::{
@@ -36,7 +37,7 @@ use chassis_runtime::{
     audio::PortDirection,
     automation::ParameterEvents,
     events::NoteEvents,
-    process::{ProcessConfig, ProcessContext, ProcessMode, TransportSnapshot},
+    process::{ProcessConfig, ProcessContext, ProcessMode},
     runtime::{Component, InstanceRuntime, Process as ChassisProcess, Processor},
     schema::ComponentSchema,
     state::StateLimits,
@@ -55,10 +56,7 @@ use clack_extensions::{
 };
 use clack_plugin::{
     entry::{DefaultPluginFactory, SinglePluginEntry},
-    events::{
-        event_types::{TransportEvent, TransportFlags},
-        io::{InputEvents, OutputEvents},
-    },
+    events::io::{InputEvents, OutputEvents},
     prelude::{
         Audio, ClapId, Events, HostAudioProcessorHandle, HostMainThreadHandle, HostSharedHandle,
         Plugin, PluginAudioConfiguration, PluginAudioProcessor, PluginDescriptor, PluginError,
@@ -898,7 +896,7 @@ where
                 .sync_into(&mut self.runtime)
                 .map_err(|_| PluginError::Message("Invalid CLAP modulation projection"))?;
         }
-        let transport = map_transport(process.transport)?;
+        let transport = transport::map(process.transport)?;
         let mut buffers =
             ClapBufferSource::<S>::new(audio, &self.process_slots, &mut self.audio_scratch)?;
         let frame_count = buffers.frame_count();
@@ -932,7 +930,7 @@ where
         .map_err(|_| PluginError::Message("Invalid CLAP MIDI event stream"))?;
         let context = ProcessContext::with_events(
             self.shared.render.process_mode(),
-            transport,
+            &transport,
             parameter_events,
             note_events,
             midi_events,
@@ -1068,24 +1066,6 @@ fn write_bounded_state(output: &mut OutputStream, encoded: &[u8]) -> Result<(), 
     Ok(())
 }
 
-fn map_transport(transport: Option<&TransportEvent>) -> Result<TransportSnapshot, PluginError> {
-    let Some(transport) = transport else {
-        return Ok(TransportSnapshot::unknown());
-    };
-    let tempo = transport
-        .flags
-        .contains(TransportFlags::HAS_TEMPO)
-        .then_some(transport.tempo)
-        .filter(|tempo| tempo.is_finite() && *tempo > 0.0);
-    TransportSnapshot::new(
-        Some(transport.flags.contains(TransportFlags::IS_PLAYING)),
-        Some(transport.flags.contains(TransportFlags::IS_RECORDING)),
-        tempo,
-        None,
-    )
-    .map_err(|_| PluginError::Message("Invalid CLAP transport metadata"))
-}
-
 fn map_process_config(
     config: PluginAudioConfiguration,
     max_parameter_events: u32,
@@ -1117,30 +1097,6 @@ fn map_process_config(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clack_plugin::{
-        events::{EventFlags, EventHeader},
-        utils::FixedPoint,
-    };
-
-    fn transport(flags: TransportFlags, tempo: f64) -> TransportEvent {
-        TransportEvent {
-            header: EventHeader::new_core(0, EventFlags::empty()),
-            flags,
-            song_pos_beats: FixedPoint::default(),
-            song_pos_seconds: FixedPoint::default(),
-            tempo,
-            tempo_inc: 0.0,
-            loop_start_beats: FixedPoint::default(),
-            loop_end_beats: FixedPoint::default(),
-            loop_start_seconds: FixedPoint::default(),
-            loop_end_seconds: FixedPoint::default(),
-            bar_start: FixedPoint::default(),
-            bar_number: 0,
-            time_signature_numerator: 4,
-            time_signature_denominator: 4,
-        }
-    }
-
     // A MIDI 2-only deployment needs a count bound, not a fictitious SysEx
     // capacity. Exercise instance setup, not just note-port metadata.
     #[derive(Default)]
@@ -1190,6 +1146,7 @@ mod tests {
         )];
         const CLAP_MAX_MIDI_EVENTS: u32 = COUNT;
     }
+
     #[test]
     fn midi2_only_setup_requires_event_capacity_but_no_sysex_capacity() {
         assert!(new_shared::<UmpOnly<0>>().is_err());
@@ -1240,32 +1197,6 @@ mod tests {
                 7,
             )
             .is_err()
-        );
-    }
-
-    #[test]
-    fn maps_optional_transport_and_ignores_invalid_tempo() {
-        assert_eq!(
-            map_transport(None).expect("missing transport is valid"),
-            TransportSnapshot::unknown()
-        );
-
-        let event = transport(
-            TransportFlags::IS_PLAYING | TransportFlags::IS_RECORDING | TransportFlags::HAS_TEMPO,
-            120.0,
-        );
-        let mapped = map_transport(Some(&event)).expect("transport is valid");
-        assert_eq!(mapped.playing(), Some(true));
-        assert_eq!(mapped.recording(), Some(true));
-        assert_eq!(mapped.tempo_bpm(), Some(120.0));
-        assert_eq!(mapped.sample_position(), None);
-
-        let invalid = transport(TransportFlags::HAS_TEMPO, 0.0);
-        assert_eq!(
-            map_transport(Some(&invalid))
-                .expect("invalid optional tempo is ignored")
-                .tempo_bpm(),
-            None
         );
     }
 

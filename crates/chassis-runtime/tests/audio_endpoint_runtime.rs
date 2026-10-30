@@ -9,13 +9,14 @@ use std::{
     },
 };
 
+use chassis_runtime::transport::TransportSnapshot;
 use chassis_runtime::{
     audio::{AudioEndpointError, AudioPortIndex, DEFAULT_EFFECT_CONFIGURATION},
     automation::ParameterEvents,
     buffer::{ChannelBuffer, InputEndpoint, OutputEndpoint},
     process::{
         ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessConfig, ProcessContext,
-        ProcessMode, TransportSnapshot,
+        ProcessMode,
     },
     runtime::{Component, InstanceProcessError, InstanceRuntime, Process, Processor},
 };
@@ -85,7 +86,7 @@ fn process_config() -> ProcessConfig {
 fn process_context(frame_count: u32) -> ProcessContext<'static> {
     ProcessContext::new(
         ProcessMode::Realtime,
-        TransportSnapshot::unknown(),
+        &TransportSnapshot::UNKNOWN,
         ParameterEvents::empty_for_block(frame_count),
     )
 }

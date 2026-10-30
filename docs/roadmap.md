@@ -10,6 +10,7 @@ This roadmap records unfinished capabilities, not a requirement to build every l
 - Direct runtime fixtures for effects, event-only components, a note-driven instrument, multiple outputs, sidechains/layout switching, and dynamic metadata.
 - Complete callback topology validation, alias-classified CLAP buffers, f32/f64 processing, typed parameters/dense choice events, sample-accurate automation, explicit custom-state reactivation, latency/restart, process modes, and bounded scalar telemetry.
 - Explicitly opted-in global additive float modulation, separate held-input lifetime, clamped effective cursors, and resource-safe desired/consumed signal separation in core and CLAP.
+- Validated musical block-start transport: independent timelines, tempo/increment, meter/bar data, loop endpoints/state, and recording pre-roll, with CLAP availability-preserving projection.
 - Descriptor-owned normalized-control and formatting/parsing policy, shared by framework controls and deployment text without changing plain-unit automation/state.
 - Native CLAP deployment for fixed mapped audio configurations, typed parameters, coherent complete state with deferred resource reactivation, automation, render mode, latency, completed tail snapshots, and explicit timed Boolean bypass.
 - Native CLAP note ports, bounded input/output and voice-end feedback, all seven expressions, preserved mixed input order, and an output-only stereo instrument export.
@@ -20,7 +21,7 @@ Core capability is not deployment support or MIDI 2 device/protocol compliance. 
 
 ## Near-term semantic and deployment work
 
-1. Extend per-note parameter modulation, span processing, or other event domains when a concrete client establishes the required semantics; preserve the existing bounded opaque transport without lossy conversion.
+1. Select bounded runtime/authoring gaps from established audio-software requirements and intended framework uses. A user-named client is not a prerequisite; existing software/source and focused workloads can establish the contract. Per-note modulation, parameter gestures, span processing, and timed transport remain independently scoped candidates; preserve existing bounded transport without lossy conversion.
 2. Add prepared adoption/reclamation and background-work lifecycle only when the resource-backed client needs more than reactivation.
 
 Automation completion has one runtime owner; CLAP synchronizes/publishes dense values without replaying events or scanning stable choice identities on the callback. A reviewed local Clack plugin patch returns rejected-process failure without synchronous reporting. Unsupported CLAP event dialects remain explicitly rejected.

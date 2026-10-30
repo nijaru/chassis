@@ -12,6 +12,7 @@ use std::{
     },
 };
 
+use chassis_runtime::transport::{TransportSnapshot, TransportValues};
 use chassis_runtime::{
     audio::{
         AudioIoConfiguration, AudioIoConfigurationError, AudioPortIndex, ChannelLayout,
@@ -22,7 +23,7 @@ use chassis_runtime::{
     parameters::{ParameterDescriptor, ParameterIndex, ParameterValue},
     process::{
         ActivationConfig, ProcessBlock, ProcessBlockError, ProcessBufferSource, ProcessChannel,
-        ProcessConfig, ProcessContext, ProcessMode, TransportSnapshot,
+        ProcessConfig, ProcessContext, ProcessMode,
     },
     runtime::{
         ActivateError, Component, InstanceProcessError, InstanceRuntime, InstanceRuntimeError,
@@ -215,7 +216,7 @@ fn metric(value: &AtomicU32) -> u32 {
 fn process_context(frame_count: u32, mode: ProcessMode) -> ProcessContext<'static> {
     ProcessContext::new(
         mode,
-        TransportSnapshot::unknown(),
+        &TransportSnapshot::UNKNOWN,
         ParameterEvents::empty_for_block(frame_count),
     )
 }
@@ -285,12 +286,15 @@ fn parameter_automation_is_sample_accurate_through_runtime() {
         chassis_runtime::automation::ParameterEvent::linear(3, gain, 0.0),
     ];
     let events = ParameterEvents::new(&raw_events, 4, 8).expect("events are valid");
-    let context = ProcessContext::new(
-        ProcessMode::Realtime,
-        TransportSnapshot::new(Some(true), Some(false), Some(120.0), Some(48_000))
-            .expect("transport snapshot is valid"),
-        events,
-    );
+    let transport = TransportSnapshot::new(TransportValues {
+        playing: Some(true),
+        recording: Some(false),
+        tempo_bpm: Some(120.0),
+        sample_position: Some(48_000),
+        ..TransportValues::default()
+    })
+    .expect("transport snapshot is valid");
+    let context = ProcessContext::new(ProcessMode::Realtime, &transport, events);
 
     let input = [1.0_f32; 4];
     let mut output = [0.0_f32; 4];
@@ -307,8 +311,8 @@ fn parameter_automation_is_sample_accurate_through_runtime() {
 
     assert_samples(&output, &[1.0, 0.5, 0.25, 0.0]);
     assert_eq!(metric(&metrics.process_calls), 1);
-    assert_eq!(context.transport().tempo_bpm(), Some(120.0));
-    assert_eq!(context.transport().sample_position(), Some(48_000));
+    assert_eq!(context.transport().values().tempo_bpm, Some(120.0));
+    assert_eq!(context.transport().values().sample_position, Some(48_000));
 }
 
 #[test]
@@ -324,7 +328,7 @@ fn invalid_parameter_events_never_reach_product_dsp() {
         ParameterEventValue::Float(0.5),
     )];
     let events = ParameterEvents::new(&raw_events, 2, 8).expect("event shape is valid");
-    let context = ProcessContext::new(ProcessMode::Realtime, TransportSnapshot::unknown(), events);
+    let context = ProcessContext::new(ProcessMode::Realtime, &TransportSnapshot::UNKNOWN, events);
     let input = [1.0_f32; 2];
     let mut output = [0.0_f32; 2];
     let mut right = [0.0_f32; 2];

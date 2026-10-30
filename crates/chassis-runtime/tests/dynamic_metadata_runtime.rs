@@ -5,6 +5,7 @@
 
 use std::{convert::Infallible, num::NonZeroU32};
 
+use chassis_runtime::transport::TransportSnapshot;
 use chassis_runtime::{
     audio::{
         AudioIoConfiguration, AudioIoConfigurationSpec, AudioIoPolicy, AudioPortDescriptor,
@@ -18,7 +19,7 @@ use chassis_runtime::{
     },
     process::{
         ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessChannel, ProcessConfig,
-        ProcessContext, ProcessMode, TransportSnapshot,
+        ProcessContext, ProcessMode,
     },
     runtime::{Component, InstanceRuntime, Process, Processor},
     schema::ComponentSchema,
@@ -197,7 +198,7 @@ fn runtime_owned_metadata_resolves_to_dense_process_identities() {
     let note_events = NoteEvents::new(&notes, 4, 8).expect("hosted note events are valid");
     let context = ProcessContext::with_note_events(
         ProcessMode::Realtime,
-        TransportSnapshot::unknown(),
+        &TransportSnapshot::UNKNOWN,
         ParameterEvents::empty_for_block(4),
         note_events,
     );

@@ -9,6 +9,7 @@ use std::{
     },
 };
 
+use chassis_runtime::transport::TransportSnapshot;
 use chassis_runtime::{
     audio::{
         AudioIoConfiguration, AudioPortIndex, ChannelLayout, ConfiguredAudioPort,
@@ -19,7 +20,7 @@ use chassis_runtime::{
     parameters::{ParameterDescriptor, ParameterStore, ParameterValue},
     process::{
         ActivationConfig, ProcessBlock, ProcessBlockError, ProcessBufferSource, ProcessChannel,
-        ProcessConfig, ProcessContext, ProcessMode, TransportSnapshot,
+        ProcessConfig, ProcessContext, ProcessMode,
     },
     runtime::{Component, InstanceRuntime, Process, Processor},
 };
@@ -263,7 +264,7 @@ fn process_uses_durable_base_state() {
     ];
     let context = ProcessContext::new(
         ProcessMode::Realtime,
-        TransportSnapshot::unknown(),
+        &TransportSnapshot::UNKNOWN,
         ParameterEvents::empty_for_block(2),
     );
     runtime
@@ -315,7 +316,7 @@ fn process_source_accepts_noncontiguous_channel_storage() {
     };
     let context = ProcessContext::new(
         ProcessMode::Realtime,
-        TransportSnapshot::unknown(),
+        &TransportSnapshot::UNKNOWN,
         ParameterEvents::empty_for_block(2),
     );
 
