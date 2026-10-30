@@ -55,6 +55,23 @@ These gates do not establish production DAW behavior or representative performan
 
 Hosted workflows and local results are separate evidence. Before publication, hosted jobs were rejected and local checks supplied the interim record. Consult the actual workflow run for the revision under review before claiming Linux/macOS/Windows coverage. The dated validator, host, and benchmark results below are baselines, not automatic qualification of later commits.
 
+### Musical block-start transport — 2026-10-30
+
+At code revision `95ad51326028c8a9d9c22c2f42d5927461b5785e` on macOS 26.6.2 arm64:
+
+- 262 workspace tests, including doctests, passed on stable Rust 1.99.1 and CI-baseline Rust 1.98.0. Formatting, strict all-feature/all-target Clippy on both compilers, warning-denied rustdoc, release workspace build, local Markdown paths, and diff checks passed.
+- Local `cargo-deny` 0.19.0 passed with unused-license-allowance warnings; `cargo-machete` 0.9.1 found no unused dependencies. Dependencies, package versions, audited Clack source, and the pinned validator and its three existing patches are unchanged.
+- Core tests cover independently available signed timelines, known inactive loops, equal endpoints, and rejection of invalid tempo/slope, positions, meter, and loop ranges. Existing runtime callers now borrow validated snapshots rather than copying transport into each context.
+- Three actual process-ABI cases cover every projected field, independent flags, negative/stopped positions, seeks, null transport, unavailable poisoned storage, and no fabricated project sample clock. Invalid optional BPM and its dependent slope become unavailable, preserving the adapter's prior recovery contract. Malformed available meter, active loops, or slope with valid BPM reject before DSP; source fixed-point ordering catches reversed endpoints even when floating projection would collapse them. Accepted and rejected callbacks measured zero allocations/deallocations, and rejection preserved untouched output.
+- Default-Stacked-Borrows Miri `0.1.0 (16d1ffac17 2026-10-26)` passed all three actual ABI cases, including the final fixture lifecycle cleanup. An optional native source-order mutation probe was blocked before `main` in macOS `dyld`, including with `--list`; no failing-before result is claimed. Source was restored before final Miri and Clippy checks.
+- All four rebuilt packaged artifacts passed the unchanged corrected pinned validator and separate five-second, two-worker fuzz runs: conformance **35 passed / 0 failed / 9 skipped**, delayed probe **21 / 0 / 23**, note probe **37 / 0 / 7**, MIDI probe **34 / 0 / 10**.
+
+Qualification corrected loop availability at the adapter: inactive CLAP endpoints are unspecified and deliberately poisoned by the validator. Fuzzing also exposed advertised negative BPM after decreasing ramps; CLAP's header does not specify a positive bound. Retaining the existing optional-BPM recovery, with direct adversarial ABI coverage and strict core validation, resolved this without changing the generator or removing decreasing-tempo coverage.
+
+Hosted [Rust CI](https://github.com/nijaru/chassis/actions/runs/41048341806) and [CLAP Conformance](https://github.com/nijaru/chassis/actions/runs/41048341782) succeeded at this exact code revision. All seven Rust jobs and all three Linux/macOS/Windows CLAP jobs were checked individually. The final fixture ran natively in hosted workspace tests; each CLAP job packaged, validated, and fuzzed all four exports with the unchanged corrected validator.
+
+This qualifies block-start observations, not timestamped `CLAP_EVENT_TRANSPORT` updates, a transport clock engine, or a new format. No production DAW scenario or representative performance run was repeated. This evidence-only follow-up records the code revision above; it does not qualify its own later documentation commit.
+
 ### MIDI 2/UMP transport — 2026-10-30
 
 At code revision `88c884b8e6974de7db433a8759fcc65e3f4b0ff7` on macOS 26.6.2 arm64:
