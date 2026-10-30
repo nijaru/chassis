@@ -7,9 +7,10 @@ use crate::{
     automation::{ParameterEvent, ParameterEvents},
     buffer::{BufferAccessError, BufferRelationship, ChannelBuffer, InputEndpoint, OutputEndpoint},
     events::{
-        EventDialect, EventPortDescriptor, EventPortDirection, NoteEvent, NoteEventKind,
-        NoteEventSink, NoteEvents, NoteOutputError,
+        EventDialect, EventOutputError, EventPortDescriptor, EventPortDirection, EventSink,
+        NoteEvent, NoteEventKind, NoteEvents, OutputEvent,
     },
+    midi::{MidiEvent, MidiEventLimits, MidiEvents, MidiMessage},
     parameters::{ParameterAutomationError, ParameterStore},
     schema::ComponentSchema,
 };
@@ -130,6 +131,8 @@ pub enum InputEventIndex {
     Parameter(u32),
     /// Index in the semantic note stream.
     Note(u32),
+    /// Index in the opaque MIDI 1 stream.
+    Midi(u32),
 }
 
 /// Borrowed event in an authoritative mixed source order.
@@ -139,6 +142,8 @@ pub enum InputEventRef<'a> {
     Parameter(&'a ParameterEvent),
     /// Semantic note operation or expression.
     Note(&'a NoteEvent),
+    /// Opaque MIDI 1 event borrowing its source payload.
+    Midi(MidiEvent<'a>),
 }
 
 impl InputEventRef<'_> {
@@ -148,6 +153,7 @@ impl InputEventRef<'_> {
         match self {
             Self::Parameter(event) => event.offset(),
             Self::Note(event) => event.offset(),
+            Self::Midi(event) => event.offset(),
         }
     }
 }
@@ -157,7 +163,7 @@ impl InputEventRef<'_> {
 pub enum InputEventOrderError {
     /// Families describe different block sizes.
     FrameCountMismatch,
-    /// The order must contain exactly as many indices as both families combined.
+    /// The order must contain exactly as many indices as all families combined.
     EventCountMismatch,
     /// An index is unknown, repeated, or not the next index of its family.
     InvalidIndex {
@@ -177,7 +183,7 @@ impl fmt::Display for InputEventOrderError {
                 formatter.write_str("input families describe different blocks")
             }
             Self::EventCountMismatch => {
-                formatter.write_str("input order does not cover both families")
+                formatter.write_str("input order does not cover all families")
             }
             Self::InvalidIndex { position, event } => write!(
                 formatter,
@@ -191,18 +197,19 @@ impl fmt::Display for InputEventOrderError {
 impl std::error::Error for InputEventOrderError {}
 
 /// Semantic context for one process block.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy)]
 pub struct ProcessContext<'a> {
     mode: ProcessMode,
     transport: TransportSnapshot,
     parameter_events: ParameterEvents<'a>,
     note_events: NoteEvents<'a>,
+    midi_events: MidiEvents<'a>,
     input_order: Option<&'a [InputEventIndex]>,
     parameters_visible: bool,
 }
 
 impl<'a> ProcessContext<'a> {
-    /// Construct process context from backend-normalized values with no note events.
+    /// Construct process context with empty note and MIDI families.
     #[must_use]
     pub const fn new(
         mode: ProcessMode,
@@ -210,14 +217,13 @@ impl<'a> ProcessContext<'a> {
         parameter_events: ParameterEvents<'a>,
     ) -> Self {
         let frame_count = parameter_events.frame_count();
-        Self {
+        Self::with_events(
             mode,
             transport,
             parameter_events,
-            note_events: NoteEvents::empty_for_block(frame_count),
-            input_order: None,
-            parameters_visible: true,
-        }
+            NoteEvents::empty_for_block(frame_count),
+            MidiEvents::empty_for_block(frame_count),
+        )
     }
 
     /// Construct process context with validated semantic note events.
@@ -231,11 +237,32 @@ impl<'a> ProcessContext<'a> {
         parameter_events: ParameterEvents<'a>,
         note_events: NoteEvents<'a>,
     ) -> Self {
+        Self::with_events(
+            mode,
+            transport,
+            parameter_events,
+            note_events,
+            MidiEvents::empty_for_block(parameter_events.frame_count()),
+        )
+    }
+
+    /// Construct context with all input families. Frame/count consistency is
+    /// checked against activation bounds before DSP. Independent streams have
+    /// no total ordering unless one is explicitly supplied with `with_input_order`.
+    #[must_use]
+    pub const fn with_events(
+        mode: ProcessMode,
+        transport: TransportSnapshot,
+        parameter_events: ParameterEvents<'a>,
+        note_events: NoteEvents<'a>,
+        midi_events: MidiEvents<'a>,
+    ) -> Self {
         Self {
             mode,
             transport,
             parameter_events,
             note_events,
+            midi_events,
             input_order: None,
             parameters_visible: true,
         }
@@ -252,19 +279,23 @@ impl<'a> ProcessContext<'a> {
         mut self,
         order: &'a [InputEventIndex],
     ) -> Result<Self, InputEventOrderError> {
-        if self.parameter_events.frame_count() != self.note_events.frame_count() {
+        if self.parameter_events.frame_count() != self.note_events.frame_count()
+            || self.parameter_events.frame_count() != self.midi_events.frame_count()
+        {
             return Err(InputEventOrderError::FrameCountMismatch);
         }
         if self
             .parameter_events
             .len()
             .checked_add(self.note_events.len())
+            .and_then(|count| count.checked_add(self.midi_events.len()))
             != Some(order.len())
         {
             return Err(InputEventOrderError::EventCountMismatch);
         }
         let mut parameters = self.parameter_events.iter().enumerate();
         let mut notes = self.note_events.iter().enumerate();
+        let mut midi = self.midi_events.iter().enumerate();
         let mut previous = None;
         for (position, &event) in order.iter().enumerate() {
             let offset = match event {
@@ -272,6 +303,9 @@ impl<'a> ProcessContext<'a> {
                     (usize::try_from(index).ok() == Some(next)).then_some(event.offset())
                 }),
                 InputEventIndex::Note(index) => notes.next().and_then(|(next, event)| {
+                    (usize::try_from(index).ok() == Some(next)).then_some(event.offset())
+                }),
+                InputEventIndex::Midi(index) => midi.next().and_then(|(next, event)| {
                     (usize::try_from(index).ok() == Some(next)).then_some(event.offset())
                 }),
             }
@@ -286,7 +320,7 @@ impl<'a> ProcessContext<'a> {
     }
 
     /// Withhold parameter trajectories without rebuilding the order or losing
-    /// relative note order. The original borrowed parameter stream stays private.
+    /// relative note/MIDI order. The original parameter stream stays private.
     #[must_use]
     pub const fn without_parameter_events(mut self) -> Self {
         self.parameters_visible = false;
@@ -304,6 +338,7 @@ impl<'a> ProcessContext<'a> {
         let order = self.input_order?;
         let mut parameters = self.parameter_events.iter();
         let mut notes = self.note_events.iter();
+        let mut midi = self.midi_events.iter();
         Some(order.iter().filter_map(move |index| match index {
             InputEventIndex::Parameter(_) => {
                 let event = parameters
@@ -314,6 +349,9 @@ impl<'a> ProcessContext<'a> {
             }
             InputEventIndex::Note(_) => Some(InputEventRef::Note(
                 notes.next().expect("validated input order covers notes"),
+            )),
+            InputEventIndex::Midi(_) => Some(InputEventRef::Midi(
+                midi.next().expect("validated input order covers MIDI"),
             )),
         }))
     }
@@ -349,6 +387,12 @@ impl<'a> ProcessContext<'a> {
     pub const fn note_events(self) -> NoteEvents<'a> {
         self.note_events
     }
+
+    /// Return the validated borrowed MIDI input view.
+    #[must_use]
+    pub const fn midi_events(self) -> MidiEvents<'a> {
+        self.midi_events
+    }
 }
 
 /// Resource bounds/configuration supplied when a processor is activated.
@@ -363,6 +407,8 @@ pub struct ProcessConfig {
     max_parameter_events: u32,
     max_note_events: u32,
     max_output_note_events: u32,
+    midi_input_limits: MidiEventLimits,
+    midi_output_limits: MidiEventLimits,
 }
 
 impl ProcessConfig {
@@ -373,9 +419,10 @@ impl ProcessConfig {
     /// legally issue a zero-frame process call. `max_parameter_events` is the
     /// activation-owned bound for normalized parameter events in one callback;
     /// zero means that the component/adapter accepts no parameter events.
-    /// Semantic note input and output-attempt capacities default to zero; enable
-    /// them with [`Self::with_max_note_events`] and
-    /// [`Self::with_max_output_note_events`].
+    /// Note input/output and MIDI count/byte capacities default to zero; enable
+    /// them with [`Self::with_max_note_events`],
+    /// [`Self::with_max_output_note_events`], [`Self::with_midi_input_limits`],
+    /// and [`Self::with_midi_output_limits`].
     ///
     /// # Errors
     ///
@@ -403,6 +450,8 @@ impl ProcessConfig {
             max_parameter_events,
             max_note_events: 0,
             max_output_note_events: 0,
+            midi_input_limits: MidiEventLimits::new(0, 0),
+            midi_output_limits: MidiEventLimits::new(0, 0),
         })
     }
 
@@ -419,6 +468,33 @@ impl ProcessConfig {
     pub const fn with_max_output_note_events(mut self, maximum: u32) -> Self {
         self.max_output_note_events = maximum;
         self
+    }
+
+    /// Set MIDI input event and aggregate `SysEx` bounds.
+    #[must_use]
+    pub const fn with_midi_input_limits(mut self, limits: MidiEventLimits) -> Self {
+        self.midi_input_limits = limits;
+        self
+    }
+
+    /// Set MIDI output attempt and aggregate `SysEx` bounds. Rejected downstream
+    /// writes do not refund either budget.
+    #[must_use]
+    pub const fn with_midi_output_limits(mut self, limits: MidiEventLimits) -> Self {
+        self.midi_output_limits = limits;
+        self
+    }
+
+    /// Return MIDI input limits (zero by default).
+    #[must_use]
+    pub const fn midi_input_limits(self) -> MidiEventLimits {
+        self.midi_input_limits
+    }
+
+    /// Return MIDI output limits (zero by default).
+    #[must_use]
+    pub const fn midi_output_limits(self) -> MidiEventLimits {
+        self.midi_output_limits
     }
 
     /// Return the note-output attempt budget (zero by default).
@@ -738,10 +814,12 @@ where
     parameters: &'parameters ParameterStore,
     modulation: &'parameters [f64],
     source: &'source mut B,
-    note_sink: Option<&'source mut dyn NoteEventSink>,
+    event_sink: Option<&'source mut dyn EventSink>,
     event_ports: &'parameters [EventPortDescriptor],
     remaining_note_attempts: u32,
-    previous_note_output: Option<u32>,
+    remaining_midi_attempts: u32,
+    remaining_sysex_bytes: u32,
+    previous_output_offset: Option<u32>,
     sample: PhantomData<fn() -> S>,
 }
 
@@ -765,10 +843,12 @@ where
             parameters,
             modulation,
             source,
-            note_sink: None,
+            event_sink: None,
             event_ports: config.schema().event_ports(),
             remaining_note_attempts: config.process().max_output_note_events(),
-            previous_note_output: None,
+            remaining_midi_attempts: config.process().midi_output_limits().max_events(),
+            remaining_sysex_bytes: config.process().midi_output_limits().max_sysex_bytes(),
+            previous_output_offset: None,
             sample: PhantomData,
         })
     }
@@ -804,6 +884,28 @@ where
             return Err(ProcessBlockError::NoteEventCountTooLarge {
                 actual: context.note_events().len(),
                 maximum: process.max_note_events(),
+            });
+        }
+        let midi = context.midi_events();
+        if midi.frame_count() != frame_count {
+            return Err(ProcessBlockError::MidiEventFrameCountMismatch {
+                expected: frame_count,
+                actual: midi.frame_count(),
+            });
+        }
+        let limits = process.midi_input_limits();
+        let maximum = usize::try_from(limits.max_events())
+            .map_err(|_| ProcessBlockError::MidiEventLimitNotRepresentable)?;
+        if midi.len() > maximum {
+            return Err(ProcessBlockError::MidiEventCountTooLarge {
+                actual: midi.len(),
+                maximum: limits.max_events(),
+            });
+        }
+        if midi.sysex_bytes() > limits.max_sysex_bytes() {
+            return Err(ProcessBlockError::MidiSysExBytesTooLarge {
+                actual: midi.sysex_bytes(),
+                maximum: limits.max_sysex_bytes(),
             });
         }
         if let Some(minimum) = process.guaranteed_min_frames()
@@ -869,43 +971,87 @@ where
         self.context.ordered_events()
     }
 
-    pub(crate) fn set_note_sink(&mut self, sink: Option<&'source mut dyn NoteEventSink>) {
-        self.note_sink = sink;
+    /// Return validated MIDI input without copying payloads.
+    #[must_use]
+    pub const fn midi_events(&self) -> MidiEvents<'context> {
+        self.context.midi_events()
     }
 
-    /// Attempt semantic note output. All attempts consume the activation budget,
-    /// including invalid events and target backpressure. Only accepted insertions
-    /// advance the required nondecreasing offset. End feedback addresses INPUT
-    /// note ports; other operations address OUTPUT note ports. Wildcard ports
-    /// remain wildcard and require at least one compatible declared target.
+    pub(crate) fn set_event_sink(&mut self, sink: Option<&'source mut dyn EventSink>) {
+        self.event_sink = sink;
+    }
+
+    /// Attempt semantic note output. All attempts consume the note budget,
+    /// including invalid events and backpressure. End feedback addresses INPUT
+    /// note ports; other notes address OUTPUT note ports. Wildcard ports require
+    /// at least one compatible target. Successful insertions across ALL output
+    /// families must have nondecreasing offsets.
     ///
     /// # Errors
     /// Returns explicit budget, sink, offset/order, or target errors. Nothing is
     /// allocated, retried, or silently dropped by the runtime.
-    pub fn try_push_note_event(&mut self, event: NoteEvent) -> Result<(), NoteOutputError> {
+    pub fn try_push_note_event(&mut self, event: NoteEvent) -> Result<(), EventOutputError> {
         if self.remaining_note_attempts == 0 {
-            return Err(NoteOutputError::LimitExceeded);
+            return Err(EventOutputError::LimitExceeded);
         }
         self.remaining_note_attempts -= 1;
-        let sink = self.note_sink.as_mut().ok_or(NoteOutputError::NoSink)?;
+        self.push_output(OutputEvent::Note(event))
+    }
+
+    /// Attempt opaque MIDI output on a concrete OUTPUT MIDI 1 port. Every call
+    /// consumes a MIDI attempt. `SysEx` bytes are charged before validation/dispatch
+    /// and never refunded, even on target rejection. An over-budget payload is
+    /// not dispatched. Payloads are borrowed only until the sink returns.
+    ///
+    /// # Errors
+    /// Returns count/byte budget, sink, offset/order, or target rejection errors.
+    pub fn try_push_midi_event(&mut self, event: MidiEvent<'_>) -> Result<(), EventOutputError> {
+        if self.remaining_midi_attempts == 0 {
+            return Err(EventOutputError::LimitExceeded);
+        }
+        self.remaining_midi_attempts -= 1;
+        if let MidiMessage::SysEx(bytes) = event.message() {
+            let length =
+                u32::try_from(bytes.len()).map_err(|_| EventOutputError::SysExBytesExceeded)?;
+            self.remaining_sysex_bytes = self
+                .remaining_sysex_bytes
+                .checked_sub(length)
+                .ok_or(EventOutputError::SysExBytesExceeded)?;
+        }
+        self.push_output(OutputEvent::Midi(event))
+    }
+
+    fn push_output(&mut self, event: OutputEvent<'_>) -> Result<(), EventOutputError> {
+        let sink = self.event_sink.as_mut().ok_or(EventOutputError::NoSink)?;
         if event.offset() >= self.frame_count {
-            return Err(NoteOutputError::OffsetOutOfRange);
+            return Err(EventOutputError::OffsetOutOfRange);
         }
         if self
-            .previous_note_output
+            .previous_output_offset
             .is_some_and(|previous| event.offset() < previous)
         {
-            return Err(NoteOutputError::NonMonotonicOffsets);
+            return Err(EventOutputError::NonMonotonicOffsets);
         }
-        let direction = if matches!(event.kind(), NoteEventKind::End { .. }) {
-            EventPortDirection::Input
-        } else {
-            EventPortDirection::Output
+        let (target, direction, dialect) = match event {
+            OutputEvent::Note(note) => (
+                note.kind().address().port(),
+                if matches!(note.kind(), NoteEventKind::End { .. }) {
+                    EventPortDirection::Input
+                } else {
+                    EventPortDirection::Output
+                },
+                EventDialect::Notes,
+            ),
+            OutputEvent::Midi(midi) => (
+                Some(midi.port()),
+                EventPortDirection::Output,
+                EventDialect::Midi1,
+            ),
         };
         let compatible = |port: &EventPortDescriptor| {
-            port.direction == direction && port.dialects.contains(&EventDialect::Notes)
+            port.direction == direction && port.dialects.contains(&dialect)
         };
-        let valid_target = match event.kind().address().port() {
+        let valid_target = match target {
             Some(index) => usize::try_from(index.get())
                 .ok()
                 .and_then(|index| self.event_ports.get(index))
@@ -913,10 +1059,10 @@ where
             None => self.event_ports.iter().any(compatible),
         };
         if !valid_target {
-            return Err(NoteOutputError::TargetRejected);
+            return Err(EventOutputError::TargetRejected);
         }
         sink.try_push(event)?;
-        self.previous_note_output = Some(event.offset());
+        self.previous_output_offset = Some(event.offset());
         Ok(())
     }
 
@@ -1003,6 +1149,29 @@ pub enum ProcessBlockError {
         /// Activation-owned maximum.
         maximum: u32,
     },
+    /// MIDI events were admitted for a different block size.
+    MidiEventFrameCountMismatch {
+        /// Actual block size.
+        expected: u32,
+        /// Admitted block size.
+        actual: u32,
+    },
+    /// MIDI event count bound cannot be represented on this platform.
+    MidiEventLimitNotRepresentable,
+    /// MIDI count exceeds the activation bound, regardless of admission bounds.
+    MidiEventCountTooLarge {
+        /// Admitted event count.
+        actual: usize,
+        /// Activation maximum.
+        maximum: u32,
+    },
+    /// Aggregate `SysEx` bytes exceed the activation bound.
+    MidiSysExBytesTooLarge {
+        /// Admitted bytes.
+        actual: u32,
+        /// Activation maximum.
+        maximum: u32,
+    },
 }
 
 impl fmt::Display for ProcessBlockError {
@@ -1048,6 +1217,21 @@ impl fmt::Display for ProcessBlockError {
                 formatter,
                 "process block has {actual} note events but activation allows {maximum}"
             ),
+            Self::MidiEventFrameCountMismatch { expected, actual } => write!(
+                formatter,
+                "MIDI events were validated for {actual} frames but process block has {expected}"
+            ),
+            Self::MidiEventLimitNotRepresentable => {
+                formatter.write_str("MIDI event limit is not representable")
+            }
+            Self::MidiEventCountTooLarge { actual, maximum } => write!(
+                formatter,
+                "process block has {actual} MIDI events but activation allows {maximum}"
+            ),
+            Self::MidiSysExBytesTooLarge { actual, maximum } => write!(
+                formatter,
+                "process block has {actual} SysEx bytes but activation allows {maximum}"
+            ),
         }
     }
 }
@@ -1065,7 +1249,11 @@ impl std::error::Error for ProcessBlockError {
             | Self::ParameterEventCountTooLarge { .. }
             | Self::NoteEventFrameCountMismatch { .. }
             | Self::NoteEventLimitNotRepresentable
-            | Self::NoteEventCountTooLarge { .. } => None,
+            | Self::NoteEventCountTooLarge { .. }
+            | Self::MidiEventFrameCountMismatch { .. }
+            | Self::MidiEventLimitNotRepresentable
+            | Self::MidiEventCountTooLarge { .. }
+            | Self::MidiSysExBytesTooLarge { .. } => None,
         }
     }
 }

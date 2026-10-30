@@ -16,9 +16,10 @@ use crate::{
     automation::ParameterEventChange,
     buffer::ChannelBuffer,
     events::{
-        EventPortDescriptor, EventPortIndex, EventPortKey, EventPortSchemaError,
-        NoteEventPortError, NoteEventSink, NoteOutputError,
+        EventOutputError, EventPortDescriptor, EventPortIndex, EventPortKey, EventPortSchemaError,
+        EventSink, NoteEventPortError,
     },
+    midi::MidiEventPortError,
     parameters::{
         ParameterEventValueError, ParameterIndex, ParameterStore, ParameterStoreError,
         ParameterValuesMut,
@@ -231,22 +232,22 @@ pub trait Process<S>: Processor {
 /// Realtime-safe product failure with no owned/allocated error payload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessError {
-    /// Essential semantic note output could not complete.
-    NoteOutput(NoteOutputError),
+    /// Essential event output could not complete.
+    EventOutput(EventOutputError),
     /// Product-specific failure described by static text.
     Message(&'static str),
 }
 
-impl From<NoteOutputError> for ProcessError {
-    fn from(error: NoteOutputError) -> Self {
-        Self::NoteOutput(error)
+impl From<EventOutputError> for ProcessError {
+    fn from(error: EventOutputError) -> Self {
+        Self::EventOutput(error)
     }
 }
 
 impl fmt::Display for ProcessError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NoteOutput(error) => error.fmt(formatter),
+            Self::EventOutput(error) => error.fmt(formatter),
             Self::Message(message) => formatter.write_str(message),
         }
     }
@@ -255,7 +256,7 @@ impl fmt::Display for ProcessError {
 impl std::error::Error for ProcessError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::NoteOutput(error) => Some(error),
+            Self::EventOutput(error) => Some(error),
             Self::Message(_) => None,
         }
     }
@@ -426,6 +427,8 @@ pub enum InstanceProcessError {
     InvalidBlock(ProcessBlockError),
     /// Semantic note events targeted invalid event-port capabilities.
     InvalidNoteEvents(NoteEventPortError),
+    /// MIDI input targeted invalid event-port capabilities.
+    InvalidMidiEvents(MidiEventPortError),
     /// Product DSP failed; no endpoints or completed tail were retained.
     Processor(ProcessError),
 }
@@ -439,6 +442,7 @@ impl fmt::Display for InstanceProcessError {
             }
             Self::InvalidBlock(error) => write!(formatter, "invalid process block: {error}"),
             Self::InvalidNoteEvents(error) => write!(formatter, "invalid note events: {error}"),
+            Self::InvalidMidiEvents(error) => write!(formatter, "invalid MIDI events: {error}"),
             Self::Processor(error) => write!(formatter, "processor failed: {error}"),
         }
     }
@@ -451,6 +455,7 @@ impl std::error::Error for InstanceProcessError {
             Self::InvalidAudioEndpoint(error) => Some(error),
             Self::InvalidBlock(error) => Some(error),
             Self::InvalidNoteEvents(error) => Some(error),
+            Self::InvalidMidiEvents(error) => Some(error),
             Self::Processor(error) => Some(error),
         }
     }
@@ -838,8 +843,9 @@ where
     /// Returns [`InstanceProcessError::NotActive`] when inactive,
     /// [`InstanceProcessError::InvalidAudioEndpoint`] for endpoint/configuration
     /// mismatches, [`InstanceProcessError::InvalidBlock`] for callback
-    /// shape/parameter failures, or [`InstanceProcessError::InvalidNoteEvents`]
-    /// for incompatible note-event port capabilities. Product failure returns
+    /// shape/parameter failures, [`InstanceProcessError::InvalidNoteEvents`], or
+    /// [`InstanceProcessError::InvalidMidiEvents`] for incompatible event-port
+    /// capabilities. Product failure returns
     /// [`InstanceProcessError::Processor`] before querying tail or retaining any
     /// endpoints; continued DSP after a product error is not guaranteed.
     ///
@@ -860,7 +866,7 @@ where
         self.process_source_impl(frame_count, context, source, None)
     }
 
-    /// Process with caller-owned bounded semantic note output.
+    /// Process with one caller-owned bounded sink for all output families.
     ///
     /// # Errors
     /// Returns the same validation/product errors as [`Self::process_source`].
@@ -872,7 +878,7 @@ where
         frame_count: u32,
         context: ProcessContext<'_>,
         source: &mut B,
-        sink: &mut dyn NoteEventSink,
+        sink: &mut dyn EventSink,
     ) -> Result<(), InstanceProcessError>
     where
         P: Process<S>,
@@ -886,7 +892,7 @@ where
         frame_count: u32,
         context: ProcessContext<'_>,
         source: &'source mut B,
-        sink: Option<&'source mut dyn NoteEventSink>,
+        sink: Option<&'source mut dyn EventSink>,
     ) -> Result<(), InstanceProcessError>
     where
         P: Process<S>,
@@ -927,6 +933,10 @@ where
             .note_events()
             .validate_ports(schema.event_ports())
             .map_err(InstanceProcessError::InvalidNoteEvents)?;
+        context
+            .midi_events()
+            .validate_ports(schema.event_ports())
+            .map_err(InstanceProcessError::InvalidMidiEvents)?;
         // While custom resources are stale, even otherwise-valid automation can
         // refer to the replacement resources. Keep the first pre-load base state
         // and withhold trajectories; do not let old DSP complete into pending state.
@@ -948,7 +958,7 @@ where
             source,
         )
         .map_err(InstanceProcessError::InvalidBlock)?;
-        block.set_note_sink(sink);
+        block.set_event_sink(sink);
         processor
             .process(&mut block)
             .map_err(InstanceProcessError::Processor)?;

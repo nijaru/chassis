@@ -15,10 +15,11 @@ use chassis_runtime::{
     automation::{ParameterEvent, ParameterEventValue, ParameterEvents},
     buffer::{ChannelBuffer, InputEndpoint, OutputEndpoint},
     events::{
-        EventDialect, EventPortDescriptor, EventPortDirection, EventPortIndex, EventPortKey,
-        NormalizedValue, NoteAddress, NoteEvent, NoteEventKind, NoteEventSink, NoteEvents,
-        NoteExpression, NoteExpressionKind, NoteOutputError,
+        EventDialect, EventFlags, EventOutputError, EventPortDescriptor, EventPortDirection,
+        EventPortIndex, EventPortKey, EventSink, NormalizedValue, NoteAddress, NoteEvent,
+        NoteEventKind, NoteEvents, NoteExpression, NoteExpressionKind, OutputEvent,
     },
+    midi::{MidiEvent, MidiEventLimits, MidiEvents, MidiMessage},
     parameters::{
         ChoiceId, ChoiceIndex, ChoiceOption, ParameterDescriptor, ParameterEventValueError,
         ParameterIndex, ParameterValue, ParameterValueError,
@@ -292,7 +293,7 @@ fn repeated_post_activation_process_calls_do_not_allocate_or_deallocate() {
 
     runtime.deactivate().expect("deactivation succeeds");
     pending_resource_callbacks_do_not_allocate_or_reclaim();
-    native_note_callbacks_do_not_allocate_or_reclaim();
+    mixed_event_callbacks_do_not_allocate_or_reclaim();
 }
 
 fn pending_resource_callbacks_do_not_allocate_or_reclaim() {
@@ -362,8 +363,8 @@ fn pending_resource_callbacks_do_not_allocate_or_reclaim() {
     runtime.deactivate().unwrap();
 }
 
-struct NoteEcho;
-impl Component for NoteEcho {
+struct EventEcho;
+impl Component for EventEcho {
     type Processor = Self;
     type ActivationError = Infallible;
     fn schema(
@@ -380,13 +381,13 @@ impl Component for NoteEcho {
                     EventPortKey::new("notes.in"),
                     "Input",
                     EventPortDirection::Input,
-                    &[EventDialect::Notes],
+                    &[EventDialect::Notes, EventDialect::Midi1],
                 ),
                 EventPortDescriptor::new(
                     EventPortKey::new("notes.out"),
                     "Output",
                     EventPortDirection::Output,
-                    &[EventDialect::Notes],
+                    &[EventDialect::Notes, EventDialect::Midi1],
                 ),
             ],
             vec![ParameterDescriptor::float("gain", "Gain", 0.0, 1.0, 0.5).unwrap()],
@@ -401,8 +402,8 @@ impl Component for NoteEcho {
         Ok(Self)
     }
 }
-impl Processor for NoteEcho {}
-impl Process<f32> for NoteEcho {
+impl Processor for EventEcho {}
+impl Process<f32> for EventEcho {
     fn process<B: ProcessBufferSource<f32> + ?Sized>(
         &mut self,
         block: &mut ProcessBlock<'_, '_, '_, f32, B>,
@@ -426,33 +427,38 @@ impl Process<f32> for NoteEcho {
                     NoteEventKind::End { address }
                 };
                 block.try_push_note_event(NoteEvent::new(event.offset(), kind))?;
+            } else if let InputEventRef::Midi(event) = event {
+                block.try_push_midi_event(event.with_port(EventPortIndex::new(1)))?;
             }
         }
         Ok(())
     }
 }
 
-fn native_note_callbacks_do_not_allocate_or_reclaim() {
-    struct Sink {
-        reject: bool,
-        accepted: u32,
-    }
-    impl NoteEventSink for Sink {
-        fn try_push(&mut self, _: NoteEvent) -> Result<(), NoteOutputError> {
-            if self.reject {
-                return Err(NoteOutputError::Rejected);
-            }
-            self.accepted += 1;
-            Ok(())
+struct CountingEventSink {
+    reject: bool,
+    accepted: u32,
+}
+impl EventSink for CountingEventSink {
+    fn try_push(&mut self, _: OutputEvent<'_>) -> Result<(), EventOutputError> {
+        if self.reject {
+            return Err(EventOutputError::Rejected);
         }
+        self.accepted += 1;
+        Ok(())
     }
-    let mut runtime = InstanceRuntime::for_component(&NoteEcho).unwrap();
+}
+
+fn mixed_event_callbacks_do_not_allocate_or_reclaim() {
+    let mut runtime = InstanceRuntime::for_component(&EventEcho).unwrap();
     runtime
         .activate(
-            &NoteEcho,
+            &EventEcho,
             process_config()
                 .with_max_note_events(2)
-                .with_max_output_note_events(2),
+                .with_max_output_note_events(2)
+                .with_midi_input_limits(MidiEventLimits::new(2, 128))
+                .with_midi_output_limits(MidiEventLimits::new(2, 128)),
             chassis_runtime::audio::AudioIoConfiguration::new(&[]),
         )
         .unwrap();
@@ -478,12 +484,20 @@ fn native_note_callbacks_do_not_allocate_or_reclaim() {
             },
         ),
     ];
+    let payload = [0x80; 128];
+    let midi = [
+        MidiEvent::new(0, EventPortIndex::new(0), MidiMessage::Short([0x90, 60, 0]))
+            .with_flags(EventFlags::new(true, true)),
+        MidiEvent::new(1, EventPortIndex::new(0), MidiMessage::SysEx(&payload)),
+    ];
     let order = [
         InputEventIndex::Parameter(0),
+        InputEventIndex::Midi(0),
         InputEventIndex::Note(0),
         InputEventIndex::Note(1),
+        InputEventIndex::Midi(1),
     ];
-    let mut sink = Sink {
+    let mut sink = CountingEventSink {
         reject: false,
         accepted: 0,
     };
@@ -493,11 +507,12 @@ fn native_note_callbacks_do_not_allocate_or_reclaim() {
     DEALLOCATIONS.store(0, Ordering::Relaxed);
     COUNT_THIS_THREAD.with(|counting| counting.set(true));
     for block in 0..1000 {
-        let context = ProcessContext::with_note_events(
+        let context = ProcessContext::with_events(
             ProcessMode::Realtime,
             TransportSnapshot::unknown(),
             ParameterEvents::new(&parameters, 512, 1).unwrap(),
             NoteEvents::new(&notes, 512, 2).unwrap(),
+            MidiEvents::new(&midi, 512, 2, 128).unwrap(),
         )
         .with_input_order(&order)
         .unwrap();
@@ -510,22 +525,23 @@ fn native_note_callbacks_do_not_allocate_or_reclaim() {
             .process_source_with_output(512, context, &mut source, &mut sink)
             .unwrap();
     }
-    assert_eq!(sink.accepted, 2000);
+    assert_eq!(sink.accepted, 4000);
     sink.reject = true;
     // Essential-output failure uses the same allocation-free error path. Do
     // not continue DSP after this failed run.
-    let context = ProcessContext::with_note_events(
+    let context = ProcessContext::with_events(
         ProcessMode::Realtime,
         TransportSnapshot::unknown(),
         ParameterEvents::new(&parameters, 512, 1).unwrap(),
         NoteEvents::new(&notes, 512, 2).unwrap(),
+        MidiEvents::new(&midi, 512, 2, 128).unwrap(),
     )
     .with_input_order(&order)
     .unwrap();
     assert_eq!(
         runtime.process_source_with_output(512, context, &mut source, &mut sink),
-        Err(InstanceProcessError::Processor(ProcessError::NoteOutput(
-            NoteOutputError::Rejected
+        Err(InstanceProcessError::Processor(ProcessError::EventOutput(
+            EventOutputError::Rejected
         )))
     );
     COUNT_THIS_THREAD.with(|counting| counting.set(false));

@@ -503,19 +503,70 @@ impl NoteEvent {
     }
 }
 
-/// Caller-owned realtime output boundary. Implementations must not allocate or
-/// block, and must copy/consume the event before returning.
-pub trait NoteEventSink {
+/// Portable event annotations, independent of backend bit layouts.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct EventFlags {
+    live: bool,
+    do_not_record: bool,
+}
+
+impl EventFlags {
+    /// Construct portable annotations; both default to false.
+    #[must_use]
+    pub const fn new(live: bool, do_not_record: bool) -> Self {
+        Self {
+            live,
+            do_not_record,
+        }
+    }
+
+    /// Whether the event originated from live input.
+    #[must_use]
+    pub const fn is_live(self) -> bool {
+        self.live
+    }
+
+    /// Whether the source requests that the event not be recorded.
+    #[must_use]
+    pub const fn do_not_record(self) -> bool {
+        self.do_not_record
+    }
+}
+
+/// One output insertion, borrowing MIDI payloads only for the push call.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum OutputEvent<'a> {
+    /// Semantic note operation or expression.
+    Note(NoteEvent),
+    /// Opaque MIDI 1 message or borrowed `SysEx`.
+    Midi(crate::midi::MidiEvent<'a>),
+}
+
+impl OutputEvent<'_> {
+    /// Return the block-relative sample offset.
+    #[must_use]
+    pub const fn offset(self) -> u32 {
+        match self {
+            Self::Note(event) => event.offset(),
+            Self::Midi(event) => event.offset(),
+        }
+    }
+}
+
+/// Caller-owned realtime output boundary shared by all output families.
+/// Implementations must not allocate, deallocate, or block, and must consume/copy
+/// an event before returning. Borrowed `SysEx` must not be retained after the push.
+pub trait EventSink {
     /// Attempt insertion without silently dropping an essential event.
     ///
     /// # Errors
     /// Returns a typed target rejection when insertion cannot complete.
-    fn try_push(&mut self, event: NoteEvent) -> Result<(), NoteOutputError>;
+    fn try_push(&mut self, event: OutputEvent<'_>) -> Result<(), EventOutputError>;
 }
 
-/// Bounded semantic note-output failure. No error owns heap storage.
+/// Bounded event-output failure. No error owns heap storage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NoteOutputError {
+pub enum EventOutputError {
     /// This call has no caller-provided sink.
     NoSink,
     /// All activation-provisioned write attempts have been consumed.
@@ -524,26 +575,29 @@ pub enum NoteOutputError {
     OffsetOutOfRange,
     /// Event offset precedes the last successfully inserted event.
     NonMonotonicOffsets,
-    /// Unknown port, wrong direction, or unsupported note dialect.
+    /// Unknown port, wrong direction, or unsupported dialect.
     TargetRejected,
+    /// `SysEx` payload would exceed the remaining aggregate byte budget.
+    SysExBytesExceeded,
     /// The deployment/host rejected the event.
     Rejected,
 }
 
-impl fmt::Display for NoteOutputError {
+impl fmt::Display for EventOutputError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
-            Self::NoSink => "no note output sink",
-            Self::LimitExceeded => "note output attempt limit exceeded",
-            Self::OffsetOutOfRange => "note output offset outside block",
-            Self::NonMonotonicOffsets => "note output offsets decreased",
-            Self::TargetRejected => "note output target is unsupported",
-            Self::Rejected => "note output sink rejected event",
+            Self::NoSink => "no event output sink",
+            Self::LimitExceeded => "event output attempt limit exceeded",
+            Self::OffsetOutOfRange => "event output offset outside block",
+            Self::NonMonotonicOffsets => "event output offsets decreased",
+            Self::TargetRejected => "event output target is unsupported",
+            Self::SysExBytesExceeded => "MIDI output SysEx byte budget exceeded",
+            Self::Rejected => "event output sink rejected event",
         })
     }
 }
 
-impl std::error::Error for NoteOutputError {}
+impl std::error::Error for EventOutputError {}
 
 /// A semantic note stream targeted an invalid event-port capability.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

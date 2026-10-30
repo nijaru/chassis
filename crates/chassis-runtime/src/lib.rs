@@ -10,6 +10,7 @@ pub mod audio;
 pub mod automation;
 pub mod buffer;
 pub mod events;
+pub mod midi;
 pub mod modulation;
 pub mod parameters;
 pub mod process;
