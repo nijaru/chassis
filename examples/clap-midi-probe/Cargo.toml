@@ -1,0 +1,18 @@
+[package]
+name = "chassis-clap-midi-probe"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "Exported MIDI qualification component for Chassis"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+chassis-runtime.workspace = true
+chassis-clap.workspace = true
+
+[lints]
+workspace = true
