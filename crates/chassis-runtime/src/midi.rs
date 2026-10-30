@@ -2,7 +2,8 @@
 //!
 //! No status/data interpretation, padding normalization, `SysEx` framing, or
 //! conversion to semantic notes occurs here. Payload ownership stays with the
-//! caller; a consumer retaining `SysEx` must make its own copy outside realtime.
+//! caller; a consumer retaining `SysEx` must copy it into independently owned,
+//! bounded storage. A callback copy must use preallocated storage.
 
 use core::fmt;
 

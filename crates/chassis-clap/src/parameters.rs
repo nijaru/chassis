@@ -654,10 +654,14 @@ mod tests {
         output: &mut Vec<ParameterEvent>,
     ) -> Result<(), &'static str> {
         let bound = u32::try_from(output.capacity()).expect("small fixture event bound");
-        let mut scratch =
-            crate::input_events::InputScratch::new(bound, 0, state.maximum_input_events)
-                .expect("small fixture scratch allocation");
-        let notes = crate::notes::ClapNoteConfiguration::new(&[], &[]).expect("empty note schema");
+        let mut scratch = crate::input_events::InputScratch::new(
+            bound,
+            0,
+            state.maximum_input_events,
+            chassis_runtime::midi::MidiEventLimits::default(),
+        )
+        .expect("small fixture scratch allocation");
+        let notes = crate::event_ports::ClapEventPorts::new(&[], &[]).expect("empty note schema");
         let result = scratch.normalize(state, &notes, input, 4);
         *output = scratch.parameters;
         result

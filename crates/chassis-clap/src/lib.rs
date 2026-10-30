@@ -7,8 +7,13 @@
 //! ports, and bounded native-note output including voice-lifetime feedback.
 
 mod audio;
+mod event_ports;
 mod input_events;
+// SysEx loans and immediate egress are contained at this FFI boundary.
+#[allow(unsafe_code)]
+mod midi;
 mod notes;
+mod output_events;
 mod parameters;
 mod process_audio;
 mod raw_audio;
@@ -25,6 +30,7 @@ use std::{
 };
 
 use audio::{ClapAudioConfiguration, ClapProcessSlot};
+use chassis_runtime::midi::{MidiEventLimits, MidiEvents};
 use chassis_runtime::{
     audio::PortDirection,
     automation::ParameterEvents,
@@ -60,8 +66,10 @@ use clack_plugin::{
     stream::{InputStream, OutputStream},
     utils::Cookie,
 };
+use event_ports::ClapEventPorts;
 use input_events::InputScratch;
-use notes::{ClapNoteConfiguration, ClapNoteOutput};
+use midi::ClapMidiInput;
+use output_events::ClapEventOutput;
 use parameters::{ClapStateProjection, ParameterSyncError, StateProjectionError};
 use process_audio::{ClapBufferSource, ClapSample, ClapSamplePrecision, sample_precision};
 
@@ -70,7 +78,7 @@ pub use audio::{ClapAudioPort, DEFAULT_CLAP_AUDIO_PORTS};
 /// Re-export of Clack's CLAP entry macro for Chassis export crates.
 pub use clack_plugin::clack_export_entry;
 /// Explicit CLAP native-note port projection metadata.
-pub use notes::ClapNotePort;
+pub use event_ports::ClapNotePort;
 
 /// CLAP deployment metadata for a Chassis component.
 ///
@@ -110,8 +118,8 @@ pub trait ClapComponent: Component + Default + 'static {
 
     /// Stable CLAP note-port IDs keyed by canonical component event-port key.
     ///
-    /// Every event port requires one mapping. Only native notes/expression are
-    /// supported; MIDI dialects are not implicitly converted.
+    /// Every event port requires one mapping with an explicit supported preference.
+    /// Native notes and MIDI 1/SysEx are preserved without implicit conversion.
     const CLAP_NOTE_PORTS: &'static [ClapNotePort] = &[];
 
     /// Maximum native note/expression input records accepted per callback.
@@ -122,6 +130,18 @@ pub trait ClapComponent: Component + Default + 'static {
     /// Voice-end feedback refers to an input port and does not require an output
     /// port. Products own failure/retry policy within this bound.
     const CLAP_MAX_OUTPUT_NOTE_EVENTS: u32 = 0;
+
+    /// Maximum MIDI 1/SysEx input records per callback.
+    const CLAP_MAX_MIDI_EVENTS: u32 = 0;
+
+    /// Maximum aggregate input `SysEx` bytes per callback.
+    const CLAP_MAX_INPUT_SYSEX_BYTES: u32 = 0;
+
+    /// Maximum MIDI output attempts, including rejected pushes, per callback.
+    const CLAP_MAX_OUTPUT_MIDI_EVENTS: u32 = 0;
+
+    /// Maximum aggregate attempted output `SysEx` bytes per callback.
+    const CLAP_MAX_OUTPUT_SYSEX_BYTES: u32 = 0;
 
     /// Maximum number of known CLAP parameter value events accepted per block.
     ///
@@ -181,7 +201,7 @@ impl RenderState {
 pub struct ChassisShared {
     schema: Arc<ComponentSchema>,
     parameters: Arc<ClapStateProjection>,
-    notes: Arc<ClapNoteConfiguration>,
+    notes: Arc<ClapEventPorts>,
     render: Arc<RenderState>,
     // A completed scalar only: relaxed loads publish no associated payload.
     tail: AtomicU32,
@@ -195,7 +215,7 @@ pub struct ChassisMainThread<'host, C> {
     component: C,
     schema: Arc<ComponentSchema>,
     audio: ClapAudioConfiguration,
-    notes: Arc<ClapNoteConfiguration>,
+    notes: Arc<ClapEventPorts>,
     shared: Arc<ClapStateProjection>,
     render: Arc<RenderState>,
     latency: AtomicU32,
@@ -363,9 +383,11 @@ where
             "CLAP state projection requires semantic component state identity",
         ));
     };
-    let notes = ClapNoteConfiguration::new(schema.event_ports(), C::CLAP_NOTE_PORTS)
-        .map_err(PluginError::from)?;
-    if notes.has_inputs() && C::CLAP_MAX_NOTE_EVENTS == 0 {
+    let notes =
+        ClapEventPorts::new(schema.event_ports(), C::CLAP_NOTE_PORTS).map_err(PluginError::from)?;
+    if notes.has_input_dialect(chassis_runtime::events::EventDialect::Notes)
+        && C::CLAP_MAX_NOTE_EVENTS == 0
+    {
         return Err(PluginError::Message(
             "CLAP note input requires a positive event bound",
         ));
@@ -373,6 +395,18 @@ where
     if C::CLAP_MAX_NOTE_EVENTS > C::CLAP_MAX_INPUT_EVENTS {
         return Err(PluginError::Message(
             "CLAP note event bound exceeds total input event bound",
+        ));
+    }
+    if notes.has_input_dialect(chassis_runtime::events::EventDialect::Midi1)
+        && (C::CLAP_MAX_MIDI_EVENTS == 0 || C::CLAP_MAX_INPUT_SYSEX_BYTES == 0)
+    {
+        return Err(PluginError::Message(
+            "CLAP MIDI input requires positive event and SysEx byte bounds",
+        ));
+    }
+    if C::CLAP_MAX_MIDI_EVENTS > C::CLAP_MAX_INPUT_EVENTS {
+        return Err(PluginError::Message(
+            "CLAP MIDI event bound exceeds total input event bound",
         ));
     }
     if !schema.parameters().is_empty() && C::CLAP_MAX_PARAMETER_EVENTS == 0 {
@@ -458,7 +492,15 @@ where
 {
     let process = map_process_config(audio_config, C::CLAP_MAX_PARAMETER_EVENTS)?
         .with_max_note_events(C::CLAP_MAX_NOTE_EVENTS)
-        .with_max_output_note_events(C::CLAP_MAX_OUTPUT_NOTE_EVENTS);
+        .with_max_output_note_events(C::CLAP_MAX_OUTPUT_NOTE_EVENTS)
+        .with_midi_input_limits(MidiEventLimits::new(
+            C::CLAP_MAX_MIDI_EVENTS,
+            C::CLAP_MAX_INPUT_SYSEX_BYTES,
+        ))
+        .with_midi_output_limits(MidiEventLimits::new(
+            C::CLAP_MAX_OUTPUT_MIDI_EVENTS,
+            C::CLAP_MAX_OUTPUT_SYSEX_BYTES,
+        ));
     let (runtime, activation_custom_generation) =
         projected_runtime(&main_thread.component, shared)?;
 
@@ -466,6 +508,7 @@ where
         C::CLAP_MAX_PARAMETER_EVENTS,
         C::CLAP_MAX_NOTE_EVENTS,
         C::CLAP_MAX_INPUT_EVENTS,
+        process.midi_input_limits(),
     )?;
     let mut control_values = Vec::new();
     control_values
@@ -866,11 +909,23 @@ where
         .map_err(|_| PluginError::Message("Invalid CLAP parameter event stream"))?;
         let note_events = NoteEvents::new(&self.input.notes, frame_count, self.input.maximum_notes)
             .map_err(|_| PluginError::Message("Invalid CLAP note event stream"))?;
-        let context = ProcessContext::with_note_events(
+        let midi_source = ClapMidiInput {
+            input: events.input,
+            records: &self.input.midi,
+        };
+        let midi_events = MidiEvents::new(
+            &midi_source,
+            frame_count,
+            self.input.midi_limits.max_events(),
+            self.input.midi_limits.max_sysex_bytes(),
+        )
+        .map_err(|_| PluginError::Message("Invalid CLAP MIDI event stream"))?;
+        let context = ProcessContext::with_events(
             self.shared.render.process_mode(),
             transport,
             parameter_events,
             note_events,
+            midi_events,
         )
         .with_input_order(&self.input.order)
         .map_err(|_| PluginError::Message("Invalid CLAP mixed input order"))?;
@@ -881,7 +936,7 @@ where
         } else {
             context.without_parameter_events()
         };
-        let mut output = ClapNoteOutput {
+        let mut output = ClapEventOutput {
             configuration: &self.shared.notes,
             output: events.output,
         };

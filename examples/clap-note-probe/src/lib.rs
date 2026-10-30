@@ -109,8 +109,8 @@ impl ClapComponent for NoteProbe {
         &[ClapAudioPort::new(OUTPUT, 71, ChannelLayout::Stereo, None)];
     // Deliberately reverse declaration order: backend and schema indices differ.
     const CLAP_NOTE_PORTS: &'static [ClapNotePort] = &[
-        ClapNotePort::new(SECONDARY, 10),
-        ClapNotePort::new(PRIMARY, 90),
+        ClapNotePort::new(SECONDARY, 10, EventDialect::Notes),
+        ClapNotePort::new(PRIMARY, 90, EventDialect::Notes),
     ];
     const CLAP_PARAMETER_IDS: &'static [(&'static str, u32)] = &[("strike", 7007)];
     const CLAP_MAX_PARAMETER_EVENTS: u32 = 512;
@@ -340,6 +340,11 @@ impl NoteProbeProcessor {
                             return Err(ProcessError::Message("Unsupported note probe trajectory"));
                         }
                     },
+                    InputEventRef::Midi(_) => {
+                        return Err(ProcessError::Message(
+                            "MIDI is not declared by this instrument",
+                        ));
+                    }
                     InputEventRef::Note(event) => {
                         self.note(*event, (base + amount).clamp(0.0, 1.0))?;
                     }

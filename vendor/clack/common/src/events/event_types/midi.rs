@@ -10,6 +10,7 @@ use std::fmt::{Debug, Formatter};
 
 /// A raw MIDI 1.0 event.
 /// This event type can be used to send raw, unprocessed MIDI 1.0 data.
+#[repr(C)]
 #[derive(Copy, Clone)]
 pub struct MidiEvent {
     inner: clap_event_midi,

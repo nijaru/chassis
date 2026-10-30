@@ -1,8 +1,17 @@
 use super::*;
+use crate::output_events::ClapEventOutput;
 use crate::{input_events::InputScratch, parameters::ClapStateProjection};
+use chassis_runtime::events::{
+    EventSink, NormalizedValue, NoteAddress, NoteChannel, NoteEvent, NoteEventKind, NoteExpression,
+    NoteExpressionKind, NoteId, NoteKey, OutputEvent,
+};
+use clack_plugin::events::{
+    Pckn,
+    event_types::{NoteChokeEvent, NoteEndEvent, NoteExpressionEvent, NoteOffEvent, NoteOnEvent},
+};
 use clack_plugin::events::{
     event_types::NoteExpressionType,
-    io::{EventBuffer, InputEvents},
+    io::{EventBuffer, InputEvents, OutputEvents},
 };
 
 const INPUT: EventPortKey = EventPortKey::new("in");
@@ -25,61 +34,108 @@ fn descriptors() -> Vec<EventPortDescriptor> {
     ]
 }
 fn mapping() -> [ClapNotePort; 2] {
-    [ClapNotePort::new(INPUT, 77), ClapNotePort::new(OUTPUT, 77)]
+    [
+        ClapNotePort::new(INPUT, 77, EventDialect::Notes),
+        ClapNotePort::new(OUTPUT, 77, EventDialect::Notes),
+    ]
 }
 
 #[test]
 fn mapping_rejects_incomplete_ambiguous_and_lossy_port_metadata() {
     let schema = descriptors();
-    assert!(ClapNoteConfiguration::new(&schema, &mapping()).is_ok()); // IDs are direction-local.
-    assert!(ClapNoteConfiguration::new(&schema, &mapping()[..1]).is_err());
+    assert!(ClapEventPorts::new(&schema, &mapping()).is_ok()); // IDs are direction-local.
+    assert!(ClapEventPorts::new(&schema, &mapping()[..1]).is_err());
     assert!(
-        ClapNoteConfiguration::new(
+        ClapEventPorts::new(
             &schema,
-            &[ClapNotePort::new(INPUT, 1), ClapNotePort::new(INPUT, 2)]
+            &[
+                ClapNotePort::new(INPUT, 1, EventDialect::Notes),
+                ClapNotePort::new(INPUT, 2, EventDialect::Notes)
+            ]
         )
         .is_err()
     );
     assert!(
-        ClapNoteConfiguration::new(
+        ClapEventPorts::new(
             &schema,
             &[
-                ClapNotePort::new(INPUT, u32::MAX),
-                ClapNotePort::new(OUTPUT, 1)
+                ClapNotePort::new(INPUT, u32::MAX, EventDialect::Notes),
+                ClapNotePort::new(OUTPUT, 1, EventDialect::Notes)
             ]
         )
         .is_err()
     );
     let mut bad = schema.clone();
     bad[0].direction = EventPortDirection::Input;
-    assert!(ClapNoteConfiguration::new(&bad, &mapping()).is_err());
+    assert!(ClapEventPorts::new(&bad, &mapping()).is_err());
     for dialects in [
         vec![EventDialect::Midi1],
         vec![EventDialect::Notes, EventDialect::Midi2],
     ] {
         let mut bad = schema.clone();
         bad[0].dialects = dialects.into();
-        assert!(ClapNoteConfiguration::new(&bad, &mapping()).is_err());
+        assert!(ClapEventPorts::new(&bad, &mapping()).is_err());
     }
     for name in [String::from("hidden\0suffix"), "é".repeat(128)] {
         let mut bad = schema.clone();
         bad[0].name = name.into();
-        assert!(ClapNoteConfiguration::new(&bad, &mapping()).is_err());
+        assert!(ClapEventPorts::new(&bad, &mapping()).is_err());
     }
 }
 
 #[test]
+fn metadata_projects_explicit_preferences_and_per_port_dialects_without_conversion() {
+    let mut schema = descriptors();
+    schema[0].dialects = vec![EventDialect::Midi1].into();
+    schema[1].dialects = vec![EventDialect::Notes, EventDialect::Midi1].into();
+    let mapping = [
+        ClapNotePort::new(INPUT, 77, EventDialect::Midi1),
+        ClapNotePort::new(OUTPUT, 77, EventDialect::Midi1),
+    ];
+    let ports = ClapEventPorts::new(&schema, &mapping).unwrap();
+    let input = ports.info(0, true).unwrap();
+    assert_eq!(
+        input.supported_dialects,
+        NoteDialects::CLAP | NoteDialects::MIDI
+    );
+    assert_eq!(input.preferred_dialect, Some(NoteDialect::Midi));
+    let output = ports.info(0, false).unwrap();
+    assert_eq!(output.supported_dialects, NoteDialects::MIDI);
+    assert_eq!(
+        ports.input_port(0, EventDialect::Notes).unwrap(),
+        EventPortIndex::new(1)
+    );
+    assert_eq!(
+        ports.input_port(0, EventDialect::Midi1).unwrap(),
+        EventPortIndex::new(1)
+    );
+    assert!(
+        ports
+            .mapped_port(EventPortIndex::new(0), false, EventDialect::Notes)
+            .is_err()
+    );
+    assert_eq!(
+        ports
+            .mapped_port(EventPortIndex::new(0), false, EventDialect::Midi1)
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
 fn note_budget_and_total_raw_budget_are_independent() {
-    let config = ClapNoteConfiguration::new(&descriptors(), &mapping()).unwrap();
+    let config = ClapEventPorts::new(&descriptors(), &mapping()).unwrap();
     let parameters = ClapStateProjection::new(&[], &[]).unwrap();
     let events = [NoteOnEvent::new(0, Pckn::new(0_u16, 0_u16, 60_u16, 1_u32), 0.5); 2];
     let input = InputEvents::from_buffer(&events);
-    let mut scratch = InputScratch::new(0, 1, 3).unwrap();
+    let mut scratch =
+        InputScratch::new(0, 1, 3, chassis_runtime::midi::MidiEventLimits::default()).unwrap();
     assert_eq!(
         scratch.normalize(&parameters, &config, &input, 4),
         Err("CLAP note event count exceeds the activation bound")
     );
-    let mut scratch = InputScratch::new(0, 3, 1).unwrap();
+    let mut scratch =
+        InputScratch::new(0, 3, 1, chassis_runtime::midi::MidiEventLimits::default()).unwrap();
     assert_eq!(
         scratch.normalize(&parameters, &config, &input, 4),
         Err("CLAP input event count exceeds the activation bound")
@@ -119,7 +175,7 @@ const EXPRESSIONS: [(NoteExpressionKind, NoteExpressionType, f64); 7] = [
 
 #[test]
 fn native_egress_preserves_each_expression_and_end_uses_the_input_mapping() {
-    let config = ClapNoteConfiguration::new(&descriptors(), &mapping()).unwrap();
+    let config = ClapEventPorts::new(&descriptors(), &mapping()).unwrap();
     let output_address = NoteAddress::new(EventPortIndex::new(0), None, None, None);
     let input_address = NoteAddress::new(
         EventPortIndex::new(1),
@@ -130,26 +186,26 @@ fn native_egress_preserves_each_expression_and_end_uses_the_input_mapping() {
     let mut captured = EventBuffer::with_capacity(16);
     {
         let mut output = OutputEvents::from_buffer(&mut captured);
-        let mut sink = ClapNoteOutput {
+        let mut sink = ClapEventOutput {
             configuration: &config,
             output: &mut output,
         };
         for (kind, _, value) in EXPRESSIONS {
-            sink.try_push(NoteEvent::new(
+            sink.try_push(OutputEvent::Note(NoteEvent::new(
                 0,
                 NoteEventKind::Expression {
                     address: output_address,
                     expression: NoteExpression::new(kind, value).unwrap(),
                 },
-            ))
+            )))
             .unwrap();
         }
-        sink.try_push(NoteEvent::new(
+        sink.try_push(OutputEvent::Note(NoteEvent::new(
             1,
             NoteEventKind::End {
                 address: input_address,
             },
-        ))
+        )))
         .unwrap();
         let concrete_output = NoteAddress::new(
             EventPortIndex::new(0),
@@ -170,7 +226,8 @@ fn native_egress_preserves_each_expression_and_end_uses_the_input_mapping() {
                 address: output_address,
             },
         ] {
-            sink.try_push(NoteEvent::new(2, kind)).unwrap();
+            sink.try_push(OutputEvent::Note(NoteEvent::new(2, kind)))
+                .unwrap();
         }
         let too_large = NoteAddress::new(
             EventPortIndex::new(1),
@@ -179,8 +236,11 @@ fn native_egress_preserves_each_expression_and_end_uses_the_input_mapping() {
             NoteKey::new(60),
         );
         assert_eq!(
-            sink.try_push(NoteEvent::new(1, NoteEventKind::End { address: too_large })),
-            Err(NoteOutputError::Rejected)
+            sink.try_push(OutputEvent::Note(NoteEvent::new(
+                1,
+                NoteEventKind::End { address: too_large }
+            ))),
+            Err(EventOutputError::Rejected)
         );
     }
     for (index, (_, expected, value)) in EXPRESSIONS.into_iter().enumerate() {
