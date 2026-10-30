@@ -1,0 +1,67 @@
+diff --git a/src/tests/rng.rs b/src/tests/rng.rs
+index aa70557..f0876a7 100644
+--- a/src/tests/rng.rs
++++ b/src/tests/rng.rs
+@@ -279,7 +279,12 @@ impl<'a> NoteGenerator<'a> {
+             return None;
+         }
+ 
+-        let note_port_idx = prng.random_range(0..self.config.inputs.len());
++        // This legacy generator has no UMP events. Select only ports for which
++        // it can produce note traffic, retaining original direction-local indices.
++        let note_port_idx = self.config.inputs.iter().enumerate()
++            .filter(|(_, port)| port.supports_clap() || port.supports_midi())
++            .map(|(index, _)| index)
++            .choose(prng)?;
+ 
+         // We could do this in a smarter way to avoid generating impossible event types (like a note
+         // off when there are no active notes), but this should work fine.
+@@ -1050,6 +1055,48 @@ mod native_note_tests {
+     }
+ }
+ 
++#[cfg(test)]
++mod unsupported_dialect_tests {
++    use super::*;
++    use crate::plugin::ext::note_ports::NotePort;
++    use clap_sys::ext::note_ports::{CLAP_NOTE_DIALECT_MIDI, CLAP_NOTE_DIALECT_MIDI2};
++
++    #[test]
++    fn legacy_generator_skips_ump_only_ports_without_renumbering() {
++        let params = ParamInfo::from([(1, Param {
++            name: String::from("Enabled"),
++            module: String::new(),
++            cookie: None,
++            range: 0.0..=1.0,
++            default: 1.0,
++            flags: clap_sys::ext::params::CLAP_PARAM_IS_AUTOMATABLE
++                | clap_sys::ext::params::CLAP_PARAM_IS_STEPPED,
++        })]);
++        for dialects in [
++            vec![CLAP_NOTE_DIALECT_MIDI2],
++            vec![CLAP_NOTE_DIALECT_MIDI2, CLAP_NOTE_DIALECT_MIDI, CLAP_NOTE_DIALECT_MIDI2],
++        ] {
++            let config = NotePortConfig {
++                inputs: dialects.iter().map(|&dialect| NotePort {
++                    supported_dialects: vec![dialect],
++                }).collect(),
++                outputs: vec![],
++            };
++            let mut generator = NoteGenerator::new(&config).with_params(&params).with_inconsistent_events();
++            let mut rng = new_prng();
++            for _ in 0..256 {
++                let event = generator.generate_event(&mut rng, 0);
++                if dialects.len() == 1 {
++                    assert!(event.is_none(), "no supported note dialect to generate");
++                } else {
++                    let Some(Event::Midi(event)) = event else { panic!("expected legacy MIDI on original port 1") };
++                    assert_eq!(event.port_index, 1);
++                }
++            }
++        }
++    }
++}
++
+ impl TransportFuzzer {
+     /// Create a new transport fuzzer.
+     pub fn new() -> Self {

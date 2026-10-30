@@ -13,6 +13,7 @@ git -C "$source_dir" -c core.autocrlf=false fetch --quiet --depth=1 origin "$rev
 git -C "$source_dir" -c core.autocrlf=false checkout --quiet --detach FETCH_HEAD
 git -C "$source_dir" apply "$root/vendor/clap-validator/global-modulation.patch"
 git -C "$source_dir" apply "$root/vendor/clap-validator/native-note-ranges.patch"
+git -C "$source_dir" apply "$root/vendor/clap-validator/midi2-port-selection.patch"
 
 # Keep tool artifacts isolated from the workspace and the user's installed CLI.
 export CARGO_TARGET_DIR="$root/target/clap-validator-build"

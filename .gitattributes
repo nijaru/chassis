@@ -3,3 +3,4 @@
 # Unified diff context intentionally includes a space on empty source lines.
 vendor/clap-validator/global-modulation.patch text eol=lf whitespace=-blank-at-eol
 vendor/clap-validator/native-note-ranges.patch text eol=lf whitespace=-blank-at-eol
+vendor/clap-validator/midi2-port-selection.patch text eol=lf whitespace=-blank-at-eol
