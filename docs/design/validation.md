@@ -47,9 +47,27 @@ On Linux, macOS, and Windows:
 
 The recorded validator baseline is **35 passed, 0 failed, 9 intentional skips** for the conformance artifact. The matrix is configured in CI; successful revision-scoped runs and local checks below establish actual coverage. The exported delayed probe (`examples/clap-delayed-probe`) validates at **21 passed, 0 failed, 23 intentional skips** — the skips are parameter/state cases the no-parameter latency probe does not declare — and passes the same bounded fuzz after flushing subnormal delay-line output to zero (initially caught by the fuzzer as subnormal pass-through).
 
+The native-note instrument (`examples/clap-note-probe`) validates at **37 passed, 0 failed, 7 skipped** and passes the same bounded fuzz. Packaging is shared through [the native packaging script](../../.github/scripts/package-clap.sh); the isolated validator includes the reviewed corrections described below.
+
 These gates do not establish production DAW behavior or representative performance.
 
 Hosted workflows and local results are separate evidence. Before publication, hosted jobs were rejected and local checks supplied the interim record. Consult the actual workflow run for the revision under review before claiming Linux/macOS/Windows coverage. The dated validator, host, and benchmark results below are baselines, not automatic qualification of later commits.
+
+### Native notes, expression, and voice feedback — 2026-10-30
+
+At code revision `8996b83b1bc018bfc4e3e2212c23e757f37f1cb4` on macOS 26.6.2 arm64:
+
+- 234 workspace tests passed on stable Rust 1.99.1 and CI-baseline Rust 1.98.0. Formatting, strict all-feature/all-target Clippy on both compilers, warning-denied rustdoc, local Markdown paths, shell syntax, and release workspace build passed;
+- `cargo deny check` 0.19.0 passed with unused-license-allowance warnings; `cargo machete` 0.9.1 found no unused dependencies. The new first-party fixture has a package-specific AGPL exception, without widening third-party license policy;
+- core tests cover explicit mixed source order versus independent streams, withheld trajectories retaining note order, seven expression domains, bounded caller-owned output, direction/dialect checks, backpressure, and product errors committing neither endpoints nor new tail metadata;
+- actual exported instrument tests cover native metadata and reversed host/schema port order, output-only f32/f64 audio, onset-sensitive mixed controls/expressions, zero-velocity on, exact raw wildcard admission, malformed records and overflow before DSP, original input-port feedback, and essential output rejection. Maximum 1,024-note, 512-parameter/512-note, and 1,024-expression callbacks in both precisions measured zero allocations/deallocations, as did malformed/over-bound rejection;
+- the cross-block voice-end regression failed the earlier per-block debt clearing. Deferred wildcard feedback now survives until a matching live retrigger finishes. The expression round-trip regression failed without Clack's expression-ID decoding correction;
+- default Stacked-Borrows Miri 0.1.0 (`16d1ffac17`, 2026-10-26) passed the native egress cast/round-trip test and seven selected actual-entry ABI cases, including both precisions, strict admission, deferred feedback, and output rejection. Maximum-load tests ran natively, not under Miri; these are focused checks, not whole-workspace or whole-Clack qualification;
+- rebuilt packaged validator results were conformance 35 passed / 0 failed / 9 skipped, delayed probe 21 / 0 / 23, and note probe 37 / 0 / 7. All three five-second, two-worker fuzz runs passed. The unchanged validator pin includes both reviewed generator corrections; its native-expression domain regression failed the original ranges before correction.
+
+Hosted [Rust CI](https://github.com/nijaru/chassis/actions/runs/41000008563) and [CLAP Conformance](https://github.com/nijaru/chassis/actions/runs/41000008593) succeeded at this exact source revision. All seven Rust jobs passed, including Loom and both portable-host jobs. Every Linux/macOS/Windows CLAP matrix job built the isolated corrected validator, packaged all three exports, and passed validation and bounded fuzz.
+
+The [Clack audit](../research/clack-pinned-adapter-audit.md#native-note-boundary--reviewed-2026-10-30) records the same-pin expression layout/decoding delta and unused host-side note-port vtable limitation. No production DAW scenario or representative performance benchmark was rerun. MIDI dialects, per-note parameter modulation, scheduling/activity hints, and prepared resource adoption remain outside this qualification.
 
 ### Tail and timed bypass — 2026-10-30
 
@@ -392,8 +410,8 @@ Retain golden fixtures for every released schema. The current CHSS v1 envelope r
 
 | Host / harness | Platform | Status | Evidence |
 | --- | --- | --- | --- |
-| Clack in-process host harness | Linux/macOS/Windows CI | passed at `9f17ac3`; same revision macOS local | accepted/rejected process allocation and host logging, f32/f64, author control text/buffer rejection, complete custom-state policy/publication, deferred resource restart, lifecycle, active state save, latency, re-entrancy, panic containment |
-| `clap-validator` 0.4.1 | Linux/macOS/Windows CI | passed at `9f17ac3`; same revision macOS local | conformance 35 pass / 0 fail / 9 skip; delayed probe 21 / 0 / 23; both bounded fuzz runs |
+| Clack in-process host harness | Linux/macOS/Windows CI | passed at `8996b83`; same revision macOS local | native notes/expression, mixed input order, bounded output/voice feedback, accepted/rejected callback allocation, f32/f64, complete state/resource transitions, lifecycle, latency/tail/bypass, re-entrancy, panic containment |
+| `clap-validator` 0.4.1 + reviewed generator corrections | Linux/macOS/Windows CI | passed at `8996b83`; same revision macOS local | conformance 35 pass / 0 fail / 9 skip; delayed probe 21 / 0 / 23; note probe 37 / 0 / 7; all three bounded fuzz runs |
 | REAPER 7.79 | macOS arm64 (M3 Max, 48 kHz) | 2026-09-06 baseline | 2026-09-06 headless `-renderproject` qualification: scan + instantiate (FX browser, 5 params enumerated), square `trim` automation render sample-exact against the deterministic reference (value changes land at exact sample offsets 24000/36000), injected-CHSS state load render sample-exact (trim 0.25/0.75; blobs byte-identical to a REAPER-saved blob at 0.5 and validated by the real `StateDocument` decoder), project save while the transport rolled through automation with coherent base state (trim=0.5, not torn) and sample-exact automation replay after reload, no-FX baseline render bit-identical to the source fixture, and PDC alignment: a wet track carrying the exported 64-sample delayed probe (`examples/clap-delayed-probe`) mixes against a dry track as exactly `2*x[i]` for all 48,000 frames — REAPER honored the CLAP latency extension and aligned the delayed DSP sample-exact. Host-quirk recorded: `TrackFX_SetParamNormalized` on an inactive CLAP reports success but delivers no change; the differential shows FabFilter Pro-Q 4 (CLAP) behaving identically while ReaEQ (VST) applies immediately, so this is REAPER's inactive-CLAP delivery behavior, not an adapter defect — the automation path (process events) is sample-exact. |
 | Bitwig | — | not run | production-host re-entrancy confirmation remains useful when available |
 
