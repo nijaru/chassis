@@ -1094,7 +1094,7 @@ mod tests {
             .expect("state encodes");
         let document = StateDocument::decode(&encoded).expect("state decodes");
 
-        assert_eq!(document.product_id(), "com.example.test");
+        assert_eq!(document.component_id(), "com.example.test");
         let restored =
             ClapStateProjection::new(&descriptors, &[("gain", 1), ("steps", 2), ("bypass", 3)])
                 .expect("parameter mapping is valid");

@@ -65,9 +65,9 @@ impl StateMigration for RenameIndex {
     }
     fn migrate(&self, doc: StateDocument) -> Result<StateDocument, Self::Error> {
         // A product migration may rely on the runtime's identity admission.
-        assert_eq!(doc.product_id(), "test.resource-table");
+        assert_eq!(doc.component_id(), "test.resource-table");
         let mut result =
-            StateDocument::new(doc.product_id(), 2).map_err(ComponentStateError::new)?;
+            StateDocument::new(doc.component_id(), 2).map_err(ComponentStateError::new)?;
         for entry in doc.entries() {
             let key = if entry.key() == "parameter/old_index" {
                 "parameter/index"

@@ -130,14 +130,17 @@ impl StateSchemaVersion {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct StateIdentity {
     component: ComponentId,
-    schema: StateSchemaVersion,
+    schema_version: StateSchemaVersion,
 }
 
 impl StateIdentity {
     /// Construct one semantic state identity/version pair.
     #[must_use]
-    pub const fn new(component: ComponentId, schema: StateSchemaVersion) -> Self {
-        Self { component, schema }
+    pub const fn new(component: ComponentId, schema_version: StateSchemaVersion) -> Self {
+        Self {
+            component,
+            schema_version,
+        }
     }
 
     /// Return the stable semantic component identity.
@@ -148,8 +151,8 @@ impl StateIdentity {
 
     /// Return the semantic state-schema version.
     #[must_use]
-    pub const fn schema(&self) -> StateSchemaVersion {
-        self.schema
+    pub const fn schema_version(&self) -> StateSchemaVersion {
+        self.schema_version
     }
 }
 
@@ -387,7 +390,7 @@ mod tests {
 
         let identity = schema.state_identity().expect("identified schema");
         assert_eq!(identity.component().as_str(), "org.nijaru.schema-probe");
-        assert_eq!(identity.schema(), StateSchemaVersion::new(1));
+        assert_eq!(identity.schema_version(), StateSchemaVersion::new(1));
         assert_eq!(
             schema.audio_port_index(&MAIN_INPUT),
             Some(AudioPortIndex::new(0))

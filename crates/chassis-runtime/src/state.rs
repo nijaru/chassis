@@ -1,6 +1,6 @@
 //! Bounded, deterministic semantic state documents.
 //!
-//! This is a pre-release wire-format prototype. It stores product identity and
+//! This is a pre-release wire-format prototype. It stores component identity and
 //! typed values by stable key without coupling persisted bytes to Rust layout.
 //! Decoding and encoding belong to control/non-realtime paths.
 
@@ -10,6 +10,7 @@ use std::{string::String, vec::Vec};
 const MAGIC: &[u8; 4] = b"CHSS";
 const ENVELOPE_VERSION: u16 = 1;
 const RESERVED_FLAGS: u8 = 0;
+const PARAMETER_NAMESPACE: &str = "parameter/";
 
 /// A typed value that can be persisted in a [`StateDocument`].
 #[derive(Debug, Clone, PartialEq)]
@@ -93,6 +94,23 @@ impl StateEntry {
         }
     }
 
+    /// Construct a framework parameter entry from its stable parameter key.
+    ///
+    /// Descriptor/domain validation belongs to complete runtime admission.
+    #[must_use]
+    pub fn parameter(key: &str, value: StateValue) -> Self {
+        Self::new(format!("{PARAMETER_NAMESPACE}{key}"), value)
+    }
+
+    /// Return the stable parameter key for a framework parameter entry.
+    ///
+    /// `Some("")` still identifies the reserved namespace and is rejected as an
+    /// unknown parameter at runtime admission, not treated as custom state.
+    #[must_use]
+    pub fn parameter_key(&self) -> Option<&str> {
+        self.key.strip_prefix(PARAMETER_NAMESPACE)
+    }
+
     pub(crate) fn validate(&self) -> Result<(), StateDocumentError> {
         if self.key.is_empty() {
             return Err(StateDocumentError::EmptyKey);
@@ -118,8 +136,8 @@ impl StateEntry {
 pub struct StateLimits {
     /// Maximum complete encoded document size.
     pub max_total_bytes: usize,
-    /// Maximum UTF-8 product identity length.
-    pub max_product_id_bytes: usize,
+    /// Maximum UTF-8 component identity length.
+    pub max_component_id_bytes: usize,
     /// Maximum number of entries.
     pub max_entries: u32,
     /// Maximum UTF-8 key length.
@@ -132,7 +150,7 @@ impl Default for StateLimits {
     fn default() -> Self {
         Self {
             max_total_bytes: 1024 * 1024,
-            max_product_id_bytes: 1024,
+            max_component_id_bytes: 1024,
             max_entries: 4096,
             max_key_bytes: 4096,
             max_payload_bytes: 1024 * 1024,
@@ -146,42 +164,42 @@ impl Default for StateLimits {
 /// access path. Migrations therefore cannot return invalid semantic values.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StateDocument {
-    product_id: String,
-    product_schema: u32,
+    component_id: String,
+    schema_version: u32,
     entries: Vec<StateEntry>,
 }
 
 impl StateDocument {
-    /// Construct an empty state document for one product schema.
+    /// Construct an empty state document for one component schema.
     ///
     /// # Errors
     ///
-    /// Returns [`StateDocumentError::EmptyProductId`] for an empty identity.
+    /// Returns [`StateDocumentError::EmptyComponentId`] for an empty identity.
     pub fn new(
-        product_id: impl Into<String>,
-        product_schema: u32,
+        component_id: impl Into<String>,
+        schema_version: u32,
     ) -> Result<Self, StateDocumentError> {
-        let product_id = product_id.into();
-        if product_id.is_empty() {
-            return Err(StateDocumentError::EmptyProductId);
+        let component_id = component_id.into();
+        if component_id.is_empty() {
+            return Err(StateDocumentError::EmptyComponentId);
         }
         Ok(Self {
-            product_id,
-            product_schema,
+            component_id,
+            schema_version,
             entries: Vec::new(),
         })
     }
 
-    /// Return the canonical product identity.
+    /// Return the canonical component identity.
     #[must_use]
-    pub fn product_id(&self) -> &str {
-        &self.product_id
+    pub fn component_id(&self) -> &str {
+        &self.component_id
     }
 
-    /// Return the product schema version.
+    /// Return the component schema version.
     #[must_use]
-    pub const fn product_schema(&self) -> u32 {
-        self.product_schema
+    pub const fn schema_version(&self) -> u32 {
+        self.schema_version
     }
 
     /// Return entries in document insertion/decoded order.
@@ -227,7 +245,7 @@ impl StateDocument {
     /// or checked size calculations exceed a configured bound.
     pub fn encode_with_limits(&self, limits: StateLimits) -> Result<Vec<u8>, StateEncodeError> {
         validate_limits(limits)?;
-        validate_product_id(&self.product_id, limits)?;
+        validate_component_id(&self.component_id, limits)?;
         if self.entries.len() > limits.max_entries as usize {
             return Err(StateEncodeError::EntryCountTooLarge {
                 actual: self.entries.len(),
@@ -239,7 +257,7 @@ impl StateDocument {
         entries.sort_unstable_by(|left, right| left.key.as_bytes().cmp(right.key.as_bytes()));
 
         let mut total = HEADER_LEN
-            .checked_add(self.product_id.len())
+            .checked_add(self.component_id.len())
             .ok_or(StateEncodeError::SizeOverflow)?;
         for entry in &entries {
             if entry.key.len() > limits.max_key_bytes {
@@ -274,17 +292,18 @@ impl StateDocument {
             });
         }
 
-        let product_id_len = u16::try_from(self.product_id.len())
-            .map_err(|_| StateEncodeError::ProductIdLengthUnrepresentable(self.product_id.len()))?;
+        let component_id_len = u16::try_from(self.component_id.len()).map_err(|_| {
+            StateEncodeError::ComponentIdLengthUnrepresentable(self.component_id.len())
+        })?;
         let entry_count = u32::try_from(entries.len())
             .map_err(|_| StateEncodeError::EntryCountUnrepresentable(entries.len()))?;
         let mut encoded = Vec::with_capacity(total);
         encoded.extend_from_slice(MAGIC);
         encoded.extend_from_slice(&ENVELOPE_VERSION.to_le_bytes());
-        encoded.extend_from_slice(&product_id_len.to_le_bytes());
-        encoded.extend_from_slice(&self.product_schema.to_le_bytes());
+        encoded.extend_from_slice(&component_id_len.to_le_bytes());
+        encoded.extend_from_slice(&self.schema_version.to_le_bytes());
         encoded.extend_from_slice(&entry_count.to_le_bytes());
-        encoded.extend_from_slice(self.product_id.as_bytes());
+        encoded.extend_from_slice(self.component_id.as_bytes());
 
         for entry in entries {
             let key_len = u16::try_from(entry.key.len())
@@ -335,14 +354,14 @@ impl StateDocument {
         if version != ENVELOPE_VERSION {
             return Err(StateDecodeError::UnsupportedEnvelopeVersion(version));
         }
-        let product_id_len = usize::from(reader.read_u16()?);
-        if product_id_len > limits.max_product_id_bytes {
-            return Err(StateDecodeError::ProductIdTooLarge {
-                actual: product_id_len,
-                maximum: limits.max_product_id_bytes,
+        let component_id_len = usize::from(reader.read_u16()?);
+        if component_id_len > limits.max_component_id_bytes {
+            return Err(StateDecodeError::ComponentIdTooLarge {
+                actual: component_id_len,
+                maximum: limits.max_component_id_bytes,
             });
         }
-        let product_schema = reader.read_u32()?;
+        let schema_version = reader.read_u32()?;
         let entry_count = reader.read_u32()?;
         if entry_count > limits.max_entries {
             return Err(StateDecodeError::EntryCountTooLarge {
@@ -350,12 +369,12 @@ impl StateDocument {
                 maximum: limits.max_entries,
             });
         }
-        let product_id = decode_utf8(reader.take(product_id_len)?)
-            .map_err(StateDecodeError::InvalidProductIdUtf8)?
+        let component_id = decode_utf8(reader.take(component_id_len)?)
+            .map_err(StateDecodeError::InvalidComponentIdUtf8)?
             .to_owned();
-        if product_id.is_empty() {
+        if component_id.is_empty() {
             return Err(StateDecodeError::InvalidDocument(
-                StateDocumentError::EmptyProductId,
+                StateDocumentError::EmptyComponentId,
             ));
         }
         // Each entry needs at least its fixed header. Reject impossible counts
@@ -415,16 +434,16 @@ impl StateDocument {
             ));
         }
         Ok(StateDocument {
-            product_id,
-            product_schema,
+            component_id,
+            schema_version,
             entries,
         })
     }
 
-    /// Migrate this document through adjacent product schema versions.
+    /// Migrate this document through adjacent component schema versions.
     ///
     /// Migrations receive ownership of a temporary document and must return a
-    /// document with the same product identity and the declared next schema.
+    /// document with the same component identity and the declared next schema.
     /// The chain is local to this method; live runtime state is not touched
     /// until a caller accepts the returned document.
     ///
@@ -441,15 +460,15 @@ impl StateDocument {
     where
         M: StateMigration + ?Sized,
     {
-        if self.product_schema > target_schema {
+        if self.schema_version > target_schema {
             return Err(StateMigrationError::SchemaTooNew {
-                actual: self.product_schema,
+                actual: self.schema_version,
                 target: target_schema,
             });
         }
 
-        while self.product_schema < target_schema {
-            let from_schema = self.product_schema;
+        while self.schema_version < target_schema {
+            let from_schema = self.schema_version;
             let mut migration = None;
             let mut ambiguous = false;
             for candidate in migrations
@@ -487,20 +506,20 @@ impl StateDocument {
                 });
             }
 
-            let product_id = self.product_id.clone();
+            let component_id = self.component_id.clone();
             self = migration
                 .migrate(self)
                 .map_err(StateMigrationError::Failed)?;
-            if self.product_id != product_id {
-                return Err(StateMigrationError::ProductIdentityChanged {
-                    expected: product_id,
-                    actual: self.product_id.clone(),
+            if self.component_id != component_id {
+                return Err(StateMigrationError::ComponentIdentityChanged {
+                    expected: component_id,
+                    actual: self.component_id.clone(),
                 });
             }
-            if self.product_schema != migration.to_schema() {
+            if self.schema_version != migration.to_schema() {
                 return Err(StateMigrationError::OutputSchemaMismatch {
                     expected: migration.to_schema(),
-                    actual: self.product_schema,
+                    actual: self.schema_version,
                 });
             }
         }
@@ -508,7 +527,7 @@ impl StateDocument {
     }
 }
 
-/// One adjacent product-schema migration owned by a product.
+/// One adjacent component-schema migration owned by a product.
 ///
 /// Implementations should preserve every entry they do not own. Migrations
 /// run only on temporary, non-realtime state and may return a product-defined
@@ -517,10 +536,10 @@ pub trait StateMigration {
     /// Product-defined migration failure.
     type Error;
 
-    /// Source product schema accepted by this migration.
+    /// Source component schema accepted by this migration.
     fn source_schema(&self) -> u32;
 
-    /// Destination product schema produced by this migration.
+    /// Destination component schema produced by this migration.
     fn to_schema(&self) -> u32;
 
     /// Transform one temporary semantic document.
@@ -531,7 +550,7 @@ pub trait StateMigration {
     fn migrate(&self, document: StateDocument) -> Result<StateDocument, Self::Error>;
 }
 
-/// Failure while traversing a product schema migration chain.
+/// Failure while traversing a component schema migration chain.
 #[derive(Debug)]
 pub enum StateMigrationError<E> {
     /// The document uses a schema newer than the requested target.
@@ -560,11 +579,11 @@ pub enum StateMigrationError<E> {
         /// Declared destination schema version.
         to: u32,
     },
-    /// A migration changed the product identity.
-    ProductIdentityChanged {
-        /// Original product identity.
+    /// A migration changed the component identity.
+    ComponentIdentityChanged {
+        /// Original component identity.
         expected: String,
-        /// Returned product identity.
+        /// Returned component identity.
         actual: String,
     },
     /// A migration returned a schema other than its declared destination.
@@ -608,9 +627,9 @@ where
                     "state migration step {from} to {to} is not adjacent"
                 )
             }
-            Self::ProductIdentityChanged { expected, actual } => write!(
+            Self::ComponentIdentityChanged { expected, actual } => write!(
                 formatter,
-                "state migration changed product identity from {expected:?} to {actual:?}"
+                "state migration changed component identity from {expected:?} to {actual:?}"
             ),
             Self::OutputSchemaMismatch { expected, actual } => write!(
                 formatter,
@@ -632,7 +651,7 @@ where
             | Self::MissingMigration { .. }
             | Self::AmbiguousMigration { .. }
             | Self::InvalidStep { .. }
-            | Self::ProductIdentityChanged { .. }
+            | Self::ComponentIdentityChanged { .. }
             | Self::OutputSchemaMismatch { .. } => None,
         }
     }
@@ -727,29 +746,29 @@ fn payload_array(payload: &[u8], value_type: u8) -> Result<[u8; 8], StateDecodeE
         })
 }
 
-fn validate_product_id(product_id: &str, limits: StateLimits) -> Result<(), StateEncodeError> {
-    if product_id.is_empty() {
-        return Err(StateEncodeError::EmptyProductId);
+fn validate_component_id(component_id: &str, limits: StateLimits) -> Result<(), StateEncodeError> {
+    if component_id.is_empty() {
+        return Err(StateEncodeError::EmptyComponentId);
     }
-    if product_id.len() > limits.max_product_id_bytes {
-        return Err(StateEncodeError::ProductIdTooLarge {
-            actual: product_id.len(),
-            maximum: limits.max_product_id_bytes,
+    if component_id.len() > limits.max_component_id_bytes {
+        return Err(StateEncodeError::ComponentIdTooLarge {
+            actual: component_id.len(),
+            maximum: limits.max_component_id_bytes,
         });
     }
-    if product_id.len() > u16::MAX as usize {
-        return Err(StateEncodeError::ProductIdLengthUnrepresentable(
-            product_id.len(),
+    if component_id.len() > u16::MAX as usize {
+        return Err(StateEncodeError::ComponentIdLengthUnrepresentable(
+            component_id.len(),
         ));
     }
     Ok(())
 }
 
 fn validate_limits(limits: StateLimits) -> Result<(), StateEncodeError> {
-    if limits.max_product_id_bytes > u16::MAX as usize {
+    if limits.max_component_id_bytes > u16::MAX as usize {
         return Err(StateEncodeError::LimitUnrepresentable {
-            field: "max_product_id_bytes",
-            actual: limits.max_product_id_bytes,
+            field: "max_component_id_bytes",
+            actual: limits.max_component_id_bytes,
             maximum: u16::MAX as usize,
         });
     }
@@ -823,8 +842,8 @@ impl<'a> Reader<'a> {
 /// Semantic error while constructing a state document.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StateDocumentError {
-    /// Product identity was empty.
-    EmptyProductId,
+    /// Component identity was empty.
+    EmptyComponentId,
     /// Entry key was empty.
     EmptyKey,
     /// Float value was not finite.
@@ -838,7 +857,9 @@ pub enum StateDocumentError {
 impl fmt::Display for StateDocumentError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::EmptyProductId => formatter.write_str("state product identity must not be empty"),
+            Self::EmptyComponentId => {
+                formatter.write_str("state component identity must not be empty")
+            }
             Self::EmptyKey => formatter.write_str("state entry key must not be empty"),
             Self::NonFiniteFloat => formatter.write_str("state float must be finite"),
             Self::InvalidChoice => formatter.write_str("state choice identity is invalid"),
@@ -861,17 +882,17 @@ pub enum StateEncodeError {
         /// Maximum representable value.
         maximum: usize,
     },
-    /// Product identity was empty.
-    EmptyProductId,
-    /// Product identity exceeded its configured bound.
-    ProductIdTooLarge {
+    /// Component identity was empty.
+    EmptyComponentId,
+    /// Component identity exceeded its configured bound.
+    ComponentIdTooLarge {
         /// Actual byte length.
         actual: usize,
         /// Configured maximum byte length.
         maximum: usize,
     },
-    /// Product identity length exceeded its u16 wire field.
-    ProductIdLengthUnrepresentable(usize),
+    /// Component identity length exceeded its u16 wire field.
+    ComponentIdLengthUnrepresentable(usize),
     /// Entry count exceeded its configured bound.
     EntryCountTooLarge {
         /// Actual entry count.
@@ -921,17 +942,19 @@ impl fmt::Display for StateEncodeError {
                 formatter,
                 "state limit {field}={actual} exceeds wire maximum {maximum}"
             ),
-            Self::EmptyProductId => formatter.write_str("state product identity must not be empty"),
-            Self::ProductIdTooLarge { actual, maximum } => {
+            Self::EmptyComponentId => {
+                formatter.write_str("state component identity must not be empty")
+            }
+            Self::ComponentIdTooLarge { actual, maximum } => {
                 write!(
                     formatter,
-                    "state product identity has {actual} bytes but {maximum} are allowed"
+                    "state component identity has {actual} bytes but {maximum} are allowed"
                 )
             }
-            Self::ProductIdLengthUnrepresentable(length) => {
+            Self::ComponentIdLengthUnrepresentable(length) => {
                 write!(
                     formatter,
-                    "state product identity length {length} cannot fit the wire field"
+                    "state component identity length {length} cannot fit the wire field"
                 )
             }
             Self::EntryCountTooLarge { actual, maximum } => {
@@ -1006,8 +1029,8 @@ pub enum StateDecodeError {
     InvalidMagic,
     /// Envelope version is unsupported.
     UnsupportedEnvelopeVersion(u16),
-    /// Product identity exceeded its configured bound.
-    ProductIdTooLarge {
+    /// Component identity exceeded its configured bound.
+    ComponentIdTooLarge {
         /// Actual byte length.
         actual: usize,
         /// Configured maximum byte length.
@@ -1027,8 +1050,8 @@ pub enum StateDecodeError {
         /// Maximum entry count supported by the remaining encoded bytes.
         maximum: usize,
     },
-    /// Product identity was not UTF-8.
-    InvalidProductIdUtf8(Utf8Error),
+    /// Component identity was not UTF-8.
+    InvalidComponentIdUtf8(Utf8Error),
     /// Entry key was not UTF-8.
     InvalidKeyUtf8(Utf8Error),
     /// Text/choice value was not UTF-8.
@@ -1090,10 +1113,10 @@ impl fmt::Display for StateDecodeError {
             Self::UnsupportedEnvelopeVersion(version) => {
                 write!(formatter, "state envelope version {version} is unsupported")
             }
-            Self::ProductIdTooLarge { actual, maximum } => {
+            Self::ComponentIdTooLarge { actual, maximum } => {
                 write!(
                     formatter,
-                    "state product identity has {actual} bytes but {maximum} are allowed"
+                    "state component identity has {actual} bytes but {maximum} are allowed"
                 )
             }
             Self::EntryCountTooLarge { actual, maximum } => {
@@ -1106,9 +1129,9 @@ impl fmt::Display for StateDecodeError {
                 formatter,
                 "state declares {actual} entries but input can contain at most {maximum} headers"
             ),
-            Self::InvalidProductIdUtf8(error) => write!(
+            Self::InvalidComponentIdUtf8(error) => write!(
                 formatter,
-                "state product identity is invalid UTF-8: {error}"
+                "state component identity is invalid UTF-8: {error}"
             ),
             Self::InvalidKeyUtf8(error) => write!(formatter, "state key is invalid UTF-8: {error}"),
             Self::InvalidValueUtf8(error) => {
@@ -1150,7 +1173,18 @@ impl fmt::Display for StateDecodeError {
     }
 }
 
-impl std::error::Error for StateDecodeError {}
+impl std::error::Error for StateDecodeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InvalidLimits(error) => Some(error),
+            Self::InvalidDocument(error) => Some(error),
+            Self::InvalidComponentIdUtf8(error)
+            | Self::InvalidKeyUtf8(error)
+            | Self::InvalidValueUtf8(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -1171,7 +1205,7 @@ mod tests {
         }
 
         fn migrate(&self, document: StateDocument) -> Result<StateDocument, Self::Error> {
-            let mut migrated = StateDocument::new(document.product_id().to_owned(), 2)
+            let mut migrated = StateDocument::new(document.component_id().to_owned(), 2)
                 .expect("source identity is valid");
             for entry in document.entries() {
                 let key = if entry.key() == "parameter/old_gain" {
@@ -1428,8 +1462,8 @@ mod tests {
         let migrated = document
             .migrate_to(2, &[&migration])
             .expect("adjacent migration succeeds");
-        assert_eq!(migrated.product_schema(), 2);
-        assert_eq!(migrated.product_id(), "com.example.test");
+        assert_eq!(migrated.schema_version(), 2);
+        assert_eq!(migrated.component_id(), "com.example.test");
         assert_eq!(
             migrated.entries(),
             &[

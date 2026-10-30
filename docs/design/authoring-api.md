@@ -181,7 +181,11 @@ let bytes = runtime.encode_state(limits)?;
 runtime.apply_state_bytes(&component, &bytes, limits)?;
 ```
 
-`Component` supplies custom defaults, complete validation, and registered adjacent migrations; the default policy rejects custom fields. Descriptor defaults remain parameter authority. Loads are complete replacements, not merges with defaults/live state. Product custom fields remain semantic entries rather than arbitrary Rust-layout serialization.
+`Component` supplies custom defaults, complete validation, and registered adjacent migrations; the default policy rejects custom fields. Descriptor defaults remain parameter authority. Loads are complete replacements, not merges with defaults/live state. Custom fields remain semantic entries rather than arbitrary Rust-layout serialization.
+
+The runtime alone exports/applies complete instance state. `ParameterStore` remains a typed control-value store with no independent persistence/patch API. Use `StateDocument::component_id()` / `schema_version()` to inspect documents and `StateIdentity::schema_version()` to inspect the declared target. `StateEntry::parameter` and `parameter_key` own the reserved parameter namespace for adapters and document tooling.
+
+Match `StateExportError` for export construction/encoding, `StateValidationError` for complete document admission, and `StateLoadError::{Decode, Migration, Validation}` for byte loads. Validation exposes identity, parameter completeness/domain, and component-policy evidence directly rather than through parameter-state wrapper layers; nested concrete failures remain available through `Error::source`.
 
 An accepted active custom-state replacement freezes the pre-load DSP base/modulation controls and withholds trajectories until reactivation; base automation is discarded, while modulation updates only the desired external signal; desired replacement state remains saveable. Use complete loads for coupled non-realtime edits. Direct parameter edits and automation enforce descriptor domains only; activation rechecks product relationships and processors must handle legal automation safely with current resources.
 

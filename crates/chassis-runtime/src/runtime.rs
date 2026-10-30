@@ -36,8 +36,7 @@ mod audio_buffers;
 mod semantic_state;
 
 pub use semantic_state::{
-    ComponentStateError, InstanceSemanticStateError, InstanceSemanticStateLoadError,
-    InstanceStateError, InstanceStateExportError,
+    ComponentStateError, StateExportError, StateLoadError, StateValidationError,
 };
 
 use audio_buffers::AudioBufferValidation;
@@ -285,7 +284,7 @@ pub enum InstanceRuntimeError {
     /// The component's immutable event-port schema failed validation.
     InvalidEventPorts(EventPortSchemaError),
     /// Default complete state failed framework or component validation.
-    InvalidState(InstanceSemanticStateError),
+    InvalidState(StateValidationError),
 }
 
 fn runtime_schema_error(error: ComponentSchemaError) -> InstanceRuntimeError {

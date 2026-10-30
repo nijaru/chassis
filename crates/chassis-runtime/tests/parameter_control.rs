@@ -8,7 +8,7 @@ use chassis_runtime::{
     },
     process::{ActivationConfig, ProcessConfig},
     runtime::{Component, InstanceRuntime, Processor},
-    schema::{ComponentSchema, ComponentSchemaError},
+    schema::{ComponentId, ComponentSchema, ComponentSchemaError, StateSchemaVersion},
     state::StateEntry,
 };
 use core::{convert::Infallible, fmt, num::NonZeroU32};
@@ -55,9 +55,12 @@ fn author_mapping_units_precision_and_plain_state_are_one_policy() {
             .with_control_policy(TrimControl { precision: 1 })
             .is_err()
     );
-    let mut store = ParameterStore::new(&[descriptor]).unwrap();
-    store.set("trim", ParameterValue::Float(0.25)).unwrap();
-    let document = store.state_document("test.controls", 1).unwrap();
+    let mut runtime = InstanceRuntime::for_component(&Definition(1)).unwrap();
+    runtime
+        .parameters_mut()
+        .set("trim", ParameterValue::Float(0.25))
+        .unwrap();
+    let document = runtime.state_document().unwrap();
     assert!(
         document
             .entries()
@@ -283,7 +286,11 @@ impl Component for Definition {
     type Processor = Dsp;
     type ActivationError = Infallible;
     fn schema(&self) -> Result<ComponentSchema, ComponentSchemaError> {
-        ComponentSchema::stereo_effect(vec![trim(self.0)])
+        ComponentSchema::stereo_effect_with_state(
+            ComponentId::new("test.controls").unwrap(),
+            StateSchemaVersion::new(1),
+            vec![trim(self.0)],
+        )
     }
     fn activate(
         &self,

@@ -14,7 +14,7 @@ use chassis_runtime::{
     process::{ActivationConfig, ProcessConfig, ProcessContext, ProcessMode},
     runtime::{
         ActivateError, Component, ComponentStateError, InstanceRuntime, InstanceRuntimeError,
-        InstanceSemanticStateError,
+        StateValidationError,
     },
     state::{StateDocument, StateEntry, StateLimits, StateValue},
 };
@@ -336,7 +336,7 @@ fn component_migrations_and_schema_admission_are_not_loader_policies() {
     };
     assert!(matches!(
         runtime.apply_state(&drifted, &current),
-        Err(InstanceSemanticStateError::ComponentSchemaMismatch)
+        Err(StateValidationError::ComponentSchemaMismatch)
     ));
     let foreign = StateDocument::new("foreign.component", 1)
         .unwrap()
@@ -397,7 +397,7 @@ fn parameter_only_policy_rejects_custom_state_instead_of_silently_ignoring_it() 
     let before = runtime.state_document().unwrap();
     assert!(matches!(
         runtime.apply_state(&ScalarOnly, &document(0.0, &[2])),
-        Err(InstanceSemanticStateError::Product(
+        Err(StateValidationError::Product(
             ComponentStateError::UnsupportedCustomState
         ))
     ));

@@ -41,7 +41,7 @@ impl StateMigration for RenameGate {
     }
     fn migrate(&self, doc: StateDocument) -> Result<StateDocument, Self::Error> {
         let mut result =
-            StateDocument::new(doc.product_id(), 2).map_err(ComponentStateError::new)?;
+            StateDocument::new(doc.component_id(), 2).map_err(ComponentStateError::new)?;
         for entry in doc.entries() {
             let key = if entry.key() == "parameter/old_gate" {
                 "parameter/gate"

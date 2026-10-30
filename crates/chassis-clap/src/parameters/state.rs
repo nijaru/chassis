@@ -25,16 +25,18 @@ impl ClapStateProjection {
             .publication
             .snapshot_control_into(&mut values)
             .map_err(publication_state_error)?;
-        let mut document =
-            StateDocument::new(identity.component().as_str(), identity.schema().get())
-                .map_err(StateProjectionError::Document)?;
+        let mut document = StateDocument::new(
+            identity.component().as_str(),
+            identity.schema_version().get(),
+        )
+        .map_err(StateProjectionError::Document)?;
         for (binding, value) in self.bindings.iter().zip(values) {
             let state_value = binding
                 .state_value(value)
                 .ok_or(StateProjectionError::InvalidValue)?;
             document
-                .insert(StateEntry::new(
-                    parameter_state_key(binding.descriptor.key().as_str()),
+                .insert(StateEntry::parameter(
+                    binding.descriptor.key().as_str(),
                     state_value,
                 ))
                 .map_err(StateProjectionError::Document)?;
@@ -65,11 +67,11 @@ impl ClapStateProjection {
         document: &StateDocument,
         identity: &StateIdentity,
     ) -> Result<(), StateProjectionError> {
-        if document.product_id() != identity.component().as_str() {
-            return Err(StateProjectionError::ProductIdentityMismatch);
+        if document.component_id() != identity.component().as_str() {
+            return Err(StateProjectionError::ComponentIdentityMismatch);
         }
-        if document.product_schema() != identity.schema().get() {
-            return Err(StateProjectionError::ProductSchemaMismatch);
+        if document.schema_version() != identity.schema_version().get() {
+            return Err(StateProjectionError::SchemaVersionMismatch);
         }
         let mut candidate: Vec<_> = self
             .bindings
@@ -79,7 +81,7 @@ impl ClapStateProjection {
         let mut custom_candidate = Vec::new();
         let mut parameter_entries = 0;
         for entry in document.entries() {
-            let Some(key) = entry.key().strip_prefix("parameter/") else {
+            let Some(key) = entry.parameter_key() else {
                 custom_candidate.push(entry.clone());
                 continue;
             };
@@ -116,12 +118,6 @@ impl ClapStateProjection {
     }
 }
 
-fn parameter_state_key(key: &str) -> String {
-    let mut state_key = String::from("parameter/");
-    state_key.push_str(key);
-    state_key
-}
-
 #[derive(Debug)]
 pub(crate) enum StateProjectionError {
     Document(StateDocumentError),
@@ -129,8 +125,8 @@ pub(crate) enum StateProjectionError {
     PublicationGenerationExhausted,
     InvalidPublicationValueCount,
     Poisoned,
-    ProductIdentityMismatch,
-    ProductSchemaMismatch,
+    ComponentIdentityMismatch,
+    SchemaVersionMismatch,
     UnknownParameter(String),
     IncompleteParameterState { expected: usize, actual: usize },
     InvalidValue,
@@ -148,11 +144,11 @@ impl fmt::Display for StateProjectionError {
                 formatter.write_str("state publication has the wrong value count")
             }
             Self::Poisoned => formatter.write_str("custom-state ownership is poisoned"),
-            Self::ProductIdentityMismatch => {
-                formatter.write_str("state has the wrong product identity")
+            Self::ComponentIdentityMismatch => {
+                formatter.write_str("state has the wrong component identity")
             }
-            Self::ProductSchemaMismatch => {
-                formatter.write_str("state has the wrong product schema")
+            Self::SchemaVersionMismatch => {
+                formatter.write_str("state has the wrong schema version")
             }
             Self::UnknownParameter(key) => write!(formatter, "state names unknown parameter {key}"),
             Self::IncompleteParameterState { expected, actual } => write!(
@@ -163,7 +159,15 @@ impl fmt::Display for StateProjectionError {
         }
     }
 }
-impl std::error::Error for StateProjectionError {}
+impl std::error::Error for StateProjectionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Document(error) => Some(error),
+            Self::Encode(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 fn publication_state_error(error: PublicationError) -> StateProjectionError {
     match error {

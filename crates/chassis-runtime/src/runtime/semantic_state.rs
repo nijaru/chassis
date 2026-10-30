@@ -2,10 +2,13 @@
 
 use super::{Component, FrozenControls, InstanceRuntime, Processor};
 use crate::{
-    parameters::{ParameterStateError, ParameterStore, ParameterStoreError},
+    parameters::{
+        ChoiceId, ParameterStore, ParameterStoreError, ParameterValue, ParameterValueError,
+    },
     schema::ComponentSchemaError,
     state::{
-        StateDecodeError, StateDocument, StateDocumentError, StateLimits, StateMigrationError,
+        StateDecodeError, StateDocument, StateDocumentError, StateEncodeError, StateEntry,
+        StateLimits, StateMigrationError, StateValue,
     },
 };
 use core::fmt;
@@ -47,276 +50,290 @@ impl std::error::Error for ComponentStateError {
     }
 }
 
-/// Failure while exporting complete semantic state through schema-owned identity.
+/// Failure while constructing or encoding complete instance state.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum InstanceStateExportError {
+pub enum StateExportError {
     /// This component schema has no semantic persistence identity.
     MissingStateIdentity,
-    /// Parameter/state document construction or encoding failed.
-    State(ParameterStateError),
+    /// Semantic document construction failed.
+    Document(StateDocumentError),
+    /// Bounded byte encoding failed.
+    Encode(StateEncodeError),
 }
 
-impl fmt::Display for InstanceStateExportError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl fmt::Display for StateExportError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::MissingStateIdentity => {
-                formatter.write_str("component schema has no semantic state identity")
+                f.write_str("component schema has no semantic state identity")
             }
-            Self::State(error) => write!(formatter, "state export failed: {error}"),
+            Self::Document(error) => write!(f, "could not construct state: {error}"),
+            Self::Encode(error) => write!(f, "could not encode state: {error}"),
         }
     }
 }
 
-impl std::error::Error for InstanceStateExportError {
+impl std::error::Error for StateExportError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::MissingStateIdentity => None,
-            Self::State(error) => Some(error),
+            Self::Document(error) => Some(error),
+            Self::Encode(error) => Some(error),
         }
     }
 }
 
-/// Failure while replacing the durable instance's framework-managed parameter state.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum InstanceStateError {
-    /// The component schema has no semantic persistence identity.
+/// Failure while admitting complete component defaults or replacement state.
+#[derive(Debug)]
+pub enum StateValidationError {
+    /// This component schema has no semantic persistence identity.
     MissingStateIdentity,
-    /// Rebuilding the already-validated parameter schema unexpectedly failed.
+    /// The document belongs to another component.
+    ComponentIdentityMismatch {
+        /// Expected component identity.
+        expected: String,
+        /// Actual document identity.
+        actual: String,
+    },
+    /// A document applied without migration uses another schema version.
+    SchemaVersionMismatch {
+        /// Expected schema version.
+        expected: u32,
+        /// Actual document schema version.
+        actual: u32,
+    },
+    /// Rebuilding the validated parameter schema failed.
     InvalidParameters(ParameterStoreError),
-    /// The semantic parameter state was invalid for this product/schema.
-    ParameterState(ParameterStateError),
-    /// A full state document omitted one or more framework-managed parameters.
+    /// The parameter namespace contains an unknown key.
+    UnknownParameter(String),
+    /// A parameter value fails conversion or descriptor validation.
+    InvalidParameterValue {
+        /// Stable parameter key.
+        parameter: String,
+        /// Specific domain/type failure.
+        error: ParameterValueError,
+    },
+    /// A complete document omitted framework-managed parameters.
     IncompleteParameterState {
-        /// Number of parameters required by the current schema.
+        /// Required parameter count.
         expected: usize,
-        /// Number of parameter entries supplied by the document.
+        /// Supplied parameter count.
         actual: usize,
     },
-}
-
-impl fmt::Display for InstanceStateError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::MissingStateIdentity => {
-                formatter.write_str("component schema has no semantic state identity")
-            }
-            Self::InvalidParameters(error) => write!(formatter, "invalid parameters: {error}"),
-            Self::ParameterState(error) => write!(formatter, "invalid parameter state: {error}"),
-            Self::IncompleteParameterState { expected, actual } => write!(
-                formatter,
-                "parameter state contains {actual} parameters but {expected} are required"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for InstanceStateError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::MissingStateIdentity | Self::IncompleteParameterState { .. } => None,
-            Self::InvalidParameters(error) => Some(error),
-            Self::ParameterState(error) => Some(error),
-        }
-    }
-}
-
-/// Failure while validating a complete semantic instance state.
-#[derive(Debug)]
-pub enum InstanceSemanticStateError {
-    /// Framework-managed parameter validation failed.
-    Parameters(InstanceStateError),
     /// The borrowed component no longer describes this instance generation.
     ComponentSchemaMismatch,
     /// The borrowed component returned an invalid schema.
     InvalidComponentSchema(ComponentSchemaError),
-    /// Custom defaults contain invalid, duplicate, or reserved parameter keys.
+    /// Custom defaults contain invalid or duplicate entries.
     InvalidDefaults(StateDocumentError),
-    /// Custom defaults cannot override descriptor-owned parameter values.
+    /// Custom defaults cannot override descriptor-owned parameters.
     ReservedCustomKey(String),
-    /// Product-defined validation of the complete candidate state failed.
+    /// Component-defined complete-state validation failed.
     Product(ComponentStateError),
 }
 
-impl fmt::Display for InstanceSemanticStateError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl fmt::Display for StateValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Parameters(error) => write!(formatter, "invalid parameter state: {error}"),
-            Self::Product(error) => write!(formatter, "invalid product state: {error}"),
+            Self::MissingStateIdentity => {
+                f.write_str("component schema has no semantic state identity")
+            }
+            Self::ComponentIdentityMismatch { expected, actual } => write!(
+                f,
+                "state component identity is {actual:?}, expected {expected:?}"
+            ),
+            Self::SchemaVersionMismatch { expected, actual } => {
+                write!(f, "state schema version is {actual}, expected {expected}")
+            }
+            Self::InvalidParameters(error) => write!(f, "invalid parameters: {error}"),
+            Self::UnknownParameter(key) => write!(f, "unknown parameter {key}"),
+            Self::InvalidParameterValue { parameter, error } => {
+                write!(f, "invalid value for parameter {parameter}: {error}")
+            }
+            Self::IncompleteParameterState { expected, actual } => write!(
+                f,
+                "parameter state contains {actual} parameters but {expected} are required"
+            ),
             Self::ComponentSchemaMismatch => {
-                formatter.write_str("component schema does not match instance")
+                f.write_str("component schema does not match instance")
             }
-            Self::InvalidComponentSchema(error) => error.fmt(formatter),
-            Self::InvalidDefaults(error) => write!(formatter, "invalid custom defaults: {error}"),
-            Self::ReservedCustomKey(key) => {
-                write!(formatter, "custom default uses reserved key {key}")
-            }
+            Self::InvalidComponentSchema(error) => error.fmt(f),
+            Self::InvalidDefaults(error) => write!(f, "invalid custom defaults: {error}"),
+            Self::ReservedCustomKey(key) => write!(f, "custom default uses reserved key {key}"),
+            Self::Product(error) => write!(f, "invalid component state: {error}"),
         }
     }
 }
 
-impl std::error::Error for InstanceSemanticStateError {
+impl std::error::Error for StateValidationError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Parameters(error) => Some(error),
-            Self::Product(error) => Some(error),
-            Self::ComponentSchemaMismatch | Self::ReservedCustomKey(_) => None,
+            Self::InvalidParameters(error) => Some(error),
+            Self::InvalidParameterValue { error, .. } => Some(error),
             Self::InvalidComponentSchema(error) => Some(error),
             Self::InvalidDefaults(error) => Some(error),
+            Self::Product(error) => Some(error),
+            Self::MissingStateIdentity
+            | Self::ComponentIdentityMismatch { .. }
+            | Self::SchemaVersionMismatch { .. }
+            | Self::UnknownParameter(_)
+            | Self::IncompleteParameterState { .. }
+            | Self::ComponentSchemaMismatch
+            | Self::ReservedCustomKey(_) => None,
         }
     }
 }
 
-/// Failure while decoding, migrating, or applying a complete semantic state.
+/// Failure during bounded decode, adjacent migration, or complete validation.
 #[derive(Debug)]
-pub enum InstanceSemanticStateLoadError {
+pub enum StateLoadError {
     /// The encoded state was malformed or exceeded its bounds.
     Decode(StateDecodeError),
-    /// Product-schema migration failed before live state was touched.
+    /// Component-schema migration failed before publication.
     Migration(StateMigrationError<ComponentStateError>),
-    /// The migrated complete state failed framework or product validation.
-    Apply(InstanceSemanticStateError),
+    /// The complete candidate failed framework or component validation.
+    Validation(StateValidationError),
 }
 
-impl fmt::Display for InstanceSemanticStateLoadError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl fmt::Display for StateLoadError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Decode(error) => write!(formatter, "could not decode state: {error}"),
-            Self::Migration(error) => write!(formatter, "could not migrate state: {error}"),
-            Self::Apply(error) => write!(formatter, "could not apply state: {error}"),
+            Self::Decode(error) => write!(f, "could not decode state: {error}"),
+            Self::Migration(error) => write!(f, "could not migrate state: {error}"),
+            Self::Validation(error) => write!(f, "could not validate state: {error}"),
         }
     }
 }
 
-impl std::error::Error for InstanceSemanticStateLoadError {
+impl std::error::Error for StateLoadError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Decode(error) => Some(error),
             Self::Migration(error) => Some(error),
-            Self::Apply(error) => Some(error),
+            Self::Validation(error) => Some(error),
         }
     }
 }
 
 impl<P: Processor> InstanceRuntime<P> {
-    fn semantic_state_identity(&self) -> Option<(String, u32)> {
-        self.schema.state_identity().map(|identity| {
-            (
-                identity.component().as_str().to_owned(),
-                identity.schema().get(),
-            )
-        })
-    }
-
-    /// Build the complete durable semantic state using schema-owned identity.
-    ///
-    /// Framework-managed parameters are emitted from the canonical parameter
-    /// store and validated custom entries are appended. Encoding remains
-    /// deterministic because [`StateDocument`] canonicalizes entry order.
+    /// Build complete durable state using the component schema's identity.
     ///
     /// # Errors
     ///
-    /// Returns [`InstanceStateExportError::MissingStateIdentity`] when this
-    /// component is intentionally identity-less, or wraps a parameter/state
-    /// document error.
-    pub fn state_document(&self) -> Result<StateDocument, InstanceStateExportError> {
-        let (product_id, product_schema) = self
-            .semantic_state_identity()
-            .ok_or(InstanceStateExportError::MissingStateIdentity)?;
-        let mut document = self
-            .parameters
-            .state_document(product_id, product_schema)
-            .map_err(InstanceStateExportError::State)?;
+    /// Returns [`StateExportError`] for missing identity or document failure.
+    pub fn state_document(&self) -> Result<StateDocument, StateExportError> {
+        let identity = self
+            .schema
+            .state_identity()
+            .ok_or(StateExportError::MissingStateIdentity)?;
+        let mut document = StateDocument::new(
+            identity.component().as_str(),
+            identity.schema_version().get(),
+        )
+        .map_err(StateExportError::Document)?;
+        for (descriptor, value) in self.parameters.iter() {
+            document
+                .insert(StateEntry::parameter(
+                    descriptor.key().as_str(),
+                    state_value(value),
+                ))
+                .map_err(StateExportError::Document)?;
+        }
         for entry in &self.custom_state {
             document
                 .insert(entry.clone())
-                .map_err(ParameterStateError::Document)
-                .map_err(InstanceStateExportError::State)?;
+                .map_err(StateExportError::Document)?;
         }
         Ok(document)
     }
 
-    /// Encode complete durable semantic state under schema-owned identity.
+    /// Encode complete durable state under explicit bounds.
     ///
     /// # Errors
     ///
-    /// Returns [`InstanceStateExportError`] if identity, document construction,
-    /// or bounded encoding fails.
-    pub fn encode_state(&self, limits: StateLimits) -> Result<Vec<u8>, InstanceStateExportError> {
-        let document = self.state_document()?;
-        document
+    /// Returns [`StateExportError`] for identity, document, or encoding failure.
+    pub fn encode_state(&self, limits: StateLimits) -> Result<Vec<u8>, StateExportError> {
+        self.state_document()?
             .encode_with_limits(limits)
-            .map_err(ParameterStateError::Encode)
-            .map_err(InstanceStateExportError::State)
+            .map_err(StateExportError::Encode)
     }
 
     fn parameter_state_candidate(
         &self,
         document: &StateDocument,
-        product_id: &str,
-        product_schema: u32,
-    ) -> Result<ParameterStore, InstanceStateError> {
-        let descriptors = self.schema.parameters();
-        let mut candidate =
-            ParameterStore::new(descriptors).map_err(InstanceStateError::InvalidParameters)?;
-        candidate
-            .apply_state_for_product(document, product_id, product_schema)
-            .map_err(InstanceStateError::ParameterState)?;
-
-        let actual = document
-            .entries()
-            .iter()
-            .filter(|entry| entry.key().starts_with("parameter/"))
-            .count();
-        let expected = descriptors.len();
+    ) -> Result<ParameterStore, StateValidationError> {
+        let identity = self
+            .schema
+            .state_identity()
+            .ok_or(StateValidationError::MissingStateIdentity)?;
+        check_identity(document, identity.component().as_str())?;
+        if document.schema_version() != identity.schema_version().get() {
+            return Err(StateValidationError::SchemaVersionMismatch {
+                expected: identity.schema_version().get(),
+                actual: document.schema_version(),
+            });
+        }
+        let mut candidate = ParameterStore::new(self.schema.parameters())
+            .map_err(StateValidationError::InvalidParameters)?;
+        let mut actual = 0;
+        for entry in document.entries() {
+            let Some(key) = entry.parameter_key() else {
+                continue;
+            };
+            if candidate.get(key).is_none() {
+                return Err(StateValidationError::UnknownParameter(key.to_owned()));
+            }
+            let value = parameter_value(entry.value()).map_err(|error| {
+                StateValidationError::InvalidParameterValue {
+                    parameter: key.to_owned(),
+                    error,
+                }
+            })?;
+            candidate.set(key, value).map_err(|error| match error {
+                ParameterStoreError::InvalidValue { parameter, error } => {
+                    StateValidationError::InvalidParameterValue { parameter, error }
+                }
+                error => StateValidationError::InvalidParameters(error),
+            })?;
+            actual += 1;
+        }
+        let expected = self.schema.parameters().len();
         if actual != expected {
-            return Err(InstanceStateError::IncompleteParameterState { expected, actual });
+            return Err(StateValidationError::IncompleteParameterState { expected, actual });
         }
         Ok(candidate)
     }
 
-    /// Replace complete semantic instance state using schema-owned identity.
+    /// Replace complete state after framework and component validation.
     ///
-    /// Framework parameters and custom entries are validated into temporary
-    /// candidates. Product validation sees both candidates, and neither is
-    /// published until every check succeeds. Changed custom state requires a
-    /// new activation to reach DSP: an active instance requests restart while
-    /// retaining its pre-load parameter projection and resources until
-    /// deactivation/reactivation. Parameter events are checked but discarded
-    /// throughout that interval; no old automation endpoints are retained.
+    /// Changed custom state freezes active DSP's pre-load controls/resources
+    /// until reactivation. Desired state remains independently saveable.
     ///
     /// # Errors
     ///
-    /// Returns [`InstanceSemanticStateError`] for missing identity, framework
-    /// state validation failures, or product validation failure. Publication is
-    /// atomic across parameter and custom state.
+    /// Returns [`StateValidationError`] without publishing either state domain
+    /// or changing restart status if any admission check fails.
     pub fn apply_state<C>(
         &mut self,
         component: &C,
         document: &StateDocument,
-    ) -> Result<(), InstanceSemanticStateError>
+    ) -> Result<(), StateValidationError>
     where
         C: Component<Processor = P>,
     {
         self.check_component(component)?;
-        let (product_id, product_schema) =
-            self.semantic_state_identity()
-                .ok_or(InstanceSemanticStateError::Parameters(
-                    InstanceStateError::MissingStateIdentity,
-                ))?;
-        let candidate_parameters = self
-            .parameter_state_candidate(document, &product_id, product_schema)
-            .map_err(InstanceSemanticStateError::Parameters)?;
+        let candidate_parameters = self.parameter_state_candidate(document)?;
         let mut candidate_custom: Vec<_> = document
             .entries()
             .iter()
-            .filter(|entry| !entry.key().starts_with("parameter/"))
+            .filter(|entry| entry.parameter_key().is_none())
             .cloned()
             .collect();
         candidate_custom
             .sort_unstable_by(|left, right| left.key().as_bytes().cmp(right.key().as_bytes()));
         component
             .validate_state(&candidate_parameters, &candidate_custom)
-            .map_err(InstanceSemanticStateError::Product)?;
+            .map_err(StateValidationError::Product)?;
 
         if let Some(active) = &mut self.active {
             if active.frozen_controls.is_none() && self.custom_state != candidate_custom {
@@ -337,70 +354,57 @@ impl<P: Processor> InstanceRuntime<P> {
         Ok(())
     }
 
-    /// Decode, migrate, validate, and publish complete semantic state using
-    /// schema-owned identity and schema version.
+    /// Decode, migrate, validate, and publish complete semantic state.
     ///
     /// # Errors
     ///
-    /// Returns [`InstanceSemanticStateLoadError`] for missing state identity,
-    /// bounded decode failures, migration failures, framework validation, or
-    /// product validation. The runtime is unchanged on failure.
+    /// Returns [`StateLoadError`] identifying the failed phase. The runtime is
+    /// unchanged on failure; migrations never see another component's state.
     pub fn apply_state_bytes<C>(
         &mut self,
         component: &C,
         bytes: &[u8],
         limits: StateLimits,
-    ) -> Result<(), InstanceSemanticStateLoadError>
+    ) -> Result<(), StateLoadError>
     where
         C: Component<Processor = P>,
     {
         self.check_component(component)
-            .map_err(InstanceSemanticStateLoadError::Apply)?;
-        let target_schema =
-            self.schema
-                .state_identity()
-                .ok_or(InstanceSemanticStateLoadError::Apply(
-                    InstanceSemanticStateError::Parameters(
-                        InstanceStateError::MissingStateIdentity,
-                    ),
-                ))?;
-        let document = StateDocument::decode_with_limits(bytes, limits)
-            .map_err(InstanceSemanticStateLoadError::Decode)?;
-        // Never invoke a product migration for another component's document.
-        if document.product_id() != target_schema.component().as_str() {
-            return Err(InstanceSemanticStateLoadError::Apply(
-                InstanceSemanticStateError::Parameters(InstanceStateError::ParameterState(
-                    ParameterStateError::ProductIdentityMismatch {
-                        expected: target_schema.component().as_str().to_owned(),
-                        actual: document.product_id().to_owned(),
-                    },
-                )),
-            ));
-        }
+            .map_err(StateLoadError::Validation)?;
+        let identity = self
+            .schema
+            .state_identity()
+            .ok_or(StateLoadError::Validation(
+                StateValidationError::MissingStateIdentity,
+            ))?;
+        let document =
+            StateDocument::decode_with_limits(bytes, limits).map_err(StateLoadError::Decode)?;
+        check_identity(&document, identity.component().as_str())
+            .map_err(StateLoadError::Validation)?;
         let document = document
-            .migrate_to(target_schema.schema().get(), component.state_migrations())
-            .map_err(InstanceSemanticStateLoadError::Migration)?;
+            .migrate_to(
+                identity.schema_version().get(),
+                component.state_migrations(),
+            )
+            .map_err(StateLoadError::Migration)?;
         self.apply_state(component, &document)
-            .map_err(InstanceSemanticStateLoadError::Apply)
+            .map_err(StateLoadError::Validation)
     }
 
-    fn check_component<C>(&self, component: &C) -> Result<(), InstanceSemanticStateError>
+    fn check_component<C>(&self, component: &C) -> Result<(), StateValidationError>
     where
         C: Component<Processor = P>,
     {
         let schema = component
             .schema()
-            .map_err(InstanceSemanticStateError::InvalidComponentSchema)?;
+            .map_err(StateValidationError::InvalidComponentSchema)?;
         if self.schema != schema {
-            return Err(InstanceSemanticStateError::ComponentSchemaMismatch);
+            return Err(StateValidationError::ComponentSchemaMismatch);
         }
         Ok(())
     }
 
-    pub(super) fn initialize_state<C>(
-        &mut self,
-        component: &C,
-    ) -> Result<(), InstanceSemanticStateError>
+    pub(super) fn initialize_state<C>(&mut self, component: &C) -> Result<(), StateValidationError>
     where
         C: Component<Processor = P>,
     {
@@ -408,9 +412,9 @@ impl<P: Processor> InstanceRuntime<P> {
         for entry in &custom {
             entry
                 .validate()
-                .map_err(InstanceSemanticStateError::InvalidDefaults)?;
-            if entry.key().starts_with("parameter/") {
-                return Err(InstanceSemanticStateError::ReservedCustomKey(
+                .map_err(StateValidationError::InvalidDefaults)?;
+            if entry.parameter_key().is_some() {
+                return Err(StateValidationError::ReservedCustomKey(
                     entry.key().to_owned(),
                 ));
             }
@@ -418,15 +422,48 @@ impl<P: Processor> InstanceRuntime<P> {
         custom.sort_unstable_by(|left, right| left.key().as_bytes().cmp(right.key().as_bytes()));
         for pair in custom.windows(2) {
             if pair[0].key() == pair[1].key() {
-                return Err(InstanceSemanticStateError::InvalidDefaults(
+                return Err(StateValidationError::InvalidDefaults(
                     StateDocumentError::DuplicateKey(pair[0].key().to_owned()),
                 ));
             }
         }
         component
             .validate_state(&self.parameters, &custom)
-            .map_err(InstanceSemanticStateError::Product)?;
+            .map_err(StateValidationError::Product)?;
         self.custom_state = custom;
         Ok(())
+    }
+}
+
+fn check_identity(document: &StateDocument, expected: &str) -> Result<(), StateValidationError> {
+    if document.component_id() != expected {
+        return Err(StateValidationError::ComponentIdentityMismatch {
+            expected: expected.to_owned(),
+            actual: document.component_id().to_owned(),
+        });
+    }
+    Ok(())
+}
+
+fn state_value(value: &ParameterValue) -> StateValue {
+    match value {
+        ParameterValue::Float(value) => StateValue::Float(*value),
+        ParameterValue::Integer(value) => StateValue::Signed(*value),
+        ParameterValue::Boolean(value) => StateValue::Boolean(*value),
+        ParameterValue::Choice(value) => StateValue::Choice(value.as_str().to_owned()),
+    }
+}
+
+fn parameter_value(value: &StateValue) -> Result<ParameterValue, ParameterValueError> {
+    match value {
+        StateValue::Float(value) => Ok(ParameterValue::Float(*value)),
+        StateValue::Signed(value) => Ok(ParameterValue::Integer(*value)),
+        StateValue::Boolean(value) => Ok(ParameterValue::Boolean(*value)),
+        StateValue::Choice(value) => ChoiceId::new(value.clone())
+            .map(ParameterValue::Choice)
+            .map_err(|_| ParameterValueError::UnknownChoice),
+        StateValue::Unsigned(_) => Err(ParameterValueError::UnsupportedStateValue("unsigned")),
+        StateValue::Text(_) => Err(ParameterValueError::UnsupportedStateValue("text")),
+        StateValue::Bytes(_) => Err(ParameterValueError::UnsupportedStateValue("bytes")),
     }
 }

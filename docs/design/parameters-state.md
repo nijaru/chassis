@@ -113,12 +113,14 @@ Persistent state is a format-independent semantic document:
 ```text
 State
 ├── Chassis envelope version
-├── product schema version
+├── component schema version
 ├── parameter base values by stable key
 └── typed custom product fields
 ```
 
 Transient processor history is not persisted by convention.
+
+`InstanceRuntime::{state_document, encode_state, apply_state, apply_state_bytes}` is the only complete instance persistence API. Identity and version come from the component schema; `ParameterStore` exposes typed control values, not a competing parameter-only document export or patch/load path. `StateDocument::{component_id, schema_version}` names the same semantic identity/version as `StateIdentity::{component, schema_version}`.
 
 Normal project/preset load is a complete transactional replacement:
 
@@ -139,6 +141,8 @@ Invalid decode, migration, framework values, unknown parameters, incomplete snap
 The first accepted active custom-state change freezes the pre-load DSP base/modulation projection and requests reactivation. While the host/environment defers it, DSP keeps old resources and frozen controls; all parameter events are validated but withheld from DSP. Base endpoints are discarded; modulation endpoints update only the desired external signal. Desired parameter/custom state remains saveable. Later loads/control edits update desired state only; reset or state reversion cannot unfreeze DSP. Parameter-only changes remain live before this gate, and processor-originated restart requests do not impose it.
 
 Direct `parameters_mut()` edits and realtime automation validate descriptor domains, not arbitrary product cross-field invariants. Use complete state replacement for coupled control edits; activation checks complete component policy again. Processors must safely handle every admitted automation value with their current resources, requesting restart/retaining valid resources when necessary.
+
+`StateExportError` distinguishes missing identity, document construction, and encoding. `StateValidationError` directly identifies identity/version, parameter completeness/domain, component-schema, defaults, and component-policy failures; parameter failures do not require nested wrapper matching. `StateLoadError` distinguishes decode, migration, and validation. Wrapped failures retain their specific evidence through `Error::source`.
 
 Migration/decoding are non-realtime operations. Retain fixtures for every released schema.
 

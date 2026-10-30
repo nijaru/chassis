@@ -90,7 +90,7 @@ impl StateMigration for Rename {
         2
     }
     fn migrate(&self, doc: StateDocument) -> Result<StateDocument, Self::Error> {
-        assert_eq!(doc.product_id(), ID);
+        assert_eq!(doc.component_id(), ID);
         let mut next = StateDocument::new(ID, 2).map_err(ComponentStateError::new)?;
         for entry in doc.entries() {
             let key = if entry.key() == "parameter/old_index" {

@@ -354,8 +354,11 @@ fn state_load_requests_restart_before_processing_and_reactivation_uses_loaded_st
     assert_eq!(requests.load(Ordering::Relaxed), 0);
     let schema = DelayedProbe::default().schema().unwrap();
     let identity = schema.state_identity().unwrap();
-    let mut document =
-        StateDocument::new(identity.component().as_str(), identity.schema().get()).unwrap();
+    let mut document = StateDocument::new(
+        identity.component().as_str(),
+        identity.schema_version().get(),
+    )
+    .unwrap();
     document
         .insert(StateEntry::new("parameter/phase", StateValue::Float(1.0)))
         .unwrap();

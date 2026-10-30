@@ -1,8 +1,8 @@
 //! Typed parameter schemas and non-realtime base-value storage.
 //!
 //! [`ParameterStore`] is the semantic authority for a component's current
-//! base/control values. It validates every replacement and applies decoded
-//! state transactionally. Host event queues remain adapter-owned; normalized
+//! base/control values. It validates every replacement. Complete persistence
+//! belongs to `InstanceRuntime`. Host event queues remain adapter-owned; normalized
 //! borrowed process events are validated here against the active schema.
 
 mod control;
@@ -1474,30 +1474,6 @@ impl ParameterStore {
             .zip(self.values.iter().map(|stored| &stored.value))
     }
 
-    /// Build a semantic state document containing all parameter base values.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ParameterStateError::Document`] if the product identity or an
-    /// entry key is invalid.
-    pub fn state_document(
-        &self,
-        product_id: impl Into<String>,
-        product_schema: u32,
-    ) -> Result<StateDocument, ParameterStateError> {
-        let mut document = StateDocument::new(product_id, product_schema)
-            .map_err(ParameterStateError::Document)?;
-        for (descriptor, value) in self.iter() {
-            document
-                .insert(StateEntry::new(
-                    parameter_state_key(descriptor.key()),
-                    state_value(value),
-                ))
-                .map_err(ParameterStateError::Document)?;
-        }
-        Ok(document)
-    }
-
     /// Validate normalized process-time parameter events against this schema.
     ///
     /// This performs no allocation or stable-key lookup on the successful path
@@ -1558,77 +1534,6 @@ impl ParameterStore {
         }
     }
 
-    /// Encode all parameter base values using explicit state bounds.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ParameterStateError`] when document construction or bounded
-    /// state encoding fails.
-    pub fn encode_state(
-        &self,
-        product_id: impl Into<String>,
-        product_schema: u32,
-        limits: StateLimits,
-    ) -> Result<Vec<u8>, ParameterStateError> {
-        self.state_document(product_id, product_schema)?
-            .encode_with_limits(limits)
-            .map_err(ParameterStateError::Encode)
-    }
-
-    fn apply_state_entries(&mut self, document: &StateDocument) -> Result<(), ParameterStateError> {
-        let mut candidate = self.values.clone();
-        for entry in document.entries() {
-            let Some(key) = entry.key().strip_prefix("parameter/") else {
-                continue;
-            };
-            let index = self
-                .position_for_key(key)
-                .ok_or_else(|| ParameterStateError::UnknownParameter(key.to_owned()))?;
-            let value = parameter_value(entry.value()).map_err(|error| {
-                ParameterStateError::InvalidValue {
-                    parameter: key.to_owned(),
-                    error,
-                }
-            })?;
-            let value = self.descriptors[index]
-                .canonical_value(value)
-                .map_err(|error| ParameterStateError::InvalidValue {
-                    parameter: key.to_owned(),
-                    error,
-                })?;
-            candidate[index] = value;
-        }
-        self.values = candidate;
-        Ok(())
-    }
-
-    /// Apply state after checking product identity and schema version.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ParameterStateError`] for an identity/schema mismatch or an
-    /// invalid parameter entry. The store remains unchanged on failure.
-    pub fn apply_state_for_product(
-        &mut self,
-        document: &StateDocument,
-        product_id: &str,
-        product_schema: u32,
-    ) -> Result<(), ParameterStateError> {
-        if document.product_id() != product_id {
-            return Err(ParameterStateError::ProductIdentityMismatch {
-                expected: product_id.to_owned(),
-                actual: document.product_id().to_owned(),
-            });
-        }
-        if document.product_schema() != product_schema {
-            return Err(ParameterStateError::ProductSchemaMismatch {
-                expected: product_schema,
-                actual: document.product_schema(),
-            });
-        }
-        self.apply_state_entries(document)
-    }
-
     fn position_for_key(&self, key: &str) -> Option<usize> {
         self.lookup
             .binary_search_by(|index| self.descriptors[*index].key().as_str().cmp(key))
@@ -1636,38 +1541,6 @@ impl ParameterStore {
             .map(|position| self.lookup[position])
     }
 }
-
-fn parameter_state_key(key: &ParameterKey) -> String {
-    let mut state_key = String::from("parameter/");
-    state_key.push_str(key.as_str());
-    state_key
-}
-
-fn state_value(value: &ParameterValue) -> StateValue {
-    match value {
-        ParameterValue::Float(value) => StateValue::Float(*value),
-        ParameterValue::Integer(value) => StateValue::Signed(*value),
-        ParameterValue::Boolean(value) => StateValue::Boolean(*value),
-        ParameterValue::Choice(value) => StateValue::Choice(value.as_str().to_owned()),
-    }
-}
-
-fn parameter_value(value: &StateValue) -> Result<ParameterValue, ParameterValueError> {
-    match value {
-        StateValue::Float(value) => Ok(ParameterValue::Float(*value)),
-        StateValue::Signed(value) => Ok(ParameterValue::Integer(*value)),
-        StateValue::Boolean(value) => Ok(ParameterValue::Boolean(*value)),
-        StateValue::Choice(value) => ChoiceId::new(value.clone())
-            .map(ParameterValue::Choice)
-            .map_err(|_| ParameterValueError::UnknownChoice),
-        StateValue::Unsigned(_) => Err(ParameterValueError::UnsupportedStateValue("unsigned")),
-        StateValue::Text(_) => Err(ParameterValueError::UnsupportedStateValue("text")),
-        StateValue::Bytes(_) => Err(ParameterValueError::UnsupportedStateValue("bytes")),
-    }
-}
-
-/// Failure while validating normalized process-time parameter events.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParameterAutomationError {
     /// Event index did not identify a descriptor in the active schema.
     UnknownParameter {
@@ -1703,64 +1576,6 @@ impl fmt::Display for ParameterAutomationError {
 }
 
 impl std::error::Error for ParameterAutomationError {}
-
-/// Failure while exporting or applying parameter state.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ParameterStateError {
-    /// Semantic document construction failed.
-    Document(StateDocumentError),
-    /// State byte encoding failed its bounds or value checks.
-    Encode(StateEncodeError),
-    /// State belonged to another product identity.
-    ProductIdentityMismatch {
-        /// Expected product identity.
-        expected: String,
-        /// Actual document identity.
-        actual: String,
-    },
-    /// State used another product schema version.
-    ProductSchemaMismatch {
-        /// Expected product schema.
-        expected: u32,
-        /// Actual document schema.
-        actual: u32,
-    },
-    /// Parameter namespace contained an unknown key.
-    UnknownParameter(String),
-    /// Parameter namespace contained an invalid value.
-    InvalidValue {
-        /// Parameter key.
-        parameter: String,
-        /// Value validation failure.
-        error: ParameterValueError,
-    },
-}
-
-impl fmt::Display for ParameterStateError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Document(error) => write!(formatter, "invalid parameter state document: {error}"),
-            Self::Encode(error) => write!(formatter, "could not encode parameter state: {error}"),
-            Self::ProductIdentityMismatch { expected, actual } => write!(
-                formatter,
-                "state product identity is {actual:?}, expected {expected:?}"
-            ),
-            Self::ProductSchemaMismatch { expected, actual } => write!(
-                formatter,
-                "state product schema is {actual}, expected {expected}"
-            ),
-            Self::UnknownParameter(key) => write!(formatter, "unknown parameter {key}"),
-            Self::InvalidValue { parameter, error } => write!(
-                formatter,
-                "invalid value for parameter {parameter}: {error}"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for ParameterStateError {}
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use crate::automation::ParameterEvent;
@@ -1860,13 +1675,12 @@ mod tests {
     }
 
     #[test]
-    fn dense_base_values_stay_coherent_across_control_state_reset_and_rejection() {
+    fn dense_base_values_stay_coherent_across_control_reset_and_rejection() {
         let mut store = ParameterStore::new(&descriptors()).unwrap();
         let mode = store.index("mode").unwrap();
         let clean = ParameterEventValue::Choice(ChoiceIndex::new(0));
         let warm = ParameterEventValue::Choice(ChoiceIndex::new(1));
         assert_eq!(store.get_event_value(mode), Some(clean));
-
         store
             .set(
                 "mode",
@@ -1874,7 +1688,6 @@ mod tests {
             )
             .unwrap();
         assert_eq!(store.get_event_value(mode), Some(warm));
-        let saved = store.state_document("test", 1).unwrap();
         store
             .set_index(
                 mode,
@@ -1883,12 +1696,12 @@ mod tests {
             .unwrap();
         assert_eq!(store.get_event_value(mode), Some(clean));
         store.values_mut().set_event_value(mode, warm).unwrap();
-        assert_eq!(store.state_document("test", 1).unwrap(), saved);
+        assert_eq!(
+            store.get("mode"),
+            Some(&ParameterValue::Choice(ChoiceId::new("warm").unwrap()))
+        );
         store.values_mut().reset();
         assert_eq!(store.get_event_value(mode), Some(clean));
-        store.apply_state_for_product(&saved, "test", 1).unwrap();
-        assert_eq!(store.get_event_value(mode), Some(warm));
-
         assert_eq!(
             store.set_event_value(mode, ParameterEventValue::Choice(ChoiceIndex::new(2))),
             Err(ParameterEventValueError::InvalidValue(
@@ -1906,121 +1719,7 @@ mod tests {
                 .set_event_value(mode, ParameterEventValue::Integer(1))
                 .is_err()
         );
-        assert_eq!(store.get_event_value(mode), Some(warm));
-        assert_eq!(store.state_document("test", 1).unwrap(), saved);
-
-        // Dense choice indices are local, not persistence identity.
-        let reversed = ParameterDescriptor::choice(
-            "mode",
-            "Mode",
-            choices().into_iter().rev().collect(),
-            "clean",
-        )
-        .unwrap();
-        let mut reordered = ParameterStore::new(&[reversed]).unwrap();
-        let mut document = StateDocument::new("test", 1).unwrap();
-        document
-            .insert(StateEntry::new(
-                "parameter/mode",
-                StateValue::Choice("warm".into()),
-            ))
-            .unwrap();
-        reordered
-            .apply_state_for_product(&document, "test", 1)
-            .unwrap();
-        assert_eq!(
-            reordered.get_event_value(ParameterIndex::new(0)),
-            Some(ParameterEventValue::Choice(ChoiceIndex::new(0)))
-        );
-        assert_eq!(reordered.get("mode"), store.get("mode"));
-    }
-
-    #[test]
-    fn state_round_trip_uses_parameter_namespace_and_identity() {
-        let definitions = descriptors();
-        let mut store = ParameterStore::new(&definitions).expect("schema is valid");
-        store
-            .set("input.gain", ParameterValue::Float(0.75))
-            .expect("value is in range");
-        store
-            .set(
-                "mode",
-                ParameterValue::Choice(ChoiceId::new("warm").expect("choice id is valid")),
-            )
-            .expect("choice is known");
-
-        let encoded = store
-            .encode_state("com.example.effect", 3, StateLimits::default())
-            .expect("parameter state encodes");
-        let document = StateDocument::decode(&encoded).expect("parameter state decodes");
-        assert!(
-            document
-                .entries()
-                .iter()
-                .any(|entry| entry.key() == "parameter/input.gain")
-        );
-
-        let mut restored = ParameterStore::new(&definitions).expect("schema is valid");
-        restored
-            .apply_state_for_product(&document, "com.example.effect", 3)
-            .expect("state applies");
-        assert_eq!(restored.get("input.gain"), store.get("input.gain"));
-        assert_eq!(restored.get("mode"), store.get("mode"));
-        assert_eq!(
-            restored.apply_state_for_product(&document, "other.product", 3),
-            Err(ParameterStateError::ProductIdentityMismatch {
-                expected: "other.product".into(),
-                actual: "com.example.effect".into(),
-            })
-        );
-    }
-
-    #[test]
-    fn state_application_is_transactional_and_ignores_custom_entries() {
-        let definitions = descriptors();
-        let mut store = ParameterStore::new(&definitions).expect("schema is valid");
-        store
-            .set("input.gain", ParameterValue::Float(0.5))
-            .expect("value is in range");
-
-        let mut invalid = StateDocument::new("com.example.effect", 1).expect("identity is valid");
-        invalid
-            .insert(StateEntry::new(
-                "state/custom",
-                StateValue::Bytes(vec![1, 2]),
-            ))
-            .expect("key is unique");
-        invalid
-            .insert(StateEntry::new(
-                "parameter/input.gain",
-                StateValue::Float(0.25),
-            ))
-            .expect("key is unique");
-        invalid
-            .insert(StateEntry::new(
-                "parameter/quality.level",
-                StateValue::Signed(99),
-            ))
-            .expect("key is unique");
-        assert!(matches!(
-            store.apply_state_for_product(&invalid, "com.example.effect", 1),
-            Err(ParameterStateError::InvalidValue {
-                parameter,
-                error: ParameterValueError::IntegerOutOfRange,
-            }) if parameter == "quality.level"
-        ));
-        assert_eq!(store.get("input.gain"), Some(&ParameterValue::Float(0.5)));
-
-        invalid
-            .insert(StateEntry::new(
-                "parameter/missing",
-                StateValue::Boolean(true),
-            ))
-            .expect("key is unique");
-        assert!(matches!(
-            store.apply_state_for_product(&invalid, "com.example.effect", 1),
-            Err(ParameterStateError::InvalidValue { .. } | ParameterStateError::UnknownParameter(_))
-        ));
+        assert_eq!(store.get_event_value(mode), Some(clean));
     }
 
     #[test]

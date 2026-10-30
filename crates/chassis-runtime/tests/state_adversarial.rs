@@ -55,7 +55,7 @@ fn configured_resource_limits_reject_the_same_valid_document() {
             ..defaults
         },
         StateLimits {
-            max_product_id_bytes: PRODUCT_ID.len() - 1,
+            max_component_id_bytes: PRODUCT_ID.len() - 1,
             ..defaults
         },
         StateLimits {

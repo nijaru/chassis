@@ -95,7 +95,7 @@ fn runtime_owns_complete_schema_and_dense_audio_lookup() {
         .state_identity()
         .expect("identified schema is retained");
     assert_eq!(identity.component().as_str(), "org.nijaru.schema-runtime");
-    assert_eq!(identity.schema(), StateSchemaVersion::new(1));
+    assert_eq!(identity.schema_version(), StateSchemaVersion::new(1));
     assert_eq!(
         runtime.audio_port_index(&MAIN_INPUT),
         Some(AudioPortIndex::new(0))

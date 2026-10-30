@@ -14,8 +14,8 @@ The durable contract is `StateDocument`:
 
 ```text
 StateDocument
-├── canonical product identity
-├── product schema version
+├── canonical component identity
+├── component schema version
 └── entries keyed by stable semantic identity
     ├── parameter/input.gain -> Float(-3.0)
     ├── parameter/mode       -> Choice("clean")
@@ -57,10 +57,10 @@ The current CHSS envelope is length-delimited little-endian data:
 header
   magic                 "CHSS"
   envelope_version      u16
-  product_id_length     u16
-  product_schema        u32
+  component_id_length   u16
+  schema_version        u32
   entry_count           u32
-  product_id_bytes      UTF-8
+  component_id_bytes    UTF-8
 
 entry repeated entry_count times
   key_length            u16
@@ -77,7 +77,7 @@ A checked-in binary v1 fixture now pins the current bytes and must decode and re
 
 For one semantic document:
 
-- product identity encoding is exact;
+- component identity encoding is exact;
 - entries are sorted lexicographically by canonical UTF-8 key bytes;
 - duplicate and empty keys are rejected;
 - integer widths and endianness are fixed;
@@ -95,7 +95,7 @@ Host/project/preset bytes are untrusted.
 `StateLimits` bounds:
 
 - total encoded bytes;
-- product-ID length;
+- component-ID length (`max_component_id_bytes`);
 - entry count;
 - key length;
 - individual payload length.
@@ -106,23 +106,23 @@ The qualified adversarial suite additionally checks:
 
 - every proper truncation prefix of a valid rich document is rejected;
 - each configured resource limit can reject an otherwise valid document;
-- extreme declared product/key/payload/count lengths fail without backing bytes;
+- extreme declared component/key/payload/count lengths fail without backing bytes;
 - a bounded single-byte corruption corpus never panics;
 - repeated failed truncated runtime loads leave live state unchanged.
 
 Large media/sample resources should use a future explicit resource mechanism rather than silently inflating project state.
 
-## Envelope versus product schema
+## Envelope versus component schema
 
-`envelope_version` describes Chassis bytes. `product_schema` describes product semantics. They evolve independently.
+`envelope_version` describes Chassis bytes. `StateDocument::schema_version()` describes component semantics, paired with `component_id()`. `StateIdentity::schema_version()` supplies the runtime target. These names replace the earlier product vocabulary without changing field positions, widths, tags, or CHSS v1 bytes.
 
-Product migration is adjacent:
+Component migration is adjacent:
 
 ```text
 v1 -> v2 -> v3 -> current
 ```
 
-`StateMigration` and `StateDocument::migrate_to()` require one unique adjacent step at a time, preserve product identity, verify the declared output schema, and keep typed product migration failures away from live runtime state. Missing, ambiguous, non-adjacent, identity-changing, and schema-mismatched steps fail before publication.
+`StateMigration` and `StateDocument::migrate_to()` require one unique adjacent step at a time, preserve component identity, verify the declared output schema, and keep typed component migration failures away from live runtime state. Missing, ambiguous, non-adjacent, identity-changing, and schema-mismatched steps fail before publication.
 
 Keep a deterministic fixture for every actually released product schema. Newer unknown schemas fail by default unless a product explicitly proves a forward-compatibility rule.
 
@@ -150,11 +150,13 @@ No live state is touched until all steps succeed. Product validation can inspect
 
 `Component` owns custom defaults, complete validation, and adjacent migration registration; construction and loads cannot substitute per-call policy. The single `Component::activate(config, parameters, custom_state)` hook prepares accepted state off-thread. An accepted active custom-state change freezes the pre-load DSP parameter projection and requests restart. Until deactivation, incoming parameter events are checked but discarded without endpoint completion; desired parameter/custom state remains saveable. Reset and state reversion do not release the gate. Parameter-only loads remain live before this transition. Failed loads change neither desired state nor the gate. Persistence authority remains in `InstanceRuntime`, not in the active processor.
 
-Runtime parameter-only and explicit-ID compatibility methods have been removed. Lower-level `ParameterStore` serialization helpers are not a second component identity authority.
+`InstanceRuntime` is the only public complete persistence path; `ParameterStore` has no document export, encoding, or state-application methods. Parameter conversion/admission belongs to the runtime's non-realtime semantic-state owner. Validation reports direct `StateValidationError` variants for identity/version, unknown or missing parameters, and invalid parameter values. Byte loads add only the `StateLoadError` phase boundary; export uses `StateExportError`. Underlying codec, domain, migration, and component failures remain available through `Error::source`.
 
 ## Parameter state
 
-Framework parameters encode automatically by canonical `parameter/<key>` identity:
+Framework parameters encode automatically by canonical `parameter/<key>` identity. `StateEntry::parameter(key, value)` constructs this key and `StateEntry::parameter_key()` classifies it; core admission and deployment projections share this namespace owner. Even an empty suffix is reserved and fails parameter lookup rather than becoming custom state.
+
+Parameter value encoding:
 
 - float -> finite `Float`;
 - integer -> `Signed`;
