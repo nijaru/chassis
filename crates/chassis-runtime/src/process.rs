@@ -142,7 +142,7 @@ pub enum InputEventRef<'a> {
     Parameter(&'a ParameterEvent),
     /// Semantic note operation or expression.
     Note(&'a NoteEvent),
-    /// Opaque MIDI event, borrowing source storage for SysEx.
+    /// Opaque MIDI event, borrowing source storage for `SysEx`.
     Midi(MidiEvent<'a>),
 }
 
