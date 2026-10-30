@@ -144,6 +144,9 @@ impl ClapParameterBinding {
         ) {
             flags |= ParamInfoFlags::IS_STEPPED;
         }
+        if self.descriptor.is_bypass() {
+            flags |= ParamInfoFlags::IS_BYPASS;
+        }
         if self.descriptor.global_modulation().is_some() {
             flags |= ParamInfoFlags::IS_MODULATABLE;
         }

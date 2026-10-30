@@ -56,6 +56,7 @@ Implemented details include:
 - one immutable schema snapshot owned by `InstanceRuntime`;
 - `InstanceRuntime::for_component` as the sole public construction path, validating component-owned custom/parameter defaults together; schema-only construction cannot bypass state policy;
 - activation rejection for audio/event/parameter/state-identity and audio-I/O-policy drift;
+- explicit bypass role as immutable parameter metadata, with Boolean-only/unique schema admission rather than name inference;
 - runtime-owned semantic state identity/version for complete save/load/migration APIs, with runtime explicit-ID compatibility shims removed;
 - the exact runtime-frozen schema exposed through `ActivationConfig::schema()` so processor setup never regenerates component metadata;
 - audio and event stable keys/display metadata that may remain borrowed for static product declarations or own runtime-discovered metadata;

@@ -15,7 +15,7 @@ The pinned source includes plugin/host main-thread reentrancy and adjacent safet
 
 Release metadata refreshed 2026-10-11: registry `clack-plugin` 0.2.0 was published 2026-09-12, and GitHub `v0.2` now resolves to `27ca28391b57a61bad4bb5099288a7bf9247350d`. The old assertion that this tag identifies Chassis's pin is not current. See [dependency policy](../dependencies.md) for primary release metadata. Review the source delta and rerun adapter conformance before changing source/revision. Downgrading to the affected registry 0.1.1 line remains unacceptable.
 
-The workspace manifest uses a full revision rather than a branch, and `deny.toml` allowlists only the Clack repository as the current git-source exception. A workspace Cargo patch selects `vendor/clack/plugin` for `clack-plugin`; common, host, and extensions retain the exact upstream pin. The vendored crate is excluded from Chassis workspace membership, not from the resolved dependency graph.
+The workspace manifest uses a full revision rather than a branch, and `deny.toml` allowlists only the Clack repository as the current git-source exception. Workspace Cargo patches select `vendor/clack/{common,plugin,extensions}` from the same pin with the reviewed source deltas below. Host retains the exact upstream source. Vendored crates are excluded from Chassis workspace membership, not from the resolved dependency graph.
 
 ## Why Chassis does not use published 0.1.1
 
@@ -75,7 +75,7 @@ Chassis now bypasses that sample-pair constructor. Clack's `Audio::raw_buffers()
 - `ChannelPair::InputOutput` for disjoint input/output;
 - `ChannelPair::InPlace` for exact aliasing represented by one mutable slice.
 
-The adapter permits shared inputs and exact declared reciprocal in-place pairs; all other overlap involving writable samples is rejected before sample references. Chassis-owned unsafe code is isolated in `raw_audio`, with activation-owned scratch, O(C) storage, O(C²) alias validation, and lazy views borrowing the live source. Its scratch `Send` transfers no sample ownership. `chassis-runtime` still forbids unsafe code.
+The adapter permits shared inputs and exact declared reciprocal in-place pairs; all other overlap involving writable samples is rejected before sample references. Chassis-owned sample-pointer unsafe code is isolated in `raw_audio`, with activation-owned scratch, O(C) storage, O(C²) alias validation, and lazy views borrowing the live source. Its scratch `Send` transfers no sample ownership. `chassis-runtime` still forbids unsafe code.
 
 The host must supply valid live descriptor arrays and readable pointer tables, correctly initialized sample allocations of sufficient extent, metadata separate from samples, and exclusive writable access. Null/alignment/address/alias checks cannot prove pointer provenance, allocation length, initialization, or concurrency. Miri and native tests support the modeled paths, not arbitrary invalid C pointers.
 
@@ -110,11 +110,29 @@ The existing pin's `common/src/events/event_types/param_value.rs` supplies `Para
 
 `common/src/events/pckn.rs::Match::from_raw` treats every negative integer as wildcard. The adapter instead checks each raw note/port/channel/key field equals exactly `-1`; `-2` must not become a global update. Correctly sized unknown parameter IDs are ignored before targeting/value validation. Known unsupported targeting or invalid values reject process before DSP.
 
-`extensions/src/params/plugin.rs::flush` borrows the input list and dispatches to the active audio processor or inactive main-thread handler. Because it returns void, Chassis validates the bounded immutable recognized batch before applying any changes; malformed batches are ignored without logging. Timing is lost in flush, but list order is preserved. No new Chassis unsafe production path or Clack source delta is needed.
+`extensions/src/params/plugin.rs::flush` borrows the input list and dispatches to the active audio processor or inactive main-thread handler. Because it returns void, Chassis validates the bounded immutable recognized batch before applying any changes; malformed batches are ignored without logging. Timing is lost in flush, but list order is preserved. The later read-only output-descriptor correction below applies to this same flush entry point; modulation admission and publication are unchanged.
 
 The reviewed [CLAP event contract](https://github.com/free-audio/clap/blob/a47f6badb49d948fd009998f28309cdab78979c9/include/clap/events.h#L100-L109) defines modulation as a held amount set and effective base-plus-amount, not incremental accumulation. [Flush/threading](https://github.com/free-audio/clap/blob/a47f6badb49d948fd009998f28309cdab78979c9/include/clap/ext/params.h#L295-L306) serializes process and flush; activation is outside processing. Independent fixed-size scalar atomics therefore retain external amounts across adapter runtime lifetimes without coupling them to base/custom state publication. Relaxed operations carry no associated payload; save/load never access these scalars. Accepted modulation survives rejected base-state completion.
 
 [Reset](https://github.com/free-audio/clap/blob/a47f6badb49d948fd009998f28309cdab78979c9/include/clap/plugin.h#L84-L90), activation, and state contracts do not specify a modulation-clear/resend protocol. Chassis preserves held input across these boundaries explicitly. This is not a universal state-load rule: [NIH-plug](https://github.com/robbert-vdh/nih-plug/blob/de421011f41a6d10fc8c7a6084e4f4dee0143683/src/wrapper/state.rs#L174-L238) preserves modulation while restoring base state, whereas [CLAP example parameter deserialization](https://github.com/free-audio/clap-plugins/blob/9fdaf3d667c25bb49ff7a04cd877491c48b56524/plugins/parameters.hh#L46-L60) invokes a reset that clears it. A custom-resource mismatch freezes consumed base and modulation before synchronization; desired amounts remain available for reactivation without retargeting old resources.
+
+## Tail and bypass boundary — reviewed 2026-10-30
+
+The pinned [CLAP tail contract](https://github.com/free-audio/clap/blob/a47f6badb49d948fd009998f28309cdab78979c9/include/clap/ext/tail.h) permits plugin `get` on main or audio, while host `changed` is audio-only. Pinned `extensions/src/tail.rs` instead calls `PluginWrapper::audio_processor()?.as_ref().get()`. Presence checks do not establish borrow exclusion: a legal main-thread query can alias active mutable DSP, and synchronous notification re-entry can do the same. DSP requires `Send`, not `Sync`; inactive lookup also enters a reporting path.
+
+Chassis registers its own standard tail vtable in `tail.rs`. The getter accesses only the shared atomic completed snapshot. Activation publishes before reentrant latency notification; notification itself is deferred to audio, with instance-owned debt surviving an unstarted activation. Finite lengths at or above `INT32_MAX` project to infinity rather than under-reporting. The retained `HostTail` wrapper only invokes the host callback through the audio handle. [Runtime services](../design/runtime-services.md) owns the semantic contract.
+
+The [CLAP parameter contract](https://github.com/free-audio/clap/blob/a47f6badb49d948fd009998f28309cdab78979c9/include/clap/ext/params.h) defines `IS_BYPASS` as one stepped `0..1` parameter. The adapter sets it only for explicit Boolean role metadata. It does not authorize processing suppression or define latency/tail/crossfade policy.
+
+## Output descriptors and typed-event provenance — reviewed 2026-10-30
+
+CLAP `process.out_events` and `params.flush` supply a const descriptor. Queue mutation goes through its callback; this does not grant exclusive mutable ownership of the descriptor. Pinned process and flush cast it into `&mut OutputEvents`, whose safe replacement could overwrite host-owned read-only fields. The host process helper supplies a shared descriptor; its flush helper uses `as_raw_mut()`, so convenience-host flush tests alone miss this exposure.
+
+The local common constructor `OutputEvents::with_raw` owns a stack-local descriptor/forwarder and scopes its mutable view through a higher-ranked callback. Pushes call the original function with the original table pointer and context. Plugin process and parameter flush use this constructor; public `Events` and extension handler signatures remain unchanged. This is bounded forwarding orchestration, not a measured zero-cost claim.
+
+A second default-Miri failure exposed `Event::as_unknown` widening a header-only shared reference back to the full typed event. It now derives the raw header pointer directly from the whole event, preserving its extent/provenance. The unsafe `Event` contract and runtime event admission are unchanged.
+
+The readonly-descriptor regression checks original pointer/context identity, callback success/failure, safe replacement, and actual inactive/active raw flush. Default Stacked Borrows now passes it and the full concurrent/reentrant tail test. The tail test owns stable raw audio tables: pinned host multiport construction reborrows its entire pointer table while deriving later port pointers, invalidating earlier pointers under Stacked Borrows. Host is a development fixture dependency, not shipped plugin code; that host helper is not qualified by these runs. Earlier Tree-Borrows success did not justify retaining the output ownership defect. These focused checks are not a whole-Clack or whole-workspace Miri qualification.
 
 ## Parameter text boundary — reviewed 2026-10-24
 
@@ -146,18 +164,18 @@ Clack remains the ABI/lifecycle/panic-containment owner, not the sample alias-va
 
 Upstream `plugin/src/plugin/logging.rs` formats/allocates for host logging or writes stderr on error. The safe `ProcessStatus` API has no nonreporting error variant. Comparing the audited pin with release commit `27ca28391b57a61bad4bb5099288a7bf9247350d` confirmed that plugin process/error handling is unchanged; upgrading alone cannot close this gap. The release's other changes (event gesture decoding, descriptor/features, GUI/extension wrappers, and host wrapper bounds) are not adopted by this fix.
 
-Only `clack-plugin` is vendored from `c5975f9`, with its original source, tests, READMEs, and MIT/Apache license texts. Its manifest replaces upstream workspace/path inheritance with explicit same-pin dependencies and preserves upstream lints. Examples are not copied, and three upstream trailing-whitespace lines are normalized. The only behavioral Rust source changes are:
+Common, plugin, and extensions are vendored from `c5975f9` with original source/tests and MIT/Apache license texts. Manifests replace workspace/path inheritance with explicit same-pin dependencies and upstream lint settings; package versions do not change. The original nonlogging process correction is:
 
 - `extensions/wrapper.rs`: a crate-private `handle_process` uses the existing pointer/lifecycle lookup and panic containment, returning `None` without calling `plugin_log`;
 - `plugin/instance.rs`: only the process ABI callback uses that helper. Its existing `None -> CLAP_PROCESS_ERROR` mapping is unchanged.
 
-All other callbacks retain normal diagnostics and the existing lifecycle/reentrancy model. Cargo resolves one plugin crate shared by Chassis, extensions, and the test host. The patch introduces no new ABI callback, reference construction, dependency version, or public API.
+The later ownership corrections are `common/src/events.rs` (whole-event provenance), `common/src/events/io/output.rs` (scoped read-only table constructor), `plugin/src/process.rs` and `plugin/instance.rs` (scoped process events), and `extensions/src/params/plugin.rs` (scoped flush output). The common constructor is a new API; existing handler signatures remain unchanged. Other Rust source is retained apart from trailing-whitespace normalization. Cargo resolves one copy of each patched crate for Chassis, extensions, and the test host. Normal diagnostics and lifecycle/panic containment are unchanged outside the nonlogging process path.
 
 Chassis deterministic process errors carry static messages, so dropping them does not allocate/deallocate. Boxed/custom errors and arbitrary DSP panics are not covered: catch-unwind remains, but panic hooks, payloads, and arbitrary destructors need not be realtime-safe. Process failure terminates the run; this patch promises no post-panic reuse.
 
 The actual-entry partial-alias rejection regression failed before this patch with one allocation. It now measures acceptance and rejection with zero allocations/deallocations and no host-log calls. No-host-log rejection was also measured locally; the source path cannot fall back to stderr. Packaged validator/fuzz and lifecycle/panic checks are recorded in [validation](../design/validation.md).
 
-Keep this delta narrow. Remove the vendored override only when a reviewed upstream replacement preserves nonlogging process rejection and passes adapter qualification.
+Keep this delta narrow. Remove vendored overrides only when a reviewed upstream replacement preserves nonlogging process rejection, read-only descriptor ownership, and event provenance, and passes adapter qualification.
 
 ## Current qualification boundary
 

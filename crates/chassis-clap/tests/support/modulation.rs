@@ -128,6 +128,10 @@ fn assert_metadata(plugin: &mut PluginInstance<TestHostHandlers>, params: Plugin
             .unwrap()
             .flags;
         assert_eq!(flags.contains(ParamInfoFlags::IS_MODULATABLE), index == 0);
+        assert!(
+            !flags.contains(ParamInfoFlags::IS_BYPASS),
+            "even the ordinary Boolean named bypass has no implicit role"
+        );
         assert!(!flags.intersects(
             ParamInfoFlags::IS_MODULATABLE_PER_NOTE_ID
                 | ParamInfoFlags::IS_MODULATABLE_PER_KEY

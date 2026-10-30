@@ -39,12 +39,12 @@ InstanceRuntime<P>
   inactive/active lifecycle
   validated + policy-accepted audio configuration
   active Processor ownership
-  activation-scoped latency snapshot
+  activation-scoped latency and completed active tail snapshots
 
 Processor
   exclusive active DSP/runtime-history owner
   caches activation-resolved dense identities/resources
-  reset / restart request / latency
+  reset / restart request / latency / tail
 
 Process<S>
   sample-representation-specific processing capability
@@ -216,7 +216,7 @@ Lookahead, convolution, oversampling, models, FFT plans, resamplers, scratch sto
 
 Do not create generic lookahead/oversampling/model wrappers merely to make the framework appear broad. Add helpers when several materially different processors demonstrate the same lifecycle/resource pattern.
 
-Common tail and bypass semantics remain open and should be added only when their cross-environment meaning is explicit.
+`Processor::tail()` supplies a conservative `TailLength` independently of latency; the runtime caches completed results. Mark a unique Boolean descriptor with `.with_bypass()?` and consume stepped controls through `boolean_cursor`; product DSP owns bypass routing, latency/tail preservation, and transitions. [Runtime services](runtime-services.md) owns both contracts.
 
 ## Smoothing, modulation, and gestures
 

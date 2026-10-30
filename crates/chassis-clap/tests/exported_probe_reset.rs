@@ -1,6 +1,7 @@
 #![allow(unsafe_code)]
 //! Exercise the actual exported fixture, not a duplicate delay processor.
 
+use clack_extensions::tail::{PluginTail, TailLength};
 use clack_host::prelude::*;
 use std::{
     alloc::{GlobalAlloc, Layout, System},
@@ -111,11 +112,17 @@ fn exported_reset_clears_history_and_preserves_activation_latency_without_alloca
         )
         .unwrap();
     let mut processor = processor.start_processing().unwrap();
+    let tail = processor
+        .plugin_handle()
+        .get_extension::<PluginTail>()
+        .unwrap();
+    assert_eq!(tail.get(&processor.plugin_handle()), TailLength::Finite(64));
     // A non-ring-aligned block leaves both nonzero history and nonzero positions.
     assert_eq!(process(&mut processor, [1.0; 17]), [[0.0; 17]; 2]);
     COUNT.store(true, Ordering::Relaxed);
     processor.reset();
     COUNT.store(false, Ordering::Relaxed);
+    assert_eq!(tail.get(&processor.plugin_handle()), TailLength::Finite(64));
     assert_eq!(ALLOCATIONS.load(Ordering::Relaxed), 0);
     assert_eq!(DEALLOCATIONS.load(Ordering::Relaxed), 0);
 

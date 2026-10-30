@@ -48,7 +48,7 @@ The runtime/schema ownership model is exercised by heterogeneous fixtures. That 
 
 Accept and resolve one whole I/O configuration before creating active resources. Reject structural, policy, or schema drift before activation publishes a processor. Instrument output-only, event-only, multiple buses, sidechain, and different legal layouts are ordinary uses of the same model.
 
-Latency is established and snapshotted for one activation. A resource/latency change requests restart/reactivation; it does not make new latency authoritative mid-run. The current resources remain valid until the environment completes the lifecycle transition.
+Latency is established and snapshotted for one activation. A resource/latency change requests restart/reactivation; it does not make new latency authoritative mid-run. The current resources remain valid until the environment completes the lifecycle transition. Tail is a separate completed bound on potential post-input output, not a latency or activity counter; [runtime services](design/runtime-services.md) owns tail and explicit bypass semantics.
 
 Safe buffers preserve exact in-place, disjoint, input-only, and output-only relationships. Every callback covers the accepted endpoint set uniquely and completely. Adapters classify whole-topology aliases before constructing sample references, while host allocation/provenance/concurrency obligations remain explicit. Illegal partial or cross-channel writable overlap is a boundary failure. Bounded copies are acceptable where they simplify ownership; zero-copy is not a goal by itself.
 

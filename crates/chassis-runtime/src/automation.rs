@@ -266,6 +266,26 @@ impl<'a> ParameterEvents<'a> {
         self.cursor(parameter, initial, CursorKind::Modulation)
     }
 
+    /// Create an allocation-free Boolean step cursor.
+    ///
+    /// Supply the consumed base value at block start. Queries must be
+    /// nondecreasing; equal-offset sets retain their source order.
+    #[must_use]
+    pub fn boolean_cursor(
+        self,
+        parameter: ParameterIndex,
+        initial: bool,
+    ) -> BooleanParameterCursor<'a> {
+        BooleanParameterCursor {
+            events: self.events,
+            frame_count: self.frame_count,
+            parameter,
+            next_event: 0,
+            value: initial,
+            last_query_offset: None,
+        }
+    }
+
     fn cursor(
         self,
         parameter: ParameterIndex,
@@ -322,20 +342,7 @@ impl FloatParameterCursor<'_> {
     /// that the cursor was used without the schema validation performed by
     /// [`ParameterStore`](crate::parameters::ParameterStore).
     pub fn value_at(&mut self, offset: u32) -> Result<f64, ParameterCursorError> {
-        if offset >= self.frame_count {
-            return Err(ParameterCursorError::OffsetOutOfRange {
-                offset,
-                frame_count: self.frame_count,
-            });
-        }
-        if let Some(previous) = self.last_query_offset
-            && offset < previous
-        {
-            return Err(ParameterCursorError::NonMonotonicQuery {
-                previous,
-                actual: offset,
-            });
-        }
+        validate_query(self.frame_count, self.last_query_offset, offset)?;
 
         let mut index = self.next_event;
         while index < self.events.len() {
@@ -408,6 +415,71 @@ impl FloatParameterCursor<'_> {
         self.point_value = value;
         Ok(())
     }
+}
+
+/// Lazy Boolean step trajectory over the existing bounded parameter stream.
+pub struct BooleanParameterCursor<'events> {
+    events: &'events [ParameterEvent],
+    frame_count: u32,
+    parameter: ParameterIndex,
+    next_event: usize,
+    value: bool,
+    last_query_offset: Option<u32>,
+}
+
+impl BooleanParameterCursor<'_> {
+    /// Evaluate the held Boolean at one sample offset.
+    ///
+    /// # Errors
+    ///
+    /// Rejects out-of-range or decreasing queries, or a non-Boolean base point
+    /// when used directly without runtime schema validation.
+    pub fn value_at(&mut self, offset: u32) -> Result<bool, ParameterCursorError> {
+        validate_query(self.frame_count, self.last_query_offset, offset)?;
+        while let Some(event) = self.events.get(self.next_event) {
+            if event.parameter != self.parameter
+                || matches!(event.change, ParameterEventChange::Modulate { .. })
+            {
+                self.next_event += 1;
+                continue;
+            }
+            if event.offset > offset {
+                break;
+            }
+            let ParameterEventChange::Set(ParameterEventValue::Boolean(value)) = event.change
+            else {
+                return Err(ParameterCursorError::NonBooleanValue {
+                    index: self.next_event,
+                });
+            };
+            self.value = value;
+            self.next_event += 1;
+        }
+        self.last_query_offset = Some(offset);
+        Ok(self.value)
+    }
+}
+
+fn validate_query(
+    frame_count: u32,
+    previous: Option<u32>,
+    offset: u32,
+) -> Result<(), ParameterCursorError> {
+    if offset >= frame_count {
+        return Err(ParameterCursorError::OffsetOutOfRange {
+            offset,
+            frame_count,
+        });
+    }
+    if let Some(previous) = previous
+        && offset < previous
+    {
+        return Err(ParameterCursorError::NonMonotonicQuery {
+            previous,
+            actual: offset,
+        });
+    }
+    Ok(())
 }
 
 /// Failure while validating a borrowed process event slice.
@@ -484,7 +556,7 @@ impl fmt::Display for ParameterEventsError {
 
 impl std::error::Error for ParameterEventsError {}
 
-/// Failure while evaluating a floating-point trajectory cursor.
+/// Failure while evaluating a parameter trajectory cursor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParameterCursorError {
     /// Cursor's initial base value or held amount was not finite.
@@ -502,6 +574,11 @@ pub enum ParameterCursorError {
         previous: u32,
         /// New query offset.
         actual: u32,
+    },
+    /// A base point for the cursor target was not Boolean.
+    NonBooleanValue {
+        /// Zero-based event index.
+        index: usize,
     },
     /// A set event for the cursor target was not floating-point.
     NonFloatValue {
@@ -525,6 +602,9 @@ impl fmt::Display for ParameterCursorError {
                 formatter,
                 "parameter cursor offset {actual} follows previous offset {previous}"
             ),
+            Self::NonBooleanValue { index } => {
+                write!(formatter, "parameter event {index} is not Boolean")
+            }
             Self::NonFloatValue { index } => {
                 write!(formatter, "parameter event {index} is not floating-point")
             }

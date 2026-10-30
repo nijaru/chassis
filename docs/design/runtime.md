@@ -25,12 +25,13 @@ InstanceRuntime<P>
   active/inactive lifecycle
   accepted active I/O configuration
   activation-scoped LatencySamples
+  completed active TailLength snapshot
   optional active Processor
 
 Processor
   exclusive mutable realtime DSP history/resources while active
   caches dense process-time identities/resources established before processing
-  reports latency established by this activation
+  reports activation latency and current conservative tail bound
 
 Process<S>
   sample-representation-specific processing over borrowed ProcessBlock<S>
@@ -80,8 +81,8 @@ Activation then:
 6. resolves accepted stable audio keys to activation-owned dense metadata and owns the configured ports while non-realtime;
 7. constructs `ActivationConfig` from runtime-owned data;
 8. revalidates complete state through `Component::validate_state()` and calls the single `Component::activate(config, parameters, custom_state)` preparation hook;
-9. reads `Processor::latency()` from the successfully constructed processor;
-10. publishes the processor, accepted configuration, resolved endpoint metadata, and latency snapshot together as the active child.
+9. reads `Processor::latency()` and `Processor::tail()` from the successfully constructed processor;
+10. publishes the processor, accepted configuration, resolved endpoint metadata, latency, and initial tail snapshot together as the active child.
 
 A failed activation never publishes a partial active child. Executable negative-space coverage verifies failure leaves the runtime inactive, preserves durable state, and permits later successful activation.
 
@@ -133,7 +134,7 @@ Complete loads borrow the component and reject schema drift; `state_migrations()
 
 An accepted active custom-state change moves the first pre-load parameter store and snapshots its consumed modulation off-thread into one activation-owned frozen control projection, then requests reactivation. Until deactivation, `ProcessBlock` receives that projection and no parameter trajectories. Original event bounds/domains are still checked; notes, transport, and audio continue. Base events are discarded without durable endpoint completion; accepted modulation endpoints update only the desired held signal for reactivation. Later loads and direct control edits affect saveable desired state only. Reset, repeated loads, and state reversion cannot refresh or release the frozen projection. Deactivation reclaims it with the old resources off-callback; reactivation validates/prepares the latest desired state.
 
-This intentionally ignores parameter automation for as long as the environment defers restart. Merely freezing base values while forwarding automation is unsafe for coupled resource bounds. Parameter-only loads before this gate remain block-visible without an automatic runtime restart. Processor-originated restart requests retain their existing parameter/automation behavior; they do not activate the custom-state gate.
+This intentionally ignores base automation for as long as the environment defers restart, while retaining desired modulation independently. Merely freezing base values while forwarding automation is unsafe for coupled resource bounds. Parameter-only loads before this gate remain block-visible without an automatic runtime restart. Processor-originated restart requests retain their existing parameter/automation behavior; they do not activate the custom-state gate.
 
 Persistent state is semantic versioned data, not Rust object layout or transient DSP history.
 
@@ -144,6 +145,8 @@ Persistent state is semantic versioned data, not Rust object layout or transient
 The runtime snapshots latency rather than querying mutable processor state during processing. This gives deployment adapters/graphs a stable value for one active lifetime and prevents externally visible latency from drifting without the lifecycle transition needed to rebuild compensation/execution plans.
 
 A processor whose lookahead, convolution, oversampling path, or other activation resource changes latency establishes the new value during the next activation. `Processor::restart_requested()` signals that the active resources are no longer the desired generation while requiring the current processor to remain valid until replacement.
+
+Tail is separate: `active_tail()` exposes the last completed activation/process/reset bound, or `None` while inactive. It follows consumed controls/resources rather than desired replacements. [Runtime services](runtime-services.md#tail) owns its reporting and deployment contract.
 
 ## Audio configuration and process endpoints
 
@@ -188,7 +191,7 @@ A source must repeat the same finite topology and dimensions across traversals. 
 
 Adapters/embeddings prove raw pointer/alias facts before safe channel views enter core. Setup owns stable-to-dense endpoint translation and whole-I/O policy acceptance. Callback code consumes pre-resolved dense identities without callback-owned channel vectors or stable-string lookup.
 
-Outside the pending custom-state gate, successful DSP retains final automation points as durable parameter values. Event-free blocks, state export, and reactivation use those completed values. Failed validation or a processor panic commits no endpoints. Source ramps remain block-local; sources supply clipped continuation points rather than relying on hidden ramp state.
+Outside the pending custom-state gate, successful DSP retains final automation points as durable parameter values. Event-free blocks, state export, and reactivation use those completed values. Failed validation or a processor/tail-query panic commits no endpoints. The completed tail hook runs before retaining base or modulation endpoints. Source ramps remain block-local; sources supply clipped continuation points rather than relying on hidden ramp state.
 
 `crates/chassis-runtime/tests/realtime_alloc.rs` mechanically checks post-activation allocation/deallocation with float/integer/boolean/choice completion, including choice replacement after control edits and state loading. Full adapter-path allocation/work and performance evidence remains separate.
 
@@ -208,7 +211,7 @@ CLAP load runs component-owned migrations/complete validation before publishing 
 
 ## Deactivation and teardown
 
-Deactivation removes and destroys active processor/resources only after the deployment contract has ended process/reset access. Durable semantic state, held external modulation, and immutable schema remain for later activation. Active I/O and latency disappear with the active child and are recomputed on the next activation.
+Deactivation removes and destroys active processor/resources only after the deployment contract has ended process/reset access. Durable semantic state, held external modulation, and immutable schema remain for later activation. Active I/O, latency, and the core tail snapshot disappear with the active child and are recomputed on the next activation.
 
 Future background tasks, callbacks, editors, deferred reclamation, devices, graphs, and module unload require explicit fencing/shutdown owners before they enter common runtime infrastructure.
 
@@ -218,7 +221,7 @@ Future background tasks, callbacks, editors, deferred reclamation, devices, grap
 - component/runtime schema, audio policy, or state-identity drift fails before product activation;
 - malformed structural I/O or an unsupported whole-I/O configuration fails before product activation;
 - product activation error remains distinct from framework validation error;
-- failed activation publishes neither processor nor latency;
+- failed activation publishes neither processor nor latency/tail metadata;
 - callback dimensions, parameter/note events, and dense audio endpoint legality are validated before product DSP;
 - complete state replacement is failure-atomic;
 - no panic may unwind through a format FFI boundary.
@@ -228,10 +231,9 @@ Future background tasks, callbacks, editors, deferred reclamation, devices, grap
 The ownership/schema/identity migration is no longer the blocker. Remaining core work should be driven by concrete audio semantics:
 
 1. extend the qualified global float modulation subset only when a client needs per-note/expression or other domains; keep external signals separate from durable state;
-2. define common tail and bypass semantics only where deployments can map them faithfully;
-3. finish the event/output/expression/MIDI contracts needed by real instruments and event processors;
-4. add bounded control -> DSP non-parameter publication and background-work/reclamation lifecycle;
-5. add bus/port convenience or a richer `AudioIoPolicy` only if materially different clients show the current explicit model is insufficient;
-6. continue cross-platform, allocation, concurrency, adapter, and real-host qualification as these contracts change.
+2. finish the event/output/expression/MIDI contracts needed by real instruments and event processors;
+3. add bounded control -> DSP non-parameter publication and background-work/reclamation lifecycle;
+4. add bus/port convenience or a richer `AudioIoPolicy` only if materially different clients show the current explicit model is insufficient;
+5. continue cross-platform, allocation, concurrency, adapter, and real-host qualification as these contracts change.
 
 The current `ComponentSchema` / `InstanceRuntime` ownership shape is a candidate-stable architecture. Do not reopen it merely to add speculative generality; change it when a concrete client exposes a semantic or ergonomic deficiency.

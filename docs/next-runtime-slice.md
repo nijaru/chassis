@@ -28,7 +28,7 @@ The roadmap review also found remaining stable-choice scans in CLAP synchronizat
 
 `Component` owns custom defaults, complete-state validation, and adjacent migration registration. `for_component` is the only public runtime constructor; defaults are validated even without persistence identity. One `activate(config, parameters, custom_state)` hook replaces the historical hook chain, and loads borrow the component rather than accept per-call policy.
 
-A resource-backed table fixture couples parameter addressing to custom data and processes before restart. The first accepted active custom-state change freezes the pre-load DSP parameter projection. Incoming parameter automation remains validated but is discarded, with no endpoint completion, until deactivation/reactivation. Later loads and control edits affect saveable desired state only. Reset and state reversion cannot unfreeze the old resources. This deliberately sacrifices parameter automation while a host defers restart; retaining it would require a qualified resource-compatibility policy.
+A resource-backed table fixture couples parameter addressing to custom data and processes before restart. The first accepted active custom-state change freezes the pre-load DSP parameter projection. Incoming base automation remains validated but is discarded, with no endpoint completion, until deactivation/reactivation. Later loads and base control edits affect saveable desired state only; admitted modulation still updates desired held input without reaching old DSP. Reset and state reversion cannot unfreeze the old resources. This deliberately sacrifices parameter automation while a host defers restart; retaining it would require a qualified resource-compatibility policy.
 
 ## Closed — complete CLAP state projection
 
@@ -50,15 +50,17 @@ Explicitly opted-in floats now accept global held plain-unit amounts in the same
 
 Core and actual-entry fixtures exercise mixed trajectories, lifecycle/state exclusion, resource gating, malformed/targeted rejection, and allocation bounds. Per-note/expression and non-float modulation remain unsupported rather than flattened. [Parameters/state](design/parameters-state.md#global-additive-float-modulation) owns the contract; [validation](design/validation.md) owns revision-scoped evidence.
 
-## Next — tail and bypass
+## Closed — tail and bypass
 
-Define tail independently of activation latency, then host-bypass identity/timing with explicit product DSP policy. Deliver each through its deployment projection and a focused fixture, without prescribing one dry/wet or crossfade algorithm.
+Tail now reports a completed conservative bound independently of activation latency. CLAP queries use a shared snapshot, with audio-thread notifications and notification debt preserved across unstarted activations. Bypass is an explicit unique Boolean role in ordinary persistent, sample-timed controls; product DSP owns its transition and audio policy.
 
-## Following audio contracts
+The core echo fixture preserves latency and existing tail; the exported gain fixture demonstrates timed unity-gain dry processing with subnormal cleanup in f32/f64, and the delayed export reports its actual delay extent. The boundary review also corrected read-only event-descriptor ownership and typed-event pointer provenance at the existing Clack pin. [Runtime services](design/runtime-services.md) owns the semantic contract; the [source audit](research/clack-pinned-adapter-audit.md) owns the FFI delta and [validation](design/validation.md) owns qualified revisions.
 
-Deliver each contract with its deployment projection and focused fixture:
-- note-port/input CLAP projection and a non-effect export with honest descriptor features;
-- bounded output events, expression, MIDI 1/SysEx, and MIDI 2/UMP with explicit rejection rather than destructive translation.
+## Next — note-port input projection
+
+Project core note ports/input through CLAP and export a non-effect fixture with honest descriptor features. Reject unsupported identity/expression rather than flattening it.
+
+Follow with bounded output events, expression, MIDI 1/SysEx, and MIDI 2/UMP, each with its deployment projection and focused fixture. The output-descriptor safety correction does not itself implement event output.
 
 Speaker layouts and richer I/O policies remain demand-driven. Core proof is not format support, and additional formats/editors/devices/graphs do not justify freezing incomplete semantic surfaces.
 

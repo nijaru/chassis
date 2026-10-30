@@ -70,11 +70,19 @@ pub struct Events<'a> {
 impl Events<'_> {
     /// # Safety
     ///
-    /// The user must ensure the given process struct is fully valid, and for the lifetime `'a`.
-    pub(crate) unsafe fn from_raw(process: &clap_process) -> Self {
-        Self {
-            input: InputEvents::from_raw(&*process.in_events),
-            output: OutputEvents::from_raw_mut(&mut *(process.out_events as *mut _)),
+    /// The process and its event tables must remain valid throughout the callback.
+    pub(crate) unsafe fn with_raw<R>(
+        process: &clap_process,
+        callback: impl FnOnce(Events<'_>) -> R,
+    ) -> R {
+        // SAFETY: caller guarantees both tables and their contexts remain valid.
+        unsafe {
+            OutputEvents::with_raw(&*process.out_events, |output| {
+                callback(Events {
+                    input: InputEvents::from_raw(&*process.in_events),
+                    output,
+                })
+            })
         }
     }
 }

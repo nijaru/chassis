@@ -13,7 +13,7 @@ use chassis_clap::{ClapComponent, SingleComponentEntry, clack_export_entry};
 use chassis_runtime::{
     audio::{AudioPortIndex, MAIN_INPUT, MAIN_OUTPUT},
     process::{ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessChannel},
-    runtime::{Component, LatencySamples, Process, Processor},
+    runtime::{Component, LatencySamples, Process, Processor, TailLength},
 };
 
 struct DelayedProbeEffect;
@@ -79,6 +79,10 @@ struct DelayedProcessor {
 }
 
 impl Processor for DelayedProcessor {
+    fn tail(&self) -> TailLength {
+        TailLength::FiniteSamples(u64::from(self.latency.get()))
+    }
+
     fn latency(&self) -> LatencySamples {
         self.latency
     }

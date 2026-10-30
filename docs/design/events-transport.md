@@ -133,7 +133,7 @@ Adapter rules:
 
 Never expand ramps into one allocated event per sample. Parameter cursors evaluate constant/linear spans lazily from bounded state.
 
-Host trajectory reconstruction and product smoothing remain separate. Chassis adds no product smoothing by default.
+Host trajectory reconstruction and product smoothing remain separate. Chassis adds no product smoothing by default. Boolean sets, including explicit bypass, use an allocation-free stepped cursor in this same ordered stream; they do not admit linear ramps or gain a separate timing lane.
 
 ## Global parameter modulation
 

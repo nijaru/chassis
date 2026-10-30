@@ -308,13 +308,17 @@ impl<'a, P: Plugin> PluginBoxInner<'a, P> {
         plugin: *const clap_plugin,
         process: *const clap_process,
     ) -> clap_process_status {
-        // SAFETY: process ptr is never accessed later, and is guaranteed to be valid and unique by the host
+        // SAFETY: the host keeps the process, audio buffers, and event tables
+        // valid for this call. Audio access is exclusive; event descriptors are
+        // only read. Events::with_raw owns the mutable output view locally.
         PluginWrapper::<P>::handle_process(plugin, |p| {
-            Ok(p.audio_processor()?.as_mut().process(
-                Process::from_raw(&*process),
-                Audio::from_raw(&*process),
-                Events::from_raw(&*process),
-            )?)
+            Events::with_raw(&*process, |events| {
+                Ok(p.audio_processor()?.as_mut().process(
+                    Process::from_raw(&*process),
+                    Audio::from_raw(&*process),
+                    events,
+                )?)
+            })
         })
         .map(|s| s as clap_process_status)
         .unwrap_or(CLAP_PROCESS_ERROR)

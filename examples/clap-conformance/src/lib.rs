@@ -43,7 +43,14 @@ impl ConformanceEffect {
             .with_global_modulation()
             .expect("trim is a float");
         Self {
-            parameters: vec![mode, trim],
+            parameters: vec![
+                mode,
+                trim,
+                ParameterDescriptor::boolean("bypass", "Bypass", false)
+                    .expect("bypass parameter is valid")
+                    .with_bypass()
+                    .expect("bypass is Boolean"),
+            ],
         }
     }
 }
@@ -76,6 +83,7 @@ impl Component for ConformanceEffect {
     ) -> Result<Self::Processor, Self::ActivationError> {
         let trim = parameters.index("trim").expect("conformance trim exists");
         Ok(ConformanceProcessor {
+            bypass: parameters.index("bypass").expect("bypass exists"),
             trim,
             modulation: parameters
                 .descriptor(trim)
@@ -90,11 +98,13 @@ impl ClapComponent for ConformanceEffect {
     const CLAP_ID: &'static str = "com.nijaru.chassis.conformance";
     const CLAP_NAME: &'static str = "Chassis Conformance";
     const CLAP_FEATURES: &'static [&'static std::ffi::CStr] = &[c"audio-effect", c"stereo"];
-    const CLAP_PARAMETER_IDS: &'static [(&'static str, u32)] = &[("mode", 7001), ("trim", 7002)];
+    const CLAP_PARAMETER_IDS: &'static [(&'static str, u32)] =
+        &[("mode", 7001), ("trim", 7002), ("bypass", 7003)];
     const CLAP_MAX_PARAMETER_EVENTS: u32 = 512;
 }
 
 struct ConformanceProcessor {
+    bypass: ParameterIndex,
     trim: ParameterIndex,
     modulation: GlobalFloatModulation,
 }
@@ -113,11 +123,17 @@ impl ConformanceProcessor {
         else {
             panic!("conformance trim is a float");
         };
+        let Some(ParameterEventValue::Boolean(bypassed)) =
+            block.parameters().get_event_value(self.bypass)
+        else {
+            panic!("conformance bypass is Boolean");
+        };
         let amount = block.modulation(self.trim).expect("trim has a held signal");
         let events = block.parameter_events();
         for mut buffer in block.channels() {
             match buffer.relationship() {
                 BufferRelationship::InPlace | BufferRelationship::Separate => {
+                    let mut bypass = events.boolean_cursor(self.bypass, bypassed);
                     let mut trim = self
                         .modulation
                         .cursor(events, self.trim, base, amount)
@@ -128,9 +144,16 @@ impl ConformanceProcessor {
                         .iter_mut()
                         .enumerate()
                     {
-                        let gain = trim
-                            .value_at(u32::try_from(offset).expect("callback offset fits u32"))
-                            .expect("callback offset is within the process block");
+                        let offset = u32::try_from(offset).expect("callback offset fits u32");
+                        let gain = trim.value_at(offset).expect("valid trim query");
+                        // Product policy: immediate unity-gain dry path, with
+                        // the same subnormal cleanup as normal processing.
+                        // No latency/history or crossfade needs preservation.
+                        let gain = if bypass.value_at(offset).expect("valid bypass query") {
+                            1.0
+                        } else {
+                            gain
+                        };
                         apply(sample, gain);
                     }
                 }
@@ -180,7 +203,9 @@ mod tests {
 
     #[test]
     fn f32_trim_flushes_subnormal_output() {
-        let mut sample = f32::from_bits(1);
+        // The product must flush a nonzero subnormal result, not merely let
+        // the multiplication underflow to zero on its own.
+        let mut sample = f32::from_bits(4);
         apply_trim_f32(&mut sample, 0.5);
         assert_eq!(sample.to_bits(), 0.0_f32.to_bits());
     }

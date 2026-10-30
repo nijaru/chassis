@@ -10,6 +10,7 @@ mod audio;
 mod parameters;
 mod process_audio;
 mod raw_audio;
+mod tail;
 
 use core::{marker::PhantomData, num::NonZeroU32};
 use std::{
@@ -39,6 +40,7 @@ use clack_extensions::{
     },
     render::{PluginRender, PluginRenderImpl, RenderMode},
     state::{PluginState, PluginStateImpl},
+    tail::HostTail,
 };
 use clack_plugin::{
     entry::{DefaultPluginFactory, SinglePluginEntry},
@@ -159,6 +161,9 @@ pub struct ChassisShared {
     schema: Arc<ComponentSchema>,
     parameters: Arc<ClapStateProjection>,
     render: Arc<RenderState>,
+    // A completed scalar only: relaxed loads publish no associated payload.
+    tail: AtomicU32,
+    tail_notification_pending: AtomicBool,
 }
 
 impl PluginShared<'_> for ChassisShared {}
@@ -182,6 +187,7 @@ where
     runtime: InstanceRuntime<P>,
     host: HostAudioProcessorHandle<'a>,
     restart_sent: bool,
+    host_tail: Option<HostTail>,
     shared: &'a ChassisShared,
     normalized_events: Vec<chassis_runtime::automation::ParameterEvent>,
     control_values: Vec<f64>,
@@ -205,6 +211,7 @@ where
     fn declare_extensions(builder: &mut PluginExtensions<Self>, shared: Option<&Self::Shared<'_>>) {
         builder.register::<PluginAudioPorts>();
         builder.register::<PluginLatency>();
+        builder.register::<tail::PluginTailSnapshot>();
         if shared.is_none_or(|shared| !shared.parameters.bindings().is_empty()) {
             builder.register::<PluginParams>();
         }
@@ -247,6 +254,7 @@ where
     fn declare_extensions(builder: &mut PluginExtensions<Self>, shared: Option<&Self::Shared<'_>>) {
         builder.register::<PluginAudioPorts>();
         builder.register::<PluginLatency>();
+        builder.register::<tail::PluginTailSnapshot>();
         if shared.is_none_or(|shared| !shared.parameters.bindings().is_empty()) {
             builder.register::<PluginParams>();
         }
@@ -359,6 +367,8 @@ where
         schema: Arc::new(schema),
         parameters: Arc::new(parameters),
         render: Arc::new(RenderState::default()),
+        tail: AtomicU32::new(0),
+        tail_notification_pending: AtomicBool::new(false),
     })
 }
 
@@ -432,6 +442,7 @@ where
     let audio_scratch = raw_audio::AudioScratch::new(&process_slots)?;
     let mut processor = ChassisAudioProcessor {
         runtime,
+        host_tail: host.get_extension::<HostTail>(),
         host,
         restart_sent: false,
         shared,
@@ -453,6 +464,9 @@ where
         )
         .map_err(|_| PluginError::Message("Chassis component activation failed"))?;
 
+    // Publish before any reentrant host notification; activation itself is on
+    // the main thread, so defer tail.changed until an audio callback.
+    shared.publish_tail_snapshot(processor.runtime.active_tail().expect("runtime is active"));
     let latency = processor
         .runtime
         .active_latency()
@@ -665,7 +679,15 @@ where
     }
 
     fn reset(&mut self) {
-        let _ = self.runtime.reset();
+        self.runtime
+            .reset()
+            .expect("CLAP reset has an active runtime");
+        self.publish_tail();
+    }
+
+    fn start_processing(&mut self) -> Result<(), PluginError> {
+        self.notify_tail();
+        Ok(())
     }
 }
 
@@ -706,7 +728,15 @@ where
     }
 
     fn reset(&mut self) {
-        let _ = self.runtime.reset();
+        self.runtime
+            .reset()
+            .expect("CLAP reset has an active runtime");
+        self.publish_tail();
+    }
+
+    fn start_processing(&mut self) -> Result<(), PluginError> {
+        self.notify_tail();
+        Ok(())
     }
 }
 
@@ -732,6 +762,23 @@ impl<P, M> ChassisAudioProcessor<'_, P, M>
 where
     P: Processor,
 {
+    fn publish_tail(&mut self) {
+        self.shared
+            .publish_tail_snapshot(self.runtime.active_tail().expect("runtime is active"));
+        self.notify_tail();
+    }
+
+    fn notify_tail(&mut self) {
+        if self
+            .shared
+            .tail_notification_pending
+            .swap(false, Ordering::Relaxed)
+            && let Some(extension) = self.host_tail
+        {
+            extension.changed(&mut self.host);
+        }
+    }
+
     fn process_block<S>(
         &mut self,
         process: ClapProcess,
@@ -814,6 +861,7 @@ where
                 .map_err(sync_error)?;
         }
         self.sync_parameters()?;
+        self.publish_tail();
 
         if !self.restart_sent && self.runtime.restart_requested() {
             self.restart_sent = true;

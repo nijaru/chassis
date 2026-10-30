@@ -9,8 +9,9 @@ description = "CLAP adapter for the Chassis audio framework"
 
 [dependencies]
 chassis-runtime.workspace = true
+clap-sys = "0.5.0"
 clack-plugin.workspace = true
-clack-extensions = { workspace = true, features = ["audio-ports", "clack-plugin", "latency", "params", "render", "state"] }
+clack-extensions = { workspace = true, features = ["audio-ports", "clack-plugin", "latency", "params", "render", "state", "tail"] }
 
 [lints]
 workspace = true

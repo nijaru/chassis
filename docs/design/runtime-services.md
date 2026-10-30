@@ -1,6 +1,6 @@
 # Common Runtime Services
 
-Status: activation-scoped latency/restart and fixed-width coherent `f32` telemetry are implemented. Tail/bypass, prepared publication/reclamation, and task lifecycle remain design direction; public API is not frozen.
+Status: activation-scoped latency/restart, completed tail metadata, explicit host-bypass controls, and fixed-width coherent `f32` telemetry are implemented. Prepared publication/reclamation and task lifecycle remain design direction; public API is not frozen.
 
 ## Goal
 
@@ -26,21 +26,19 @@ Prefer stable/worst-case latency across ordinary realtime parameter changes when
 
 ## Tail
 
-Tail is distinct from latency. A likely common semantic model is:
+`Processor::tail()` reports `TailLength::FiniteSamples(u64)` or `TailLength::Infinite` at the active sample rate. Finite zero is the canonical default. This is a conservative bound on potential output after input stops, not latency, a countdown of current history, or a scheduling/activity hint. Products own any decay threshold used to estimate a finite bound.
 
-```text
-Tail::None
-Tail::FiniteSamples(u64)
-Tail::Infinite
-```
+`InstanceRuntime::active_tail()` caches the completed activation, successful process, or successful reset result; inactive runtimes return `None`. The realtime-safe hook describes consumed controls/resources, including old resources while reactivation is pending. Validation failure or a panicking hook does not publish a replacement. Query the completed tail before retaining automation endpoints so a hook panic cannot partially commit controls.
 
-Tail reporting is metadata about potential output after input stops. It does not replace the product's own silence/activity logic.
+CLAP projects a shared atomic snapshot, never a borrow of live DSP. Main/audio queries and synchronous notification re-entry are legal. The initial inactive value is zero; deactivation retains the last published snapshot. Finite lengths below `INT32_MAX` are exact; larger finite values project conservatively to CLAP infinity. Publish activation metadata before a reentrant latency notification, but send tail-change notifications only on an audio callback. Notification debt survives deactivation before processing starts. Compare projected values so indistinguishable oversized lengths do not repeatedly notify.
 
 ## Bypass
 
-Normalize host-visible bypass identity/timing where formats support it, but do not force one bypass DSP algorithm.
+`ParameterDescriptor::with_bypass()` marks one Boolean parameter explicitly; non-Boolean roles and duplicate bypass parameters are rejected. Names and keys never imply the role. CLAP advertises `IS_BYPASS` with its ordinary stepped `0..1` domain: false/off, true/on.
 
-Product policy may require transparent copy, latency preservation, tail preservation, a crossfade, or custom processing. Reusable helpers can graduate into Chassis after repeated products demonstrate stable semantics.
+Bypass is ordinary persistent base state in the existing bounded parameter stream, with sample offsets, source order, completion, and custom-resource gating unchanged. `ParameterEvents::boolean_cursor` supplies allocation-free stepped timing; it does not route audio or change modulation semantics.
+
+Products own transparent copy, latency/tail preservation, crossfades, or custom processing. The exported zero-latency gain fixture uses an immediate unity-gain dry path with its normal subnormal cleanup; the core echo fixture preserves delayed dry audio and existing wet history while stopping new wet injection. Neither algorithm is imposed by the framework. Helpers can graduate after repeated products demonstrate stable semantics.
 
 Host bypass is not the same thing as a product A/B switch, module bypass, or dry/wet control.
 
@@ -137,4 +135,4 @@ Likewise, do not use new algebraic/fast-math-style floating point operations mer
 
 ## Implementation boundary
 
-Latency/restart and scalar telemetry are current capabilities; tail and prepared control-to-DSP publication are not. A resource-backed fixture must establish replacement, reclamation, stale-result rejection, cancellation/unload, and offline behavior before a task API or executor is chosen. Analyzer streams, richer diagnostics, denormal guards, and bypass DSP helpers likewise need concrete requirements rather than an expanded service catalog.
+Latency/restart, tail metadata, bypass identity/timing, and scalar telemetry are current capabilities; prepared control-to-DSP publication is not. A resource-backed fixture must establish replacement, reclamation, stale-result rejection, cancellation/unload, and offline behavior before a task API or executor is chosen. Analyzer streams, richer diagnostics, denormal guards, and bypass DSP helpers likewise need concrete requirements rather than an expanded service catalog.

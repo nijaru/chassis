@@ -370,6 +370,7 @@ pub struct ParameterDescriptor {
     kind: ParameterKind,
     control: Option<control::ControlPolicy>,
     global_modulation: bool,
+    bypass: bool,
 }
 
 impl ParameterDescriptor {
@@ -395,9 +396,32 @@ impl ParameterDescriptor {
             kind,
             control: None,
             global_modulation: false,
+            bypass: false,
         };
         descriptor.validate()?;
         Ok(descriptor)
+    }
+
+    /// Identify this Boolean as the component's host bypass control.
+    ///
+    /// False means bypass off; true means bypass on. The product still owns
+    /// processing, transition, latency, and tail behavior. Names confer no role.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParameterDefinitionError::UnsupportedBypass`] for non-Boolean domains.
+    pub fn with_bypass(mut self) -> Result<Self, ParameterDefinitionError> {
+        if !matches!(self.kind, ParameterKind::Boolean { .. }) {
+            return Err(ParameterDefinitionError::UnsupportedBypass(self.key));
+        }
+        self.bypass = true;
+        Ok(self)
+    }
+
+    /// Whether this parameter explicitly supplies host bypass identity.
+    #[must_use]
+    pub const fn is_bypass(&self) -> bool {
+        self.bypass
     }
 
     /// Opt this float parameter into global additive plain-unit modulation.
@@ -891,6 +915,10 @@ pub enum ParameterDefinitionError {
     },
     /// Global additive modulation was requested for a non-float domain.
     UnsupportedModulation(ParameterKey),
+    /// Host bypass was requested for a non-Boolean domain.
+    UnsupportedBypass(ParameterKey),
+    /// More than one descriptor claimed host bypass identity.
+    DuplicateBypass(ParameterKey),
     /// Two descriptors used one stable parameter key.
     DuplicateParameter(ParameterKey),
 }
@@ -939,6 +967,12 @@ impl fmt::Display for ParameterDefinitionError {
                 formatter,
                 "parameter {key} does not support global float modulation"
             ),
+            Self::UnsupportedBypass(key) => {
+                write!(formatter, "parameter {key} is not Boolean bypass")
+            }
+            Self::DuplicateBypass(key) => {
+                write!(formatter, "parameter {key} repeats host bypass identity")
+            }
             Self::DuplicateParameter(key) => write!(formatter, "parameter key {key} is duplicated"),
         }
     }
@@ -1241,7 +1275,16 @@ impl ParameterStore {
                 });
             }
         }
+        let mut bypass_seen = false;
         for (index, descriptor) in descriptors.iter().enumerate() {
+            if descriptor.is_bypass() {
+                if bypass_seen {
+                    return Err(ParameterStoreError::InvalidDefinition(
+                        ParameterDefinitionError::DuplicateBypass(descriptor.key().clone()),
+                    ));
+                }
+                bypass_seen = true;
+            }
             if descriptors[..index]
                 .iter()
                 .any(|previous| previous.key() == descriptor.key())

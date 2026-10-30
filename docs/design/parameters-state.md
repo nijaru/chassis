@@ -31,6 +31,10 @@ Base values, automation, and explicitly opted-in global additive float modulatio
 
 Explicit host ramps are reproduced without automatic extra smoothing. Smoothing remains product DSP policy unless real clients prove a common helper.
 
+## Explicit bypass and Boolean timing
+
+An explicitly marked bypass remains ordinary persistent Boolean base state, not a separate control stream or a DSP routing command. `ParameterEvents::boolean_cursor(index, initial)` evaluates stepped sets without allocation, preserving equal-offset source order and rejecting out-of-block or decreasing queries. It ignores other parameters and modulation; linear Boolean points are invalid. The existing event budget, endpoint completion, and custom-resource gate apply unchanged. [Runtime services](runtime-services.md#bypass) owns role uniqueness, CLAP projection, and product DSP policy.
+
 ## Global additive float modulation
 
 `ParameterDescriptor::with_global_modulation()` opts a float into one global plain-unit additive signal; it rejects integer, boolean, and choice domains. Cache the descriptor's `GlobalFloatModulation` and dense `ParameterIndex` during setup. Its cursor combines the consumed base trajectory and held amount as `(base + amount).clamp(minimum, maximum)`, including finite addition overflowing to an endpoint. Control taper/text policy is not a DSP combination hook.

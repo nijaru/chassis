@@ -137,6 +137,29 @@ impl LatencySamples {
     }
 }
 
+/// Conservative potential output extent after input stops, at the active sample rate.
+///
+/// This is independent of latency, current activity, and remaining buffered history.
+/// Products own decay thresholds and estimation; zero means no post-input tail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TailLength {
+    /// Finite upper bound in samples; zero is the canonical no-tail value.
+    FiniteSamples(u64),
+    /// No finite upper bound is reported.
+    Infinite,
+}
+
+impl TailLength {
+    /// No post-input tail.
+    pub const ZERO: Self = Self::FiniteSamples(0);
+}
+
+impl Default for TailLength {
+    fn default() -> Self {
+        Self::ZERO
+    }
+}
+
 /// Mutable realtime DSP/runtime-history owner while a component is active.
 ///
 /// The format-independent core does not require [`Send`] because a Chassis
@@ -145,7 +168,7 @@ impl LatencySamples {
 /// appropriate `Send` bound at that boundary. `Sync` is not a normal processing
 /// requirement because processor mutation remains exclusive.
 ///
-/// `Processor` deliberately contains lifecycle/reset semantics only. Sample
+/// `Processor` contains lifecycle and active DSP metadata, not scheduling. Sample
 /// precision is expressed by implementing [`Process`], so adding an f64 path
 /// later does not require a second processor architecture.
 pub trait Processor {
@@ -164,6 +187,16 @@ pub trait Processor {
     #[must_use]
     fn restart_requested(&self) -> bool {
         false
+    }
+
+    /// Return a conservative tail bound for currently consumed controls/resources.
+    ///
+    /// Chassis samples this after activation and successful process/reset calls.
+    /// This query must be realtime-safe and must not allocate, block, or mutate
+    /// DSP. Unlike latency, this metadata can change within an activation.
+    #[must_use]
+    fn tail(&self) -> TailLength {
+        TailLength::ZERO
     }
 
     /// Return the latency established by this activation.
@@ -388,6 +421,7 @@ struct ActiveRuntime<P> {
     resolved_audio: ResolvedAudioIoConfiguration,
     audio_buffers: AudioBufferValidation,
     latency: LatencySamples,
+    tail: TailLength,
     frozen_controls: Option<FrozenControls>,
     processor: P,
 }
@@ -593,13 +627,23 @@ where
         self.active.as_ref().map(|active| active.latency)
     }
 
+    /// Return the most recently completed active tail snapshot.
+    ///
+    /// Activation initializes it; successful processing/reset refresh it.
+    /// Failed validation or a product panic does not publish a replacement.
+    #[must_use]
+    pub fn active_tail(&self) -> Option<TailLength> {
+        self.active.as_ref().map(|active| active.tail)
+    }
+
     /// Whether active resources require replacement through a new activation.
     ///
     /// Accepted custom-state changes request restart immediately. This runtime
     /// request remains set until deactivation, even if later loads restore the
     /// previous state. The processor may independently request restart; current
     /// resources and the frozen DSP parameter projection remain valid until that
-    /// transition. Incoming parameter events are checked but discarded meanwhile.
+    /// transition. Incoming base automation is checked but withheld meanwhile;
+    /// accepted modulation still updates the desired held input for reactivation.
     #[must_use]
     pub fn restart_requested(&self) -> bool {
         self.active.as_ref().is_some_and(|active| {
@@ -677,12 +721,14 @@ where
             .activate(&config, &self.parameters, &self.custom_state)
             .map_err(ActivateError::Product)?;
         let latency = processor.latency();
+        let tail = processor.tail();
         self.active = Some(ActiveRuntime {
             process,
             audio_ports,
             resolved_audio,
             audio_buffers,
             latency,
+            tail,
             frozen_controls: None,
             processor,
         });
@@ -700,6 +746,7 @@ where
             .as_mut()
             .ok_or(InstanceLifecycleError::NotActive)?;
         active.processor.reset();
+        active.tail = active.processor.tail();
         Ok(())
     }
 
@@ -775,6 +822,7 @@ where
             resolved_audio,
             audio_buffers,
             latency: _,
+            tail,
             frozen_controls,
             processor,
         } = active;
@@ -822,6 +870,7 @@ where
         )
         .map_err(InstanceProcessError::InvalidBlock)?;
         processor.process(&mut block);
+        let completed_tail = processor.tail();
         if frozen_controls.is_none() {
             parameters.retain_automation_endpoints(context.parameter_events());
         }
@@ -834,6 +883,7 @@ where
                 modulation[position] = amount;
             }
         }
+        *tail = completed_tail;
         Ok(())
     }
 
