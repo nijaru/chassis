@@ -232,10 +232,24 @@ pub trait Process<S>: Processor {
 /// Realtime-safe product failure with no owned/allocated error payload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessError {
+    /// A typed parameter handle or trajectory query was invalid.
+    Parameter(crate::automation::ParameterCursorError),
     /// Essential event output could not complete.
     EventOutput(EventOutputError),
     /// Product-specific failure described by static text.
     Message(&'static str),
+}
+
+impl From<crate::automation::ParameterCursorError> for ProcessError {
+    fn from(error: crate::automation::ParameterCursorError) -> Self {
+        Self::Parameter(error)
+    }
+}
+
+impl From<crate::parameters::ParameterEventValueError> for ProcessError {
+    fn from(error: crate::parameters::ParameterEventValueError) -> Self {
+        Self::Parameter(error.into())
+    }
 }
 
 impl From<EventOutputError> for ProcessError {
@@ -247,6 +261,7 @@ impl From<EventOutputError> for ProcessError {
 impl fmt::Display for ProcessError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Parameter(error) => error.fmt(formatter),
             Self::EventOutput(error) => error.fmt(formatter),
             Self::Message(message) => formatter.write_str(message),
         }
@@ -256,6 +271,7 @@ impl fmt::Display for ProcessError {
 impl std::error::Error for ProcessError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Parameter(error) => Some(error),
             Self::EventOutput(error) => Some(error),
             Self::Message(_) => None,
         }

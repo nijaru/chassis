@@ -6,6 +6,9 @@
 //! borrowed process events are validated here against the active schema.
 
 mod control;
+mod handles;
+
+pub use handles::{BooleanParameter, ChoiceParameter, FloatParameter, IntegerParameter};
 
 pub use control::{DefaultParameterControl, ParameterControlError, ParameterControlPolicy};
 
@@ -1072,6 +1075,15 @@ pub enum ParameterStoreError {
     },
     /// No descriptor matched the requested key.
     UnknownParameter(String),
+    /// Setup requested a typed handle for a differently typed parameter.
+    WrongParameterType {
+        /// Requested stable key.
+        parameter: String,
+        /// Requested handle type.
+        expected: ParameterType,
+        /// Declared parameter type.
+        actual: ParameterType,
+    },
     /// Dense index did not identify a descriptor in this schema.
     UnknownParameterIndex(ParameterIndex),
     /// Proposed value failed descriptor validation.
@@ -1102,6 +1114,14 @@ impl fmt::Display for ParameterStoreError {
                 "parameter {parameter} has {actual} choices but {maximum} are allowed"
             ),
             Self::UnknownParameter(key) => write!(formatter, "unknown parameter {key}"),
+            Self::WrongParameterType {
+                parameter,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "parameter {parameter} is {actual}, not {expected}"
+            ),
             Self::UnknownParameterIndex(index) => {
                 write!(formatter, "unknown parameter index {}", index.get())
             }

@@ -37,7 +37,20 @@ impl GlobalFloatModulation {
     ) -> Result<ModulatedFloatCursor<'_>, ParameterCursorError> {
         Ok(ModulatedFloatCursor {
             base: events.float_cursor(parameter, initial_base)?,
-            amount: events.modulation_cursor(parameter, initial_amount)?,
+            amount: Some(events.modulation_cursor(parameter, initial_amount)?),
+            domain: self,
+        })
+    }
+
+    pub(crate) fn base_cursor(
+        self,
+        events: ParameterEvents<'_>,
+        parameter: ParameterIndex,
+        initial: f64,
+    ) -> Result<ModulatedFloatCursor<'_>, ParameterCursorError> {
+        Ok(ModulatedFloatCursor {
+            base: events.float_cursor(parameter, initial)?,
+            amount: None,
             domain: self,
         })
     }
@@ -46,7 +59,7 @@ impl GlobalFloatModulation {
 /// Lazy effective-value cursor over independent base and modulation controls.
 pub struct ModulatedFloatCursor<'events> {
     base: FloatParameterCursor<'events>,
-    amount: FloatParameterCursor<'events>,
+    amount: Option<FloatParameterCursor<'events>>,
     domain: GlobalFloatModulation,
 }
 
@@ -61,7 +74,10 @@ impl ModulatedFloatCursor<'_> {
     /// Returns [`ParameterCursorError`] for invalid queries or non-float base events.
     pub fn value_at(&mut self, offset: u32) -> Result<f64, ParameterCursorError> {
         let base = self.base.value_at(offset)?;
-        let amount = self.amount.value_at(offset)?;
+        let amount = match &mut self.amount {
+            Some(cursor) => cursor.value_at(offset)?,
+            None => 0.0,
+        };
         Ok((base + amount).clamp(self.domain.minimum, self.domain.maximum))
     }
 }

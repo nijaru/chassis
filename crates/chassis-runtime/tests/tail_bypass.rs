@@ -276,7 +276,11 @@ fn boolean_cursor_preserves_source_order_and_rejects_invalid_direct_use() {
             .unwrap()
             .boolean_cursor(BYPASS, false)
             .value_at(0),
-        Err(ParameterCursorError::NonBooleanValue { index: 0 })
+        Err(ParameterCursorError::WrongValueType {
+            index: 0,
+            expected: chassis_runtime::parameters::ParameterType::Boolean,
+            actual: chassis_runtime::parameters::ParameterType::Float
+        })
     );
 }
 

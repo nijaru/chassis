@@ -14,7 +14,7 @@
 
 use core::fmt;
 
-use crate::parameters::{ChoiceIndex, ParameterIndex};
+use crate::parameters::{ChoiceIndex, ParameterEventValueError, ParameterIndex, ParameterType};
 
 /// A process-time parameter value using setup-resolved dense identity.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -27,6 +27,19 @@ pub enum ParameterEventValue {
     Boolean(bool),
     /// Parameter-local dense choice identity resolved before processing.
     Choice(ChoiceIndex),
+}
+
+impl ParameterEventValue {
+    /// Return the value's process-domain type without stable-identity lookup.
+    #[must_use]
+    pub const fn value_type(self) -> ParameterType {
+        match self {
+            Self::Float(_) => ParameterType::Float,
+            Self::Integer(_) => ParameterType::Integer,
+            Self::Boolean(_) => ParameterType::Boolean,
+            Self::Choice(_) => ParameterType::Choice,
+        }
+    }
 }
 
 /// The change represented by one parameter event.
@@ -276,7 +289,35 @@ impl<'a> ParameterEvents<'a> {
         parameter: ParameterIndex,
         initial: bool,
     ) -> BooleanParameterCursor<'a> {
-        BooleanParameterCursor {
+        BooleanParameterCursor(self.step_cursor(parameter, ParameterEventValue::Boolean(initial)))
+    }
+
+    /// Create an allocation-free integer step cursor.
+    #[must_use]
+    pub fn integer_cursor(
+        self,
+        parameter: ParameterIndex,
+        initial: i64,
+    ) -> IntegerParameterCursor<'a> {
+        IntegerParameterCursor(self.step_cursor(parameter, ParameterEventValue::Integer(initial)))
+    }
+
+    /// Create an allocation-free choice step cursor using dense option identities.
+    #[must_use]
+    pub fn choice_cursor(
+        self,
+        parameter: ParameterIndex,
+        initial: ChoiceIndex,
+    ) -> ChoiceParameterCursor<'a> {
+        ChoiceParameterCursor(self.step_cursor(parameter, ParameterEventValue::Choice(initial)))
+    }
+
+    fn step_cursor(
+        self,
+        parameter: ParameterIndex,
+        initial: ParameterEventValue,
+    ) -> StepCursor<'a> {
+        StepCursor {
             events: self.events,
             frame_count: self.frame_count,
             parameter,
@@ -407,8 +448,12 @@ impl FloatParameterCursor<'_> {
             ParameterEventChange::Set(ParameterEventValue::Float(value))
             | ParameterEventChange::Linear { value }
             | ParameterEventChange::Modulate { amount: value } => value,
-            ParameterEventChange::Set(_) => {
-                return Err(ParameterCursorError::NonFloatValue { index });
+            ParameterEventChange::Set(value) => {
+                return Err(ParameterCursorError::WrongValueType {
+                    index,
+                    expected: ParameterType::Float,
+                    actual: value.value_type(),
+                });
             }
         };
         self.point_offset = event.offset;
@@ -418,23 +463,64 @@ impl FloatParameterCursor<'_> {
 }
 
 /// Lazy Boolean step trajectory over the existing bounded parameter stream.
-pub struct BooleanParameterCursor<'events> {
+pub struct BooleanParameterCursor<'events>(StepCursor<'events>);
+
+impl BooleanParameterCursor<'_> {
+    /// Evaluate at a nondecreasing offset inside the block.
+    ///
+    /// # Errors
+    /// Rejects invalid queries or a point with the wrong value type.
+    pub fn value_at(&mut self, offset: u32) -> Result<bool, ParameterCursorError> {
+        match self.0.value_at(offset)? {
+            ParameterEventValue::Boolean(value) => Ok(value),
+            _ => unreachable!("step cursor validates its declared type"),
+        }
+    }
+}
+
+/// Lazy integer step trajectory over the existing bounded parameter stream.
+pub struct IntegerParameterCursor<'events>(StepCursor<'events>);
+
+impl IntegerParameterCursor<'_> {
+    /// Evaluate at a nondecreasing offset inside the block.
+    ///
+    /// # Errors
+    /// Rejects invalid queries or a point with the wrong value type.
+    pub fn value_at(&mut self, offset: u32) -> Result<i64, ParameterCursorError> {
+        match self.0.value_at(offset)? {
+            ParameterEventValue::Integer(value) => Ok(value),
+            _ => unreachable!("step cursor validates its declared type"),
+        }
+    }
+}
+
+/// Lazy parameter-local choice trajectory; no stable IDs are read in processing.
+pub struct ChoiceParameterCursor<'events>(StepCursor<'events>);
+
+impl ChoiceParameterCursor<'_> {
+    /// Evaluate at a nondecreasing offset inside the block.
+    ///
+    /// # Errors
+    /// Rejects invalid queries or a point with the wrong value type.
+    pub fn value_at(&mut self, offset: u32) -> Result<ChoiceIndex, ParameterCursorError> {
+        match self.0.value_at(offset)? {
+            ParameterEventValue::Choice(value) => Ok(value),
+            _ => unreachable!("step cursor validates its declared type"),
+        }
+    }
+}
+
+struct StepCursor<'events> {
     events: &'events [ParameterEvent],
     frame_count: u32,
     parameter: ParameterIndex,
     next_event: usize,
-    value: bool,
+    value: ParameterEventValue,
     last_query_offset: Option<u32>,
 }
 
-impl BooleanParameterCursor<'_> {
-    /// Evaluate the held Boolean at one sample offset.
-    ///
-    /// # Errors
-    ///
-    /// Rejects out-of-range or decreasing queries, or a non-Boolean base point
-    /// when used directly without runtime schema validation.
-    pub fn value_at(&mut self, offset: u32) -> Result<bool, ParameterCursorError> {
+impl StepCursor<'_> {
+    fn value_at(&mut self, offset: u32) -> Result<ParameterEventValue, ParameterCursorError> {
         validate_query(self.frame_count, self.last_query_offset, offset)?;
         while let Some(event) = self.events.get(self.next_event) {
             if event.parameter != self.parameter
@@ -446,12 +532,18 @@ impl BooleanParameterCursor<'_> {
             if event.offset > offset {
                 break;
             }
-            let ParameterEventChange::Set(ParameterEventValue::Boolean(value)) = event.change
-            else {
-                return Err(ParameterCursorError::NonBooleanValue {
-                    index: self.next_event,
-                });
+            let value = match event.change {
+                ParameterEventChange::Set(value) => value,
+                ParameterEventChange::Linear { value } => ParameterEventValue::Float(value),
+                ParameterEventChange::Modulate { .. } => unreachable!("modulation was skipped"),
             };
+            if value.value_type() != self.value.value_type() {
+                return Err(ParameterCursorError::WrongValueType {
+                    index: self.next_event,
+                    expected: self.value.value_type(),
+                    actual: value.value_type(),
+                });
+            }
             self.value = value;
             self.next_event += 1;
         }
@@ -575,15 +667,16 @@ pub enum ParameterCursorError {
         /// New query offset.
         actual: u32,
     },
-    /// A base point for the cursor target was not Boolean.
-    NonBooleanValue {
+    /// A typed handle does not identify a matching parameter in this schema.
+    InvalidParameter(ParameterEventValueError),
+    /// A point's type did not match its cursor.
+    WrongValueType {
         /// Zero-based event index.
         index: usize,
-    },
-    /// A set event for the cursor target was not floating-point.
-    NonFloatValue {
-        /// Zero-based event index.
-        index: usize,
+        /// Cursor's value type.
+        expected: ParameterType,
+        /// Event's value type.
+        actual: ParameterType,
     },
 }
 
@@ -602,17 +695,33 @@ impl fmt::Display for ParameterCursorError {
                 formatter,
                 "parameter cursor offset {actual} follows previous offset {previous}"
             ),
-            Self::NonBooleanValue { index } => {
-                write!(formatter, "parameter event {index} is not Boolean")
-            }
-            Self::NonFloatValue { index } => {
-                write!(formatter, "parameter event {index} is not floating-point")
-            }
+            Self::InvalidParameter(error) => error.fmt(formatter),
+            Self::WrongValueType {
+                index,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "parameter event {index} is {actual}, not {expected}"
+            ),
         }
     }
 }
 
-impl std::error::Error for ParameterCursorError {}
+impl From<ParameterEventValueError> for ParameterCursorError {
+    fn from(error: ParameterEventValueError) -> Self {
+        Self::InvalidParameter(error)
+    }
+}
+
+impl std::error::Error for ParameterCursorError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InvalidParameter(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -653,6 +762,52 @@ mod tests {
         assert_eq!(
             events.next().expect("second event exists").change(),
             ParameterEventChange::Set(ParameterEventValue::Float(0.75))
+        );
+    }
+
+    #[test]
+    fn discrete_cursors_preserve_timing_source_order_and_types() {
+        let choice = ParameterIndex::new(2);
+        let events = [
+            ParameterEvent::set(1, GAIN, ParameterEventValue::Integer(6)),
+            ParameterEvent::set(1, choice, ParameterEventValue::Choice(ChoiceIndex::new(1))),
+            ParameterEvent::set(1, GAIN, ParameterEventValue::Integer(7)),
+            ParameterEvent::modulation(2, OTHER, 0.5),
+            ParameterEvent::set(3, GAIN, ParameterEventValue::Integer(2)),
+            ParameterEvent::set(3, choice, ParameterEventValue::Choice(ChoiceIndex::new(0))),
+        ];
+        let events = ParameterEvents::new(&events, 4, 6).unwrap();
+        let mut integers = events.integer_cursor(GAIN, 4);
+        let mut choices = events.choice_cursor(choice, ChoiceIndex::new(0));
+        for (offset, (integer, choice)) in [(4, 0), (7, 1), (7, 1), (2, 0)].into_iter().enumerate()
+        {
+            let offset = u32::try_from(offset).unwrap();
+            assert_eq!(integers.value_at(offset), Ok(integer));
+            assert_eq!(choices.value_at(offset), Ok(ChoiceIndex::new(choice)));
+        }
+        assert!(matches!(
+            integers.value_at(2),
+            Err(ParameterCursorError::NonMonotonicQuery { .. })
+        ));
+        assert!(matches!(
+            choices.value_at(4),
+            Err(ParameterCursorError::OffsetOutOfRange { .. })
+        ));
+        let bad = [ParameterEvent::set(
+            0,
+            GAIN,
+            ParameterEventValue::Boolean(true),
+        )];
+        assert_eq!(
+            ParameterEvents::new(&bad, 1, 1)
+                .unwrap()
+                .integer_cursor(GAIN, 0)
+                .value_at(0),
+            Err(ParameterCursorError::WrongValueType {
+                index: 0,
+                expected: ParameterType::Integer,
+                actual: ParameterType::Boolean
+            })
         );
     }
 
