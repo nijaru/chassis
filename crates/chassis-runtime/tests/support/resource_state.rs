@@ -170,7 +170,7 @@ impl Process<f64> for TableProcessor {
     fn process<B: ProcessBufferSource<f64> + ?Sized>(
         &mut self,
         block: &mut ProcessBlock<'_, '_, '_, f64, B>,
-    ) {
+    ) -> Result<(), chassis_runtime::runtime::ProcessError> {
         let Some(ParameterEventValue::Float(initial)) =
             block.parameters().get_event_value(ParameterIndex::new(0))
         else {
@@ -197,6 +197,7 @@ impl Process<f64> for TableProcessor {
                 }
             }
         }
+        Ok(())
     }
 }
 

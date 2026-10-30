@@ -125,7 +125,8 @@ impl Process<f32> for PolicyProcessor {
     fn process<B: ProcessBufferSource<f32> + ?Sized>(
         &mut self,
         _: &mut ProcessBlock<'_, '_, '_, f32, B>,
-    ) {
+    ) -> Result<(), chassis_runtime::runtime::ProcessError> {
+        Ok(())
     }
 }
 impl<const KIND: u8> ClapComponent for PolicyProbe<KIND> {

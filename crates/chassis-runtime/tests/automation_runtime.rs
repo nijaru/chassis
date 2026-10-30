@@ -70,7 +70,10 @@ impl Component for Effect {
 impl Processor for Gain {}
 
 impl Process<f64> for Gain {
-    fn process<B>(&mut self, block: &mut ProcessBlock<'_, '_, '_, f64, B>)
+    fn process<B>(
+        &mut self,
+        block: &mut ProcessBlock<'_, '_, '_, f64, B>,
+    ) -> Result<(), chassis_runtime::runtime::ProcessError>
     where
         B: ProcessBufferSource<f64> + ?Sized,
     {
@@ -98,6 +101,7 @@ impl Process<f64> for Gain {
                 *sample *= cursor.value_at(u32::try_from(offset).unwrap()).unwrap();
             }
         }
+        Ok(())
     }
 }
 

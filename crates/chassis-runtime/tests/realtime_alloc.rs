@@ -14,15 +14,21 @@ use chassis_runtime::{
     audio::{AudioPortIndex, DEFAULT_EFFECT_CONFIGURATION},
     automation::{ParameterEvent, ParameterEventValue, ParameterEvents},
     buffer::{ChannelBuffer, InputEndpoint, OutputEndpoint},
+    events::{
+        EventDialect, EventPortDescriptor, EventPortDirection, EventPortIndex, EventPortKey,
+        NormalizedValue, NoteAddress, NoteEvent, NoteEventKind, NoteEventSink, NoteEvents,
+        NoteExpression, NoteExpressionKind, NoteOutputError,
+    },
     parameters::{
         ChoiceId, ChoiceIndex, ChoiceOption, ParameterDescriptor, ParameterEventValueError,
         ParameterIndex, ParameterValue, ParameterValueError,
     },
     process::{
-        ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessChannel, ProcessConfig,
-        ProcessContext, ProcessMode, TransportSnapshot,
+        ActivationConfig, ChannelBufferSlice, InputEventIndex, InputEventRef, ProcessBlock,
+        ProcessBufferSource, ProcessChannel, ProcessConfig, ProcessContext, ProcessMode,
+        TransportSnapshot,
     },
-    runtime::{Component, InstanceRuntime, Process, Processor},
+    runtime::{Component, InstanceProcessError, InstanceRuntime, Process, ProcessError, Processor},
     state::{StateDocument, StateLimits},
 };
 
@@ -138,7 +144,10 @@ impl Component for Effect {
 impl Processor for GainProcessor {}
 
 impl Process<f32> for GainProcessor {
-    fn process<B>(&mut self, block: &mut ProcessBlock<'_, '_, '_, f32, B>)
+    fn process<B>(
+        &mut self,
+        block: &mut ProcessBlock<'_, '_, '_, f32, B>,
+    ) -> Result<(), chassis_runtime::runtime::ProcessError>
     where
         B: ProcessBufferSource<f32> + ?Sized,
     {
@@ -149,6 +158,7 @@ impl Process<f32> for GainProcessor {
                 }
             }
         }
+        Ok(())
     }
 }
 
@@ -282,6 +292,7 @@ fn repeated_post_activation_process_calls_do_not_allocate_or_deallocate() {
 
     runtime.deactivate().expect("deactivation succeeds");
     pending_resource_callbacks_do_not_allocate_or_reclaim();
+    native_note_callbacks_do_not_allocate_or_reclaim();
 }
 
 fn pending_resource_callbacks_do_not_allocate_or_reclaim() {
@@ -349,4 +360,175 @@ fn pending_resource_callbacks_do_not_allocate_or_reclaim() {
     assert_eq!(component.incompatible_controls.load(Ordering::Relaxed), 0);
     assert_eq!(runtime.state_document().unwrap(), replacement);
     runtime.deactivate().unwrap();
+}
+
+struct NoteEcho;
+impl Component for NoteEcho {
+    type Processor = Self;
+    type ActivationError = Infallible;
+    fn schema(
+        &self,
+    ) -> Result<
+        chassis_runtime::schema::ComponentSchema,
+        chassis_runtime::schema::ComponentSchemaError,
+    > {
+        chassis_runtime::schema::ComponentSchema::unidentified(
+            vec![],
+            chassis_runtime::audio::AudioIoPolicy::any_structurally_valid(),
+            vec![
+                EventPortDescriptor::new(
+                    EventPortKey::new("notes.in"),
+                    "Input",
+                    EventPortDirection::Input,
+                    &[EventDialect::Notes],
+                ),
+                EventPortDescriptor::new(
+                    EventPortKey::new("notes.out"),
+                    "Output",
+                    EventPortDirection::Output,
+                    &[EventDialect::Notes],
+                ),
+            ],
+            vec![ParameterDescriptor::float("gain", "Gain", 0.0, 1.0, 0.5).unwrap()],
+        )
+    }
+    fn activate(
+        &self,
+        _: &ActivationConfig<'_>,
+        _: &chassis_runtime::parameters::ParameterStore,
+        _: &[chassis_runtime::state::StateEntry],
+    ) -> Result<Self, Infallible> {
+        Ok(Self)
+    }
+}
+impl Processor for NoteEcho {}
+impl Process<f32> for NoteEcho {
+    fn process<B: ProcessBufferSource<f32> + ?Sized>(
+        &mut self,
+        block: &mut ProcessBlock<'_, '_, '_, f32, B>,
+    ) -> Result<(), ProcessError> {
+        // The iterator borrows input storage, not the block/sink. Products can
+        // emit directly while traversing real source order.
+        for event in block.ordered_events().unwrap() {
+            if let InputEventRef::Note(event) = event {
+                let address = event.kind().address();
+                let kind = if let NoteEventKind::Expression { expression, .. } = event.kind() {
+                    NoteEventKind::Expression {
+                        address: NoteAddress::new(
+                            EventPortIndex::new(1),
+                            address.note_id(),
+                            address.channel(),
+                            address.key(),
+                        ),
+                        expression,
+                    }
+                } else {
+                    NoteEventKind::End { address }
+                };
+                block.try_push_note_event(NoteEvent::new(event.offset(), kind))?;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn native_note_callbacks_do_not_allocate_or_reclaim() {
+    struct Sink {
+        reject: bool,
+        accepted: u32,
+    }
+    impl NoteEventSink for Sink {
+        fn try_push(&mut self, _: NoteEvent) -> Result<(), NoteOutputError> {
+            if self.reject {
+                return Err(NoteOutputError::Rejected);
+            }
+            self.accepted += 1;
+            Ok(())
+        }
+    }
+    let mut runtime = InstanceRuntime::for_component(&NoteEcho).unwrap();
+    runtime
+        .activate(
+            &NoteEcho,
+            process_config()
+                .with_max_note_events(2)
+                .with_max_output_note_events(2),
+            chassis_runtime::audio::AudioIoConfiguration::new(&[]),
+        )
+        .unwrap();
+    let parameters = [ParameterEvent::set(
+        0,
+        ParameterIndex::new(0),
+        ParameterEventValue::Float(1.0),
+    )];
+    let address = NoteAddress::new(EventPortIndex::new(0), None, None, None);
+    let notes = [
+        NoteEvent::new(
+            0,
+            NoteEventKind::On {
+                address,
+                velocity: NormalizedValue::new(0.5).unwrap(),
+            },
+        ),
+        NoteEvent::new(
+            1,
+            NoteEventKind::Expression {
+                address,
+                expression: NoteExpression::new(NoteExpressionKind::Tuning, 12.0).unwrap(),
+            },
+        ),
+    ];
+    let order = [
+        InputEventIndex::Parameter(0),
+        InputEventIndex::Note(0),
+        InputEventIndex::Note(1),
+    ];
+    let mut sink = Sink {
+        reject: false,
+        accepted: 0,
+    };
+    let mut buffers: [ChannelBuffer<'_, f32>; 0] = [];
+    let mut source = ChannelBufferSlice::new(&mut buffers);
+    ALLOCATIONS.store(0, Ordering::Relaxed);
+    DEALLOCATIONS.store(0, Ordering::Relaxed);
+    COUNT_THIS_THREAD.with(|counting| counting.set(true));
+    for block in 0..1000 {
+        let context = ProcessContext::with_note_events(
+            ProcessMode::Realtime,
+            TransportSnapshot::unknown(),
+            ParameterEvents::new(&parameters, 512, 1).unwrap(),
+            NoteEvents::new(&notes, 512, 2).unwrap(),
+        )
+        .with_input_order(&order)
+        .unwrap();
+        let context = if block % 2 == 0 {
+            context.without_parameter_events()
+        } else {
+            context
+        };
+        runtime
+            .process_source_with_output(512, context, &mut source, &mut sink)
+            .unwrap();
+    }
+    assert_eq!(sink.accepted, 2000);
+    sink.reject = true;
+    // Essential-output failure uses the same allocation-free error path. Do
+    // not continue DSP after this failed run.
+    let context = ProcessContext::with_note_events(
+        ProcessMode::Realtime,
+        TransportSnapshot::unknown(),
+        ParameterEvents::new(&parameters, 512, 1).unwrap(),
+        NoteEvents::new(&notes, 512, 2).unwrap(),
+    )
+    .with_input_order(&order)
+    .unwrap();
+    assert_eq!(
+        runtime.process_source_with_output(512, context, &mut source, &mut sink),
+        Err(InstanceProcessError::Processor(ProcessError::NoteOutput(
+            NoteOutputError::Rejected
+        )))
+    );
+    COUNT_THIS_THREAD.with(|counting| counting.set(false));
+    assert_eq!(ALLOCATIONS.load(Ordering::Relaxed), 0);
+    assert_eq!(DEALLOCATIONS.load(Ordering::Relaxed), 0);
 }

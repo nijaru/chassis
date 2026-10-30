@@ -102,7 +102,10 @@ struct HostedProcessor {
 impl Processor for HostedProcessor {}
 
 impl Process<f32> for HostedProcessor {
-    fn process<B>(&mut self, block: &mut ProcessBlock<'_, '_, '_, f32, B>)
+    fn process<B>(
+        &mut self,
+        block: &mut ProcessBlock<'_, '_, '_, f32, B>,
+    ) -> Result<(), chassis_runtime::runtime::ProcessError>
     where
         B: ProcessBufferSource<f32> + ?Sized,
     {
@@ -124,6 +127,7 @@ impl Process<f32> for HostedProcessor {
                 .expect("hosted fixture receives output-only channels")
                 .fill(value);
         }
+        Ok(())
     }
 }
 

@@ -94,7 +94,10 @@ struct InstrumentProcessor {
 impl Processor for InstrumentProcessor {}
 
 impl Process<f32> for InstrumentProcessor {
-    fn process<B>(&mut self, block: &mut ProcessBlock<'_, '_, '_, f32, B>)
+    fn process<B>(
+        &mut self,
+        block: &mut ProcessBlock<'_, '_, '_, f32, B>,
+    ) -> Result<(), chassis_runtime::runtime::ProcessError>
     where
         B: ProcessBufferSource<f32> + ?Sized,
     {
@@ -128,11 +131,13 @@ impl Process<f32> for InstrumentProcessor {
         for event in note_events.for_port(self.notes) {
             apply_gate_event(&mut self.gate, event.kind());
         }
+        Ok(())
     }
 }
 
 fn apply_gate_event(gate: &mut bool, event: NoteEventKind) {
     match event {
+        NoteEventKind::Expression { .. } => {}
         NoteEventKind::On { .. } => *gate = true,
         NoteEventKind::Off { .. } | NoteEventKind::Choke { .. } | NoteEventKind::End { .. } => {
             *gate = false;

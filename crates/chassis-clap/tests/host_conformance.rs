@@ -234,16 +234,18 @@ impl Process<f32> for ProbeProcessor {
     fn process<B: ProcessBufferSource<f32> + ?Sized>(
         &mut self,
         block: &mut ProcessBlock<'_, '_, '_, f32, B>,
-    ) {
+    ) -> Result<(), chassis_runtime::runtime::ProcessError> {
         self.process_trim(block, |sample, gain| *sample *= gain as f32);
+        Ok(())
     }
 }
 impl Process<f64> for ProbeProcessor {
     fn process<B: ProcessBufferSource<f64> + ?Sized>(
         &mut self,
         block: &mut ProcessBlock<'_, '_, '_, f64, B>,
-    ) {
+    ) -> Result<(), chassis_runtime::runtime::ProcessError> {
         self.process_trim(block, |sample, gain| *sample *= gain);
+        Ok(())
     }
 }
 

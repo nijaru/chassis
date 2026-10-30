@@ -135,7 +135,7 @@ impl Process<f64> for EchoProcessor {
     fn process<B: ProcessBufferSource<f64> + ?Sized>(
         &mut self,
         block: &mut ProcessBlock<'_, '_, '_, f64, B>,
-    ) {
+    ) -> Result<(), chassis_runtime::runtime::ProcessError> {
         let Some(ParameterEventValue::Boolean(initial)) =
             block.parameters().get_event_value(BYPASS)
         else {
@@ -166,6 +166,7 @@ impl Process<f64> for EchoProcessor {
                 self.positions[channel] = (position + 1) % (2 * self.wet_length);
             }
         }
+        Ok(())
     }
 }
 fn config() -> ProcessConfig {

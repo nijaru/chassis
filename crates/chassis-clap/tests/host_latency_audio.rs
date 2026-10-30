@@ -75,7 +75,10 @@ impl Processor for DelayedProcessor {
 }
 
 impl Process<f32> for DelayedProcessor {
-    fn process<B>(&mut self, block: &mut ProcessBlock<'_, '_, '_, f32, B>)
+    fn process<B>(
+        &mut self,
+        block: &mut ProcessBlock<'_, '_, '_, f32, B>,
+    ) -> Result<(), chassis_runtime::runtime::ProcessError>
     where
         B: ProcessBufferSource<f32> + ?Sized,
     {
@@ -110,6 +113,7 @@ impl Process<f32> for DelayedProcessor {
                 }
             }
         }
+        Ok(())
     }
 }
 

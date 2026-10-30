@@ -91,10 +91,14 @@ struct NoopProcessor;
 impl Processor for NoopProcessor {}
 
 impl Process<f32> for NoopProcessor {
-    fn process<B>(&mut self, _block: &mut ProcessBlock<'_, '_, '_, f32, B>)
+    fn process<B>(
+        &mut self,
+        _block: &mut ProcessBlock<'_, '_, '_, f32, B>,
+    ) -> Result<(), chassis_runtime::runtime::ProcessError>
     where
         B: ProcessBufferSource<f32> + ?Sized,
     {
+        Ok(())
     }
 }
 
@@ -176,7 +180,10 @@ struct ProcessPanicProcessor;
 impl Processor for ProcessPanicProcessor {}
 
 impl Process<f32> for ProcessPanicProcessor {
-    fn process<B>(&mut self, _block: &mut ProcessBlock<'_, '_, '_, f32, B>)
+    fn process<B>(
+        &mut self,
+        _block: &mut ProcessBlock<'_, '_, '_, f32, B>,
+    ) -> Result<(), chassis_runtime::runtime::ProcessError>
     where
         B: ProcessBufferSource<f32> + ?Sized,
     {

@@ -97,7 +97,7 @@ impl Process<f32> for TailProcessor {
     fn process<B: ProcessBufferSource<f32> + ?Sized>(
         &mut self,
         _: &mut ProcessBlock<'_, '_, '_, f32, B>,
-    ) {
+    ) -> Result<(), chassis_runtime::runtime::ProcessError> {
         self.0 = NEXT_TAIL.load(Ordering::Relaxed);
         if PAUSE.load(Ordering::Relaxed) {
             // Test-only synchronization, deliberately excluded from RT measurement.
@@ -105,6 +105,7 @@ impl Process<f32> for TailProcessor {
             entered.wait();
             release.wait();
         }
+        Ok(())
     }
 }
 impl ClapComponent for TailProbe {

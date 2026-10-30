@@ -167,20 +167,28 @@ impl ConformanceProcessor {
 }
 
 impl Process<f32> for ConformanceProcessor {
-    fn process<B>(&mut self, block: &mut ProcessBlock<'_, '_, '_, f32, B>)
+    fn process<B>(
+        &mut self,
+        block: &mut ProcessBlock<'_, '_, '_, f32, B>,
+    ) -> Result<(), chassis_runtime::runtime::ProcessError>
     where
         B: ProcessBufferSource<f32> + ?Sized,
     {
         self.process_trim(block, apply_trim_f32);
+        Ok(())
     }
 }
 
 impl Process<f64> for ConformanceProcessor {
-    fn process<B>(&mut self, block: &mut ProcessBlock<'_, '_, '_, f64, B>)
+    fn process<B>(
+        &mut self,
+        block: &mut ProcessBlock<'_, '_, '_, f64, B>,
+    ) -> Result<(), chassis_runtime::runtime::ProcessError>
     where
         B: ProcessBufferSource<f64> + ?Sized,
     {
         self.process_trim(block, apply_trim_f64);
+        Ok(())
     }
 }
 

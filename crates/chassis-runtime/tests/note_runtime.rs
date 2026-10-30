@@ -74,7 +74,10 @@ struct NoteProbeProcessor {
 impl Processor for NoteProbeProcessor {}
 
 impl Process<f32> for NoteProbeProcessor {
-    fn process<B>(&mut self, block: &mut ProcessBlock<'_, '_, '_, f32, B>)
+    fn process<B>(
+        &mut self,
+        block: &mut ProcessBlock<'_, '_, '_, f32, B>,
+    ) -> Result<(), chassis_runtime::runtime::ProcessError>
     where
         B: ProcessBufferSource<f32> + ?Sized,
     {
@@ -87,6 +90,7 @@ impl Process<f32> for NoteProbeProcessor {
             u32::try_from(note_ons).expect("event bound fits u32"),
             Ordering::Release,
         );
+        Ok(())
     }
 }
 

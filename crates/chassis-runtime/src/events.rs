@@ -5,9 +5,9 @@
 //! backend numeric ID or declaration position must not become persistent product
 //! identity by accident.
 //!
-//! The first executable event family is semantic note input. Raw MIDI, note
-//! expression, parameter modulation, and output sinks build on the same port and
-//! timing model without requiring one fabricated cross-family event order.
+//! Semantic notes and held note expression share input and bounded output
+//! contracts. Raw MIDI remains separate; independent input families do not
+//! acquire a fabricated cross-family event order.
 
 use core::fmt;
 use std::{borrow::Cow, string::String, vec::Vec};
@@ -372,6 +372,59 @@ impl NoteAddress {
     }
 }
 
+/// Dimension of a held, non-cumulative note-expression value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum NoteExpressionKind {
+    /// Linear volume multiplier, strictly positive and at most 4.
+    Volume,
+    /// Pan from 0 (left) through 0.5 (center) to 1 (right).
+    Pan,
+    /// Relative tuning in equal-tempered semitones, -120 through 120.
+    Tuning,
+    /// Normalized vibrato amount.
+    Vibrato,
+    /// Normalized expression amount.
+    Expression,
+    /// Normalized brightness amount.
+    Brightness,
+    /// Normalized pressure amount.
+    Pressure,
+}
+
+/// Validated finite expression SET value, not an increment.
+///
+/// Repeated values replace the previous held value; they do not accumulate.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NoteExpression {
+    kind: NoteExpressionKind,
+    value: f64,
+}
+
+impl NoteExpression {
+    /// Validate a value in the dimension's domain.
+    #[must_use]
+    pub fn new(kind: NoteExpressionKind, value: f64) -> Option<Self> {
+        let in_domain = match kind {
+            NoteExpressionKind::Volume => value > 0.0 && value <= 4.0,
+            NoteExpressionKind::Tuning => (-120.0..=120.0).contains(&value),
+            _ => (0.0..=1.0).contains(&value),
+        };
+        (value.is_finite() && in_domain).then_some(Self { kind, value })
+    }
+
+    /// Return the expression dimension.
+    #[must_use]
+    pub const fn kind(self) -> NoteExpressionKind {
+        self.kind
+    }
+
+    /// Return the held SET value in the dimension's units.
+    #[must_use]
+    pub const fn value(self) -> f64 {
+        self.value
+    }
+}
+
 /// Semantic note operation at one sample offset.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum NoteEventKind {
@@ -394,7 +447,15 @@ pub enum NoteEventKind {
         /// Note target/identity.
         address: NoteAddress,
     },
+    /// Replace a held expression value for the complete wildcard-aware target.
+    Expression {
+        /// Note target/identity.
+        address: NoteAddress,
+        /// Validated expression SET value.
+        expression: NoteExpression,
+    },
     /// Notify that a note is fully ended where source/target semantics use it.
+    /// Output feedback references the original input port, not an output port.
     End {
         /// Note target/identity.
         address: NoteAddress,
@@ -409,6 +470,7 @@ impl NoteEventKind {
             Self::On { address, .. }
             | Self::Off { address, .. }
             | Self::Choke { address }
+            | Self::Expression { address, .. }
             | Self::End { address } => address,
         }
     }
@@ -440,6 +502,48 @@ impl NoteEvent {
         self.kind
     }
 }
+
+/// Caller-owned realtime output boundary. Implementations must not allocate or
+/// block, and must copy/consume the event before returning.
+pub trait NoteEventSink {
+    /// Attempt insertion without silently dropping an essential event.
+    ///
+    /// # Errors
+    /// Returns a typed target rejection when insertion cannot complete.
+    fn try_push(&mut self, event: NoteEvent) -> Result<(), NoteOutputError>;
+}
+
+/// Bounded semantic note-output failure. No error owns heap storage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoteOutputError {
+    /// This call has no caller-provided sink.
+    NoSink,
+    /// All activation-provisioned write attempts have been consumed.
+    LimitExceeded,
+    /// Event offset is outside this block.
+    OffsetOutOfRange,
+    /// Event offset precedes the last successfully inserted event.
+    NonMonotonicOffsets,
+    /// Unknown port, wrong direction, or unsupported note dialect.
+    TargetRejected,
+    /// The deployment/host rejected the event.
+    Rejected,
+}
+
+impl fmt::Display for NoteOutputError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::NoSink => "no note output sink",
+            Self::LimitExceeded => "note output attempt limit exceeded",
+            Self::OffsetOutOfRange => "note output offset outside block",
+            Self::NonMonotonicOffsets => "note output offsets decreased",
+            Self::TargetRejected => "note output target is unsupported",
+            Self::Rejected => "note output sink rejected event",
+        })
+    }
+}
+
+impl std::error::Error for NoteOutputError {}
 
 /// A semantic note stream targeted an invalid event-port capability.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

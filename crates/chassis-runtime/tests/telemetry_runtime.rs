@@ -54,7 +54,10 @@ impl Processor for MeterProcessor {}
 
 impl Process<f32> for MeterProcessor {
     #[allow(clippy::cast_precision_loss)]
-    fn process<B>(&mut self, block: &mut ProcessBlock<'_, '_, '_, f32, B>)
+    fn process<B>(
+        &mut self,
+        block: &mut ProcessBlock<'_, '_, '_, f32, B>,
+    ) -> Result<(), chassis_runtime::runtime::ProcessError>
     where
         B: ProcessBufferSource<f32> + ?Sized,
     {
@@ -80,6 +83,7 @@ impl Process<f32> for MeterProcessor {
         };
 
         let _ = self.telemetry.try_publish(&[peak, rms]);
+        Ok(())
     }
 }
 

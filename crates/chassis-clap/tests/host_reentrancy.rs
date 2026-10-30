@@ -85,10 +85,14 @@ impl Processor for ReentrantProcessor {
 }
 
 impl Process<f32> for ReentrantProcessor {
-    fn process<B>(&mut self, _block: &mut ProcessBlock<'_, '_, '_, f32, B>)
+    fn process<B>(
+        &mut self,
+        _block: &mut ProcessBlock<'_, '_, '_, f32, B>,
+    ) -> Result<(), chassis_runtime::runtime::ProcessError>
     where
         B: ProcessBufferSource<f32> + ?Sized,
     {
+        Ok(())
     }
 }
 

@@ -4,9 +4,12 @@ use core::{fmt, marker::PhantomData, num::NonZeroU32};
 
 use crate::{
     audio::AudioIoConfiguration,
-    automation::ParameterEvents,
+    automation::{ParameterEvent, ParameterEvents},
     buffer::{BufferAccessError, BufferRelationship, ChannelBuffer, InputEndpoint, OutputEndpoint},
-    events::NoteEvents,
+    events::{
+        EventDialect, EventPortDescriptor, EventPortDirection, NoteEvent, NoteEventKind,
+        NoteEventSink, NoteEvents, NoteOutputError,
+    },
     parameters::{ParameterAutomationError, ParameterStore},
     schema::ComponentSchema,
 };
@@ -120,6 +123,73 @@ impl fmt::Display for TransportSnapshotError {
 
 impl std::error::Error for TransportSnapshotError {}
 
+/// Reference into one of the normalized borrowed input families.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputEventIndex {
+    /// Index in the parameter stream (including global modulation).
+    Parameter(u32),
+    /// Index in the semantic note stream.
+    Note(u32),
+}
+
+/// Borrowed event in an authoritative mixed source order.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum InputEventRef<'a> {
+    /// Parameter automation or modulation.
+    Parameter(&'a ParameterEvent),
+    /// Semantic note operation or expression.
+    Note(&'a NoteEvent),
+}
+
+impl InputEventRef<'_> {
+    /// Return the block-relative sample offset.
+    #[must_use]
+    pub const fn offset(self) -> u32 {
+        match self {
+            Self::Parameter(event) => event.offset(),
+            Self::Note(event) => event.offset(),
+        }
+    }
+}
+
+/// Invalid claimed source ordering. Validation never materializes event payloads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputEventOrderError {
+    /// Families describe different block sizes.
+    FrameCountMismatch,
+    /// The order must contain exactly as many indices as both families combined.
+    EventCountMismatch,
+    /// An index is unknown, repeated, or not the next index of its family.
+    InvalidIndex {
+        /// Position in the supplied order.
+        position: usize,
+        /// Invalid family reference.
+        event: InputEventIndex,
+    },
+    /// Mixed event offsets decrease.
+    NonMonotonicOffsets,
+}
+
+impl fmt::Display for InputEventOrderError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::FrameCountMismatch => {
+                formatter.write_str("input families describe different blocks")
+            }
+            Self::EventCountMismatch => {
+                formatter.write_str("input order does not cover both families")
+            }
+            Self::InvalidIndex { position, event } => write!(
+                formatter,
+                "invalid input order index {event:?} at {position}"
+            ),
+            Self::NonMonotonicOffsets => formatter.write_str("mixed input offsets decreased"),
+        }
+    }
+}
+
+impl std::error::Error for InputEventOrderError {}
+
 /// Semantic context for one process block.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ProcessContext<'a> {
@@ -127,6 +197,8 @@ pub struct ProcessContext<'a> {
     transport: TransportSnapshot,
     parameter_events: ParameterEvents<'a>,
     note_events: NoteEvents<'a>,
+    input_order: Option<&'a [InputEventIndex]>,
+    parameters_visible: bool,
 }
 
 impl<'a> ProcessContext<'a> {
@@ -143,6 +215,8 @@ impl<'a> ProcessContext<'a> {
             transport,
             parameter_events,
             note_events: NoteEvents::empty_for_block(frame_count),
+            input_order: None,
+            parameters_visible: true,
         }
     }
 
@@ -162,7 +236,86 @@ impl<'a> ProcessContext<'a> {
             transport,
             parameter_events,
             note_events,
+            input_order: None,
+            parameters_visible: true,
         }
+    }
+
+    /// Attach source-provided total order, preserving every event exactly once.
+    /// Work is linear in the already bounded family counts.
+    ///
+    /// # Errors
+    /// Rejects missing/repeated/unknown indices, per-family reordering, decreasing
+    /// mixed offsets, or families from different blocks. Even when parameters
+    /// are withheld, validation covers the original complete streams.
+    pub fn with_input_order(
+        mut self,
+        order: &'a [InputEventIndex],
+    ) -> Result<Self, InputEventOrderError> {
+        if self.parameter_events.frame_count() != self.note_events.frame_count() {
+            return Err(InputEventOrderError::FrameCountMismatch);
+        }
+        if self
+            .parameter_events
+            .len()
+            .checked_add(self.note_events.len())
+            != Some(order.len())
+        {
+            return Err(InputEventOrderError::EventCountMismatch);
+        }
+        let mut parameters = self.parameter_events.iter().enumerate();
+        let mut notes = self.note_events.iter().enumerate();
+        let mut previous = None;
+        for (position, &event) in order.iter().enumerate() {
+            let offset = match event {
+                InputEventIndex::Parameter(index) => parameters.next().and_then(|(next, event)| {
+                    (usize::try_from(index).ok() == Some(next)).then_some(event.offset())
+                }),
+                InputEventIndex::Note(index) => notes.next().and_then(|(next, event)| {
+                    (usize::try_from(index).ok() == Some(next)).then_some(event.offset())
+                }),
+            }
+            .ok_or(InputEventOrderError::InvalidIndex { position, event })?;
+            if previous.is_some_and(|previous| offset < previous) {
+                return Err(InputEventOrderError::NonMonotonicOffsets);
+            }
+            previous = Some(offset);
+        }
+        self.input_order = Some(order);
+        Ok(self)
+    }
+
+    /// Withhold parameter trajectories without rebuilding the order or losing
+    /// relative note order. The original borrowed parameter stream stays private.
+    #[must_use]
+    pub const fn without_parameter_events(mut self) -> Self {
+        self.parameters_visible = false;
+        self
+    }
+
+    /// Iterate real source order, or return `None` for independent families.
+    /// Withheld parameters are filtered without allocation or index rewriting.
+    #[must_use]
+    #[expect(
+        clippy::missing_panics_doc,
+        reason = "private order is validated at construction; family streams cannot change"
+    )]
+    pub fn ordered_events(self) -> Option<impl Iterator<Item = InputEventRef<'a>> + use<'a>> {
+        let order = self.input_order?;
+        let mut parameters = self.parameter_events.iter();
+        let mut notes = self.note_events.iter();
+        Some(order.iter().filter_map(move |index| match index {
+            InputEventIndex::Parameter(_) => {
+                let event = parameters
+                    .next()
+                    .expect("validated input order covers parameters");
+                self.parameters_visible
+                    .then_some(InputEventRef::Parameter(event))
+            }
+            InputEventIndex::Note(_) => Some(InputEventRef::Note(
+                notes.next().expect("validated input order covers notes"),
+            )),
+        }))
     }
 
     /// Return the scheduling/quality mode for this block.
@@ -177,10 +330,18 @@ impl<'a> ProcessContext<'a> {
         self.transport
     }
 
-    /// Return the validated borrowed parameter events.
+    pub(crate) const fn original_parameter_events(self) -> ParameterEvents<'a> {
+        self.parameter_events
+    }
+
+    /// Return the validated borrowed parameter events, unless withheld.
     #[must_use]
     pub const fn parameter_events(self) -> ParameterEvents<'a> {
-        self.parameter_events
+        if self.parameters_visible {
+            self.parameter_events
+        } else {
+            ParameterEvents::empty_for_block(self.parameter_events.frame_count())
+        }
     }
 
     /// Return the validated borrowed semantic note events.
@@ -201,6 +362,7 @@ pub struct ProcessConfig {
     max_frames: NonZeroU32,
     max_parameter_events: u32,
     max_note_events: u32,
+    max_output_note_events: u32,
 }
 
 impl ProcessConfig {
@@ -211,8 +373,9 @@ impl ProcessConfig {
     /// legally issue a zero-frame process call. `max_parameter_events` is the
     /// activation-owned bound for normalized parameter events in one callback;
     /// zero means that the component/adapter accepts no parameter events.
-    /// Semantic note-event capacity defaults to zero and can be enabled with
-    /// [`Self::with_max_note_events`].
+    /// Semantic note input and output-attempt capacities default to zero; enable
+    /// them with [`Self::with_max_note_events`] and
+    /// [`Self::with_max_output_note_events`].
     ///
     /// # Errors
     ///
@@ -239,6 +402,7 @@ impl ProcessConfig {
             max_frames,
             max_parameter_events,
             max_note_events: 0,
+            max_output_note_events: 0,
         })
     }
 
@@ -247,6 +411,20 @@ impl ProcessConfig {
     pub const fn with_max_note_events(mut self, max_note_events: u32) -> Self {
         self.max_note_events = max_note_events;
         self
+    }
+
+    /// Set the maximum semantic note-output write attempts per callback.
+    /// Every attempt consumes budget, including validation and sink failures.
+    #[must_use]
+    pub const fn with_max_output_note_events(mut self, maximum: u32) -> Self {
+        self.max_output_note_events = maximum;
+        self
+    }
+
+    /// Return the note-output attempt budget (zero by default).
+    #[must_use]
+    pub const fn max_output_note_events(self) -> u32 {
+        self.max_output_note_events
     }
 
     /// Return the activation sample rate in Hz.
@@ -560,6 +738,10 @@ where
     parameters: &'parameters ParameterStore,
     modulation: &'parameters [f64],
     source: &'source mut B,
+    note_sink: Option<&'source mut dyn NoteEventSink>,
+    event_ports: &'parameters [EventPortDescriptor],
+    remaining_note_attempts: u32,
+    previous_note_output: Option<u32>,
     sample: PhantomData<fn() -> S>,
 }
 
@@ -568,7 +750,7 @@ where
     B: ProcessBufferSource<S> + ?Sized,
 {
     pub(crate) fn new(
-        config: &ActivationConfig<'_>,
+        config: &ActivationConfig<'parameters>,
         parameters: &'parameters ParameterStore,
         modulation: &'parameters [f64],
         frame_count: u32,
@@ -583,6 +765,10 @@ where
             parameters,
             modulation,
             source,
+            note_sink: None,
+            event_ports: config.schema().event_ports(),
+            remaining_note_attempts: config.process().max_output_note_events(),
+            previous_note_output: None,
             sample: PhantomData,
         })
     }
@@ -592,17 +778,17 @@ where
         frame_count: u32,
         context: ProcessContext<'_>,
     ) -> Result<usize, ProcessBlockError> {
-        if context.parameter_events().frame_count() != frame_count {
+        if context.original_parameter_events().frame_count() != frame_count {
             return Err(ProcessBlockError::ParameterEventFrameCountMismatch {
                 expected: frame_count,
-                actual: context.parameter_events().frame_count(),
+                actual: context.original_parameter_events().frame_count(),
             });
         }
         let maximum_parameter_events = usize::try_from(process.max_parameter_events())
             .map_err(|_| ProcessBlockError::ParameterEventLimitNotRepresentable)?;
-        if context.parameter_events().len() > maximum_parameter_events {
+        if context.original_parameter_events().len() > maximum_parameter_events {
             return Err(ProcessBlockError::ParameterEventCountTooLarge {
-                actual: context.parameter_events().len(),
+                actual: context.original_parameter_events().len(),
                 maximum: process.max_parameter_events(),
             });
         }
@@ -673,6 +859,65 @@ where
     #[must_use]
     pub const fn note_events(&self) -> NoteEvents<'context> {
         self.context.note_events()
+    }
+
+    /// Iterate authoritative mixed input order when the source supplied one.
+    #[must_use]
+    pub fn ordered_events(
+        &self,
+    ) -> Option<impl Iterator<Item = InputEventRef<'context>> + use<'context, S, B>> {
+        self.context.ordered_events()
+    }
+
+    pub(crate) fn set_note_sink(&mut self, sink: Option<&'source mut dyn NoteEventSink>) {
+        self.note_sink = sink;
+    }
+
+    /// Attempt semantic note output. All attempts consume the activation budget,
+    /// including invalid events and target backpressure. Only accepted insertions
+    /// advance the required nondecreasing offset. End feedback addresses INPUT
+    /// note ports; other operations address OUTPUT note ports. Wildcard ports
+    /// remain wildcard and require at least one compatible declared target.
+    ///
+    /// # Errors
+    /// Returns explicit budget, sink, offset/order, or target errors. Nothing is
+    /// allocated, retried, or silently dropped by the runtime.
+    pub fn try_push_note_event(&mut self, event: NoteEvent) -> Result<(), NoteOutputError> {
+        if self.remaining_note_attempts == 0 {
+            return Err(NoteOutputError::LimitExceeded);
+        }
+        self.remaining_note_attempts -= 1;
+        let sink = self.note_sink.as_mut().ok_or(NoteOutputError::NoSink)?;
+        if event.offset() >= self.frame_count {
+            return Err(NoteOutputError::OffsetOutOfRange);
+        }
+        if self
+            .previous_note_output
+            .is_some_and(|previous| event.offset() < previous)
+        {
+            return Err(NoteOutputError::NonMonotonicOffsets);
+        }
+        let direction = if matches!(event.kind(), NoteEventKind::End { .. }) {
+            EventPortDirection::Input
+        } else {
+            EventPortDirection::Output
+        };
+        let compatible = |port: &EventPortDescriptor| {
+            port.direction == direction && port.dialects.contains(&EventDialect::Notes)
+        };
+        let valid_target = match event.kind().address().port() {
+            Some(index) => usize::try_from(index.get())
+                .ok()
+                .and_then(|index| self.event_ports.get(index))
+                .is_some_and(compatible),
+            None => self.event_ports.iter().any(compatible),
+        };
+        if !valid_target {
+            return Err(NoteOutputError::TargetRejected);
+        }
+        sink.try_push(event)?;
+        self.previous_note_output = Some(event.offset());
+        Ok(())
     }
 
     /// Return the current validated base/control parameter values.

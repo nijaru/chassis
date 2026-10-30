@@ -13,10 +13,11 @@ use crate::{
         AudioPortDescriptor, AudioPortIndex, ConfiguredAudioPort, PortKey,
         ResolvedAudioIoConfiguration,
     },
-    automation::{ParameterEventChange, ParameterEvents},
+    automation::ParameterEventChange,
     buffer::ChannelBuffer,
     events::{
-        EventPortDescriptor, EventPortIndex, EventPortKey, EventPortSchemaError, NoteEventPortError,
+        EventPortDescriptor, EventPortIndex, EventPortKey, EventPortSchemaError,
+        NoteEventPortError, NoteEventSink, NoteOutputError,
     },
     parameters::{
         ParameterEventValueError, ParameterIndex, ParameterStore, ParameterStoreError,
@@ -214,9 +215,50 @@ pub trait Processor {
 /// Processing capability for one sample representation.
 pub trait Process<S>: Processor {
     /// Process one already-validated realtime block from any safe buffer source.
-    fn process<B>(&mut self, block: &mut ProcessBlock<'_, '_, '_, S, B>)
+    ///
+    /// # Errors
+    /// Return a typed product failure for essential output or DSP failures.
+    /// Failure ends this run; partial audio, output events, and history are not
+    /// rolled back.
+    fn process<B>(
+        &mut self,
+        block: &mut ProcessBlock<'_, '_, '_, S, B>,
+    ) -> Result<(), ProcessError>
     where
         B: ProcessBufferSource<S> + ?Sized;
+}
+
+/// Realtime-safe product failure with no owned/allocated error payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcessError {
+    /// Essential semantic note output could not complete.
+    NoteOutput(NoteOutputError),
+    /// Product-specific failure described by static text.
+    Message(&'static str),
+}
+
+impl From<NoteOutputError> for ProcessError {
+    fn from(error: NoteOutputError) -> Self {
+        Self::NoteOutput(error)
+    }
+}
+
+impl fmt::Display for ProcessError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NoteOutput(error) => error.fmt(formatter),
+            Self::Message(message) => formatter.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for ProcessError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::NoteOutput(error) => Some(error),
+            Self::Message(_) => None,
+        }
+    }
 }
 
 /// Failure while constructing a durable [`InstanceRuntime`].
@@ -384,6 +426,8 @@ pub enum InstanceProcessError {
     InvalidBlock(ProcessBlockError),
     /// Semantic note events targeted invalid event-port capabilities.
     InvalidNoteEvents(NoteEventPortError),
+    /// Product DSP failed; no endpoints or completed tail were retained.
+    Processor(ProcessError),
 }
 
 impl fmt::Display for InstanceProcessError {
@@ -395,6 +439,7 @@ impl fmt::Display for InstanceProcessError {
             }
             Self::InvalidBlock(error) => write!(formatter, "invalid process block: {error}"),
             Self::InvalidNoteEvents(error) => write!(formatter, "invalid note events: {error}"),
+            Self::Processor(error) => write!(formatter, "processor failed: {error}"),
         }
     }
 }
@@ -406,6 +451,7 @@ impl std::error::Error for InstanceProcessError {
             Self::InvalidAudioEndpoint(error) => Some(error),
             Self::InvalidBlock(error) => Some(error),
             Self::InvalidNoteEvents(error) => Some(error),
+            Self::Processor(error) => Some(error),
         }
     }
 }
@@ -783,8 +829,9 @@ where
     /// While gated, DSP uses frozen base/modulation controls and no parameter
     /// trajectories. Valid modulation endpoints still update the desired held
     /// signal for reactivation; base endpoints are withheld. Validation
-    /// failure or a processor panic retains no endpoints. Control edits require
-    /// exclusive runtime access; a subsequent edit overrides completed automation.
+    /// failure, a product error, or a processor panic retains no endpoints.
+    /// Control edits require exclusive runtime access; a subsequent edit overrides
+    /// completed automation.
     ///
     /// # Errors
     ///
@@ -792,7 +839,9 @@ where
     /// [`InstanceProcessError::InvalidAudioEndpoint`] for endpoint/configuration
     /// mismatches, [`InstanceProcessError::InvalidBlock`] for callback
     /// shape/parameter failures, or [`InstanceProcessError::InvalidNoteEvents`]
-    /// for incompatible note-event port capabilities.
+    /// for incompatible note-event port capabilities. Product failure returns
+    /// [`InstanceProcessError::Processor`] before querying tail or retaining any
+    /// endpoints; continued DSP after a product error is not guaranteed.
     ///
     /// # Panics
     ///
@@ -803,6 +852,41 @@ where
         frame_count: u32,
         context: ProcessContext<'_>,
         source: &mut B,
+    ) -> Result<(), InstanceProcessError>
+    where
+        P: Process<S>,
+        B: ProcessBufferSource<S> + ?Sized,
+    {
+        self.process_source_impl(frame_count, context, source, None)
+    }
+
+    /// Process with caller-owned bounded semantic note output.
+    ///
+    /// # Errors
+    /// Returns the same validation/product errors as [`Self::process_source`].
+    /// A product error retains neither completed tail nor base/modulation
+    /// endpoints. Audio, output events, and processor history may already have
+    /// changed; terminate the processing run rather than assume recovery.
+    pub fn process_source_with_output<S, B>(
+        &mut self,
+        frame_count: u32,
+        context: ProcessContext<'_>,
+        source: &mut B,
+        sink: &mut dyn NoteEventSink,
+    ) -> Result<(), InstanceProcessError>
+    where
+        P: Process<S>,
+        B: ProcessBufferSource<S> + ?Sized,
+    {
+        self.process_source_impl(frame_count, context, source, Some(sink))
+    }
+
+    fn process_source_impl<'source, S, B>(
+        &mut self,
+        frame_count: u32,
+        context: ProcessContext<'_>,
+        source: &'source mut B,
+        sink: Option<&'source mut dyn NoteEventSink>,
     ) -> Result<(), InstanceProcessError>
     where
         P: Process<S>,
@@ -836,7 +920,7 @@ where
         let config =
             ActivationConfig::new(*process, AudioIoConfiguration::new(audio_ports), schema);
         parameters
-            .validate_events(context.parameter_events())
+            .validate_events(context.original_parameter_events())
             .map_err(ProcessBlockError::InvalidParameterEvents)
             .map_err(InstanceProcessError::InvalidBlock)?;
         context
@@ -847,12 +931,7 @@ where
         // refer to the replacement resources. Keep the first pre-load base state
         // and withhold trajectories; do not let old DSP complete into pending state.
         let dsp_context = if frozen_controls.is_some() {
-            ProcessContext::with_note_events(
-                context.mode(),
-                context.transport(),
-                ParameterEvents::empty_for_block(frame_count),
-                context.note_events(),
-            )
+            context.without_parameter_events()
         } else {
             context
         };
@@ -869,7 +948,10 @@ where
             source,
         )
         .map_err(InstanceProcessError::InvalidBlock)?;
-        processor.process(&mut block);
+        block.set_note_sink(sink);
+        processor
+            .process(&mut block)
+            .map_err(InstanceProcessError::Processor)?;
         let completed_tail = processor.tail();
         if frozen_controls.is_none() {
             parameters.retain_automation_endpoints(context.parameter_events());

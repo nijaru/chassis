@@ -173,7 +173,7 @@ impl<const RACE: bool> Process<f32> for TableDsp<RACE> {
     fn process<B: ProcessBufferSource<f32> + ?Sized>(
         &mut self,
         block: &mut ProcessBlock<'_, '_, '_, f32, B>,
-    ) {
+    ) -> Result<(), chassis_runtime::runtime::ProcessError> {
         if RACE && BLOCK_ONCE.swap(false, Ordering::Relaxed) {
             let (entered, release) = DSP_GATE.get().unwrap();
             entered.send(()).unwrap();
@@ -207,6 +207,7 @@ impl<const RACE: bool> Process<f32> for TableDsp<RACE> {
                 }
             }
         }
+        Ok(())
     }
 }
 impl<const RACE: bool> ClapComponent for Table<RACE> {

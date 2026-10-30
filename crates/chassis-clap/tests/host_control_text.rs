@@ -76,7 +76,8 @@ impl Process<f32> for Dsp {
     fn process<B: ProcessBufferSource<f32> + ?Sized>(
         &mut self,
         _: &mut ProcessBlock<'_, '_, '_, f32, B>,
-    ) {
+    ) -> Result<(), chassis_runtime::runtime::ProcessError> {
+        Ok(())
     }
 }
 impl Component for Definition {
