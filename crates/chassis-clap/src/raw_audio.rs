@@ -95,6 +95,12 @@ pub(crate) fn sample_precision(
     {
         return Err(invalid());
     }
+    // Event-only components have no wire sample representation. Dispatch their
+    // required f32 process capability without inventing audio buffers; the
+    // descriptor cardinality checks above still reject unexpected host ports.
+    if slots.is_empty() {
+        return Ok(ClapSamplePrecision::F32);
+    }
     let mut precision = None;
     for (index, slot) in slots.iter().enumerate() {
         for (buffer, port) in [
@@ -356,6 +362,19 @@ mod tests {
     use crate::audio::ClapProcessPort;
     use chassis_runtime::audio::{AudioPortIndex, ChannelLayout};
     use clack_host::prelude::*;
+
+    #[test]
+    fn zero_audio_keeps_callback_frames_without_requiring_sample_storage() {
+        let mut outputs = [];
+        // SAFETY: both descriptor arrays are empty, so there are no pointer
+        // tables or sample allocations to validate or borrow.
+        let mut audio = unsafe { Audio::from_raw_buffers(&[], &mut outputs, 8) };
+        assert!(sample_precision(&mut audio, &slots(false)).is_err());
+        let mut scratch = AudioScratch::new(&[]).unwrap();
+        let mut source = RawSource::<f32>::new(audio, &[], &mut scratch).unwrap();
+        assert_eq!(source.frame_count(), 8);
+        assert_eq!(source.channels().count(), 0);
+    }
 
     fn slots(paired: bool) -> [ClapProcessSlot; 2] {
         core::array::from_fn(|index| {
