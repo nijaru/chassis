@@ -49,11 +49,28 @@ The recorded validator baseline is **35 passed, 0 failed, 9 intentional skips** 
 
 The native-note instrument (`examples/clap-note-probe`) validates at **37 passed, 0 failed, 7 skipped** and passes the same bounded fuzz. Packaging is shared through [the native packaging script](../../.github/scripts/package-clap.sh); the isolated validator includes the reviewed corrections described below.
 
-The zero-audio MIDI processor (`examples/clap-midi-probe`) validates at **34 passed, 0 failed, 10 skipped**. Its actual-entry tests supply SysEx coverage absent from the validator's generated event set.
+The zero-audio MIDI processor (`examples/clap-midi-probe`) validates at **34 passed, 0 failed, 10 skipped**. Its actual-entry tests supply SysEx and MIDI 2/UMP coverage absent from the validator's generated event set.
 
 These gates do not establish production DAW behavior or representative performance.
 
 Hosted workflows and local results are separate evidence. Before publication, hosted jobs were rejected and local checks supplied the interim record. Consult the actual workflow run for the revision under review before claiming Linux/macOS/Windows coverage. The dated validator, host, and benchmark results below are baselines, not automatic qualification of later commits.
+
+### MIDI 2/UMP transport — 2026-10-30
+
+At code revision `88c884b8e6974de7db433a8759fcc65e3f4b0ff7` on macOS 26.6.2 arm64:
+
+- 258 workspace tests passed on stable Rust 1.99.1 and CI-baseline Rust 1.98.0. Formatting, strict all-feature/all-target Clippy on both compilers, warning-denied rustdoc, release workspace build, shell syntax, local Markdown paths, and diff checks passed. The initial hosted run caught a missing rustdoc backtick; the final revision corrects it without changing runtime behavior.
+- Local `cargo-deny` 0.19.0 passed with unused-license-allowance warnings; `cargo-machete` 0.9.1 found no unused dependencies. Dependency versions, package versions, and the audited Clack revision are unchanged.
+- Eight actual exported MIDI ABI cases cover the prior MIDI 1/SysEx path plus UMP. All 16 message-type nibbles round-trip arbitrary four-word storage, including unused words, through two independently mapped routes with explicit timestamps and both defined annotations. Mixed short/SysEx/UMP/control traffic preserves equal-offset list order and cross-block control completion.
+- Exact-size, flags, timing, unknown-port, and incompatible-dialect cases reject the whole batch before DSP. Fatal host rejection preserves prior output without completing controls. Core tests cover per-message input/output capabilities, shared note/MIDI ordering, UMP surviving resource-gated parameter withholding, and essential failure retaining neither base/modulation endpoints nor new tail metadata. A MIDI 2-only setup admits UMP with zero SysEx capacity but rejects missing or excessive event capacity.
+- Accepted 1,024-UMP and mixed short/SysEx/UMP callbacks, independent overflows, and the existing simultaneous 2,048-record maximum batch allocated and deallocated nothing. Fixed UMP words use the common MIDI count bound, not SysEx bytes. The direct-runtime mixed callback probe includes UMP across 1,000 successful callbacks and essential-output failure.
+- Default-Stacked-Borrows Miri `0.1.0 (16d1ffac17 2026-10-26)` passed seven focused actual ABI cases, two private MIDI projection cases, MIDI 2-only zero-SysEx setup, and the zero-audio regression. Maximum-size stress ran natively on both compilers, not under Miri; focused invalid-nonnull over-budget payload rejection remains included.
+- The isolated validator's MIDI 2-only port-selection regression failed its original generator's 1,024-retry panic and passed the correction. A fresh installer run applied all three reviewed patches and passed all three binary regressions on Rust 1.98.0. The correction adds no UMP or SysEx generation; fidelity evidence comes from the actual ABI/Miri cases, not validator traffic.
+- All four rebuilt packaged artifacts passed the corrected pinned validator and separate five-second, two-worker fuzz runs: conformance **35 passed / 0 failed / 9 skipped**, delayed probe **21 / 0 / 23**, note probe **37 / 0 / 7**, MIDI probe **34 / 0 / 10**.
+
+Hosted [Rust CI](https://github.com/nijaru/chassis/actions/runs/41023972175) and [CLAP Conformance](https://github.com/nijaru/chassis/actions/runs/41023972106) completed successfully at this exact code revision. Every one of seven Rust jobs and all three Linux/macOS/Windows CLAP jobs was checked individually; the latter packaged, validated, and fuzzed all four exports with the isolated corrected validator.
+
+The [MIDI 2 boundary audit](../research/clack-pinned-adapter-audit.md#midi-2ump-boundary--reviewed-2026-10-30) records the same-pin `Midi2Event` C-layout correction and opaque numeric-word projection. This qualifies bounded four-word transport, not UMP stream parsing, MIDI 2 device/protocol compliance, or new production DAW/performance support. No production DAW or representative performance run was repeated. This evidence-only follow-up records the code revision above; it does not qualify its own later documentation commit.
 
 ### MIDI 1/SysEx and shared output — 2026-10-30
 
@@ -68,7 +85,7 @@ At code revision `b833b02989fb0d3317e119775f9e89b4bb1e8f97` on macOS 26.6.2 arm6
 
 Hosted [Rust CI](https://github.com/nijaru/chassis/actions/runs/41015851376) and [CLAP Conformance](https://github.com/nijaru/chassis/actions/runs/41015851298) completed successfully at this exact code revision. Every one of seven Rust jobs and all three Linux/macOS/Windows CLAP matrix jobs was checked individually. The latter packaged, validated, and fuzzed all four exports.
 
-The [MIDI boundary audit](../research/clack-pinned-adapter-audit.md#midi-1sysex-boundary--reviewed-2026-10-30) records the same-pin MIDI layout correction, scoped payload loans, C provider obligations, and unknown-flag rejection. MIDI 2/UMP remains unsupported. No production DAW or representative performance run was repeated; this record does not renew those older claims.
+The [MIDI boundary audit](../research/clack-pinned-adapter-audit.md#midi-1sysex-boundary--reviewed-2026-10-30) records the same-pin MIDI layout correction, scoped payload loans, C provider obligations, and unknown-flag rejection. MIDI 2/UMP was outside that revision's support. No production DAW or representative performance run was repeated; this record does not renew those older claims.
 
 ### Native notes, expression, and voice feedback — 2026-10-30
 
@@ -277,6 +294,7 @@ Current cases include:
 - `host_reentrancy.rs`: plugin -> host -> plugin main-thread re-entry through parameter-rescan and latency-change callbacks;
 - `host_panic_containment.rs`: activation/process panic containment at the Clack FFI boundary.
 - `exported_notes.rs`: native port metadata, f32/f64 mixed input order, onset expressions, exact raw wildcard admission, zero-velocity on, original input-port voice feedback including cross-block debt, host output rejection, and callback allocation/deallocation.
+- `exported_midi.rs`: zero-audio MIDI 1/SysEx and four-word MIDI 2/UMP, per-port dialects, independent routes, exact contents/offsets/flags, payload ownership, mixed controls, whole-batch malformed admission, essential output rejection, and allocation-free maximum/overflow bounds.
 
 The full adapter allocation test covers 1,000 f32 and 1,000 f64 callbacks for each of all-base and mixed base/modulation streams, with stereo main + stereo sidechain and exactly the configured 64 parameter controls, plus actual-entry exact-in-place acceptance and partial-alias rejection, with zero measured allocation/deallocation or host-log calls on the callback thread.
 
@@ -428,8 +446,8 @@ Retain golden fixtures for every released schema. The current CHSS v1 envelope r
 
 | Host / harness | Platform | Status | Evidence |
 | --- | --- | --- | --- |
-| Clack in-process host harness | Linux/macOS/Windows CI | passed at `b833b02`; same revision macOS local | native notes/expression and MIDI 1/SysEx, mixed input/shared output order, voice feedback, payload ownership and backpressure, zero-audio dispatch, accepted/rejected callback allocation, f32/f64 audio, complete state/resource transitions, lifecycle, latency/tail/bypass, re-entrancy, panic containment |
-| `clap-validator` 0.4.1 + reviewed generator corrections | Linux/macOS/Windows CI | passed at `b833b02`; same revision macOS local | conformance 35 pass / 0 fail / 9 skip; delayed probe 21 / 0 / 23; note probe 37 / 0 / 7; MIDI probe 34 / 0 / 10; all four bounded fuzz runs |
+| Clack in-process host harness | Linux/macOS/Windows CI | passed at `88c884b`; same revision macOS local | native notes/expression, MIDI 1/SysEx and opaque MIDI 2/UMP, mixed input/shared output order, per-message port capabilities, voice feedback, payload ownership and backpressure, zero-audio dispatch, accepted/rejected callback allocation, f32/f64 audio, complete state/resource transitions, lifecycle, latency/tail/bypass, re-entrancy, panic containment |
+| `clap-validator` 0.4.1 + reviewed generator corrections | Linux/macOS/Windows CI | passed at `88c884b`; same revision macOS local | conformance 35 pass / 0 fail / 9 skip; delayed probe 21 / 0 / 23; note probe 37 / 0 / 7; MIDI probe 34 / 0 / 10; all four bounded fuzz runs; no generated UMP/SysEx coverage |
 | REAPER 7.79 | macOS arm64 (M3 Max, 48 kHz) | 2026-09-06 baseline | 2026-09-06 headless `-renderproject` qualification: scan + instantiate (FX browser, 5 params enumerated), square `trim` automation render sample-exact against the deterministic reference (value changes land at exact sample offsets 24000/36000), injected-CHSS state load render sample-exact (trim 0.25/0.75; blobs byte-identical to a REAPER-saved blob at 0.5 and validated by the real `StateDocument` decoder), project save while the transport rolled through automation with coherent base state (trim=0.5, not torn) and sample-exact automation replay after reload, no-FX baseline render bit-identical to the source fixture, and PDC alignment: a wet track carrying the exported 64-sample delayed probe (`examples/clap-delayed-probe`) mixes against a dry track as exactly `2*x[i]` for all 48,000 frames — REAPER honored the CLAP latency extension and aligned the delayed DSP sample-exact. Host-quirk recorded: `TrackFX_SetParamNormalized` on an inactive CLAP reports success but delivers no change; the differential shows FabFilter Pro-Q 4 (CLAP) behaving identically while ReaEQ (VST) applies immediately, so this is REAPER's inactive-CLAP delivery behavior, not an adapter defect — the automation path (process events) is sample-exact. |
 | Bitwig | — | not run | production-host re-entrancy confirmation remains useful when available |
 
