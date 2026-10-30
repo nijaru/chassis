@@ -55,6 +55,21 @@ These gates do not establish production DAW behavior or representative performan
 
 Hosted workflows and local results are separate evidence. Before publication, hosted jobs were rejected and local checks supplied the interim record. Consult the actual workflow run for the revision under review before claiming Linux/macOS/Windows coverage. The dated validator, host, and benchmark results below are baselines, not automatic qualification of later commits.
 
+### DSP authoring API redesign — 2026-10-30
+
+At code revision `99fc0c664d3f8b9b3df253a3aa0b399cc8b005cc` on macOS 26.6.2 arm64:
+
+- 268 workspace tests, including doctests, passed on stable Rust 1.99.1 and CI-baseline Rust 1.98.0. Formatting, strict all-feature/all-target Clippy on both compilers, warning-denied rustdoc, release workspace build, and diff checks passed. Local `cargo-deny` 0.19.0 passed with unused-license-allowance warnings; `cargo-machete` 0.9.1 found no unused dependencies. Dependencies, package versions, audited Clack source, and the validator pin and its three existing patches are unchanged.
+- Safe channel enum views support simultaneous separate input/output slices. Scoped lazy iterators also permit multiple channel views to coexist for linked DSP without collecting channels or copying input to scratch. A split-source mid/side transform exercises this borrowing contract; a compile-fail doctest prevents sample views escaping the traversal. Complete topology and sample dimensions share one activation-bounded admission pass, without repeated context validation.
+- Typed parameter handles resolve kind, float domain, and modulation capability during setup. Tests cover unknown/wrong-type lookup, typed values, discrete timing/source order, and invalid cursor queries. The exported gain fixture consumes typed float/Boolean trajectories, while resource-backed tests exercise frozen consumed base/modulation independently of newer desired controls. Existing f32/f64 callback instrumentation measures zero allocations/deallocations for accepted processing and dimension/topology rejection, including pending-resource callbacks using typed handles.
+- Complete instance persistence remains failure-atomic across identity/schema checks, migrations, parameter completeness, custom policy, and deferred reactivation. The CHSS golden fixture retains byte-identical encoding. Parameter-only store persistence is removed rather than retained as an alternate partial-load path.
+- Default-Stacked-Borrows Miri `0.1.0 (16d1ffac17 2026-10-26)` passed 13 focused checks: the scoped cross-channel test, both raw f32/f64 topology cases, eight semantic-state/resource-transition tests, and two actual metadata ABI tests covering both precision factories. The latter check every descriptor field, optional defaults, feature termination, and retained C-string ownership. This is focused boundary evidence, not whole-workspace or whole-Clack qualification.
+- All four rebuilt packaged artifacts passed the unchanged corrected pinned validator and separate five-second, two-worker fuzz runs: conformance **35 passed / 0 failed / 9 skipped**, delayed probe **21 / 0 / 23**, note probe **37 / 0 / 7**, MIDI probe **34 / 0 / 10**.
+
+Hosted [Rust CI](https://github.com/nijaru/chassis/actions/runs/41112539280) and [CLAP Conformance](https://github.com/nijaru/chassis/actions/runs/41112539279) succeeded at this exact code revision. All seven Rust jobs and all three Linux/macOS/Windows CLAP jobs were checked individually. Each CLAP job packaged, validated, and fuzzed all four exports.
+
+The redesign replaces unpublished APIs without compatibility shims. Typed handles remain schema-local, not portable cross-schema identities. Channel traversal uses scoped dynamic dispatch rather than exposing backend-source generics; no new performance claim is made. No production DAW scenario or representative performance run was repeated. This evidence-only follow-up records the code revision above, not its own later documentation commit.
+
 ### Musical block-start transport — 2026-10-30
 
 At code revision `95ad51326028c8a9d9c22c2f42d5927461b5785e` on macOS 26.6.2 arm64:
