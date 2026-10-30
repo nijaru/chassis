@@ -4,7 +4,8 @@
 //! parameter/custom state into CLAP. Process-time audio is driven by the validated
 //! setup mapping rather than a hard-coded stereo buffer shape. The audio path
 //! supports f32 exports and explicit f64-capable exports, native note/expression
-//! ports, and bounded native-note output including voice-lifetime feedback.
+//! ports, opaque MIDI 1/SysEx, and bounded shared event output including native
+//! voice-lifetime feedback.
 
 mod audio;
 mod event_ports;
@@ -77,13 +78,13 @@ use process_audio::{ClapBufferSource, ClapSample, ClapSamplePrecision, sample_pr
 pub use audio::{ClapAudioPort, DEFAULT_CLAP_AUDIO_PORTS};
 /// Re-export of Clack's CLAP entry macro for Chassis export crates.
 pub use clack_plugin::clack_export_entry;
-/// Explicit CLAP native-note port projection metadata.
+/// Explicit CLAP event-port identity and preferred-dialect projection.
 pub use event_ports::ClapNotePort;
 
 /// CLAP deployment metadata for a Chassis component.
 ///
-/// The projection supports mapped audio, native notes/expression, and complete
-/// semantic state. Unsupported event dialects are rejected at setup.
+/// The projection supports mapped audio, native notes/expression, opaque MIDI
+/// 1/SysEx, and complete semantic state. Unsupported event dialects are rejected at setup.
 ///
 /// Parameter and audio-port IDs are explicit because stable Chassis keys cannot
 /// be silently hashed or assigned from declaration order without creating a

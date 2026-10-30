@@ -133,7 +133,7 @@ Any failure leaves live parameter/custom state and restart status unchanged. Typ
 
 Complete loads borrow the component and reject schema drift; `state_migrations()` supplies adjacent migrations rather than the loader supplying a separate policy. Defaults are construction input, not missing-field recovery: a current-schema load must remain complete, and migrations explicitly introduce new required fields.
 
-An accepted active custom-state change moves the first pre-load parameter store and snapshots its consumed modulation off-thread into one activation-owned frozen control projection, then requests reactivation. Until deactivation, `ProcessBlock` receives that projection and no parameter trajectories. Original event bounds/domains are still checked; notes, transport, and audio continue. Base events are discarded without durable endpoint completion; accepted modulation endpoints update only the desired held signal for reactivation. Later loads and direct control edits affect saveable desired state only. Reset, repeated loads, and state reversion cannot refresh or release the frozen projection. Deactivation reclaims it with the old resources off-callback; reactivation validates/prepares the latest desired state.
+An accepted active custom-state change moves the first pre-load parameter store and snapshots its consumed modulation off-thread into one activation-owned frozen control projection, then requests reactivation. Until deactivation, `ProcessBlock` receives that projection and no parameter trajectories. Original event bounds/domains are still checked; notes, MIDI, transport, and audio continue. Base events are discarded without durable endpoint completion; accepted modulation endpoints update only the desired held signal for reactivation. Later loads and direct control edits affect saveable desired state only. Reset, repeated loads, and state reversion cannot refresh or release the frozen projection. Deactivation reclaims it with the old resources off-callback; reactivation validates/prepares the latest desired state.
 
 This intentionally ignores base automation for as long as the environment defers restart, while retaining desired modulation independently. Merely freezing base values while forwarding automation is unsafe for coupled resource bounds. Parameter-only loads before this gate remain block-visible without an automatic runtime restart. Processor-originated restart requests retain their existing parameter/automation behavior; they do not activate the custom-state gate.
 
@@ -189,7 +189,7 @@ A source must repeat the same finite topology and dimensions across traversals. 
 - sample-accurate bounded parameter/note/event sources;
 - transport/process context;
 - a safe `ProcessBufferSource<S>`;
-- an optional caller-owned bounded native-note output sink.
+- one optional caller-owned bounded note/MIDI output sink.
 
 Adapters/embeddings prove raw pointer/alias facts before safe channel views enter core. Setup owns stable-to-dense endpoint translation and whole-I/O policy acceptance. Callback code consumes pre-resolved dense identities without callback-owned channel vectors or stable-string lookup.
 
@@ -224,7 +224,7 @@ Future background tasks, callbacks, editors, deferred reclamation, devices, grap
 - malformed structural I/O or an unsupported whole-I/O configuration fails before product activation;
 - product activation error remains distinct from framework validation error;
 - failed activation publishes neither processor nor latency/tail metadata;
-- callback dimensions, parameter/note events, and dense audio endpoint legality are validated before product DSP;
+- callback dimensions, parameter/note/MIDI events and payload bounds, and dense audio endpoint legality are validated before product DSP;
 - complete state replacement is failure-atomic;
 - no panic may unwind through a format FFI boundary.
 
@@ -233,7 +233,7 @@ Future background tasks, callbacks, editors, deferred reclamation, devices, grap
 The ownership/schema/identity migration is no longer the blocker. Remaining core work should be driven by concrete audio semantics:
 
 1. extend the qualified global float modulation subset only when a client needs per-note parameter modulation or other domains; keep external signals separate from durable state;
-2. add the MIDI dialect/payload contracts needed beyond the implemented native note/expression input/output;
+2. add MIDI 2/UMP contracts beyond the implemented native notes and MIDI 1/SysEx without lossy down-conversion;
 3. add bounded control -> DSP non-parameter publication and background-work/reclamation lifecycle;
 4. add bus/port convenience or a richer `AudioIoPolicy` only if materially different clients show the current explicit model is insufficient;
 5. continue cross-platform, allocation, concurrency, adapter, and real-host qualification as these contracts change.

@@ -39,10 +39,10 @@ Dependency-policy tooling is pinned in CI to `cargo-deny` 0.20.2 and `cargo-mach
 
 On Linux, macOS, and Windows:
 
-1. build the release conformance, delayed-probe, and note-probe artifacts;
+1. build the release conformance, delayed-probe, note-probe, and MIDI-probe artifacts;
 2. package the platform-native `.clap` forms;
 3. build `clap-validator` from pinned revision `b2f1d9b79b1d264a5747f46707d72b1aa40a02ef`;
-4. run the validator on all three artifacts;
+4. run the validator on all four artifacts;
 5. run a bounded five-second two-worker fuzz pass on each artifact.
 
 The recorded validator baseline is **35 passed, 0 failed, 9 intentional skips** for the conformance artifact. The matrix is configured in CI; successful revision-scoped runs and local checks below establish actual coverage. The exported delayed probe (`examples/clap-delayed-probe`) validates at **21 passed, 0 failed, 23 intentional skips** — the skips are parameter/state cases the no-parameter latency probe does not declare — and passes the same bounded fuzz after flushing subnormal delay-line output to zero (initially caught by the fuzzer as subnormal pass-through).

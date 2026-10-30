@@ -641,10 +641,15 @@ fn accepted_maximum_and_independent_overflow_bounds_are_allocation_free() {
     raw_overflow[0] = short(0, 0, 0, [1, 2, 3]);
     raw_overflow[1] = set(0, false);
     rejected_before_dsp(&raw_overflow);
+}
 
-    // Invalid nonnull payload pointers must be rejected from scalar sizes BEFORE
-    // any payload borrow. First exceeds the entire budget, second the remaining
-    // aggregate, and u32::MAX also exercises checked overflow-sized admission.
+#[test]
+fn over_budget_sysex_is_rejected_before_borrowing_even_a_nonnull_payload() {
+    // Keep this pointer-provenance guard in focused Miri runs, independently of
+    // the maximum-count stress test. No payload bytes are traversed on rejection.
+    let payload = vec![0xff; 64 * 1024];
+    // First exceeds the entire budget, second the remaining aggregate, and
+    // u32::MAX also exercises checked overflow-sized admission.
     let Record::SysEx(mut over) = sysex(0, 0, 0, &[]) else {
         unreachable!()
     };

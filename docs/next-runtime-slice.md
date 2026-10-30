@@ -62,9 +62,15 @@ The input-only slice was expanded to include native expression and bounded outpu
 
 The output-only stereo note probe exercises two input ports with distinct host/schema ordering, f32/f64, strike controls captured at onset, expressions, and same-block retrigger lifetime feedback. The existing Clack pin gains narrowly audited expression layout/decoding corrections. The isolated validator also corrects out-of-contract expression ranges, with a regression that fails its original generator. [Events/transport](design/events-transport.md) owns semantics; the [source audit](research/clack-pinned-adapter-audit.md) and [validation](design/validation.md) own boundary review and revision-scoped evidence.
 
-## Next — MIDI dialects
+## Closed — MIDI 1/SysEx
 
-Add MIDI 1/SysEx, then MIDI 2/UMP, each with explicit capabilities, bounded payload lifetime, faithful deployment projection, and a focused client. Do not silently convert native identity/expression into a lossy MIDI representation. Per-note parameter modulation and span processing remain separate follow-up.
+Core and CLAP now preserve opaque three-byte messages, borrowed SysEx payload boundaries, concrete ports, defined live/do-not-record annotations, and actual mixed parameter/note/MIDI ordering. Count/aggregate byte limits bound callback admission and output attempts; rejected pushes do not refund payload budget. One caller-owned output sink orders both note and MIDI families. Callback-local payload loans leave only POD metadata in persistent scratch.
+
+The zero-audio MIDI probe routes two inputs to two outputs with deliberate host/schema index differences and a timed Boolean enable control. The same-pin Clack delta adds the required MIDI wrapper layout annotation. [Events/transport](design/events-transport.md) owns semantics, the [source audit](research/clack-pinned-adapter-audit.md) owns the FFI boundary, and [validation](design/validation.md) owns revision-scoped evidence.
+
+## Next — MIDI 2/UMP
+
+Add MIDI 2/UMP with explicit capabilities, bounded payload lifetime, faithful deployment projection, and a focused client. Do not silently convert native identity/expression into a lossy MIDI representation. Per-note parameter modulation and span processing remain separate follow-up.
 
 Speaker layouts and richer I/O policies remain demand-driven. Core proof is not format support, and additional formats/editors/devices/graphs do not justify freezing incomplete semantic surfaces.
 

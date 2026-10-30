@@ -197,11 +197,13 @@ trim.format_value(&plain, &mut text)?; // "25.0 %"
 
 [TrimControl](../../examples/clap-conformance/src/trim_control.rs) is the executable example; [parameters/state](parameters-state.md#control-mapping-and-presentation) owns validation, rounding, configuration equality, and deployment limits. Policies run off the callback and never transform stored values or automation. CLAP shares policy text, not an arbitrary host-knob normalized taper.
 
-## Native notes and output
+## Notes, MIDI, and output
 
-Declare stable event-port keys and `EventDialect::Notes` in the schema. Resolve dense indices at setup; CLAP additionally requires explicit `ClapNotePort` IDs and input/output attempt bounds. `ProcessContext::ordered_events()` exposes a source-defined mixed order only when supplied, otherwise returning `None`.
+Declare stable event-port keys and `EventDialect::Notes` in the schema. Resolve dense indices at setup; CLAP additionally requires explicit `ClapNotePort` IDs, one supported preferred dialect, and input/output attempt bounds. `ProcessContext::ordered_events()` exposes a source-defined mixed order only when supplied, otherwise returning `None`.
 
-`ProcessBlock::try_push_note_event` forwards to a borrowed caller sink with bounded attempts and explicit rejection. Voice-end feedback uses the original input address, not an output port. Propagate essential failure with `?` from `Process::process`; the runtime does not complete parameter/modulation endpoints or tail metadata on error, and deployments need not resume the failed run. [Events/transport](events-transport.md) owns the detailed contract; the [note probe](../../examples/clap-note-probe/src/lib.rs) is the executable CLAP example.
+Declare `EventDialect::Midi1` for opaque three-byte MIDI and borrowed SysEx. Supply `MidiEventLimits` for count and aggregate payload bounds; CLAP declares corresponding input/output constants. A callback-local `MidiEventSource` can expose host payloads without storing borrowed slices in activation scratch. The [MIDI probe](../../examples/clap-midi-probe/src/lib.rs) demonstrates zero-audio processing and order-sensitive routing.
+
+`ProcessBlock::try_push_note_event` and `try_push_midi_event` forward to one borrowed `EventSink`, with a shared successful-output order, bounded per-family attempts, and explicit rejection. SysEx byte attempts are charged without refund. Voice-end feedback uses the original input address, not an output port. Propagate essential failure with `?` from `Process::process`; the runtime does not complete parameter/modulation endpoints or tail metadata on error, and deployments need not resume the failed run. [Events/transport](events-transport.md) owns the detailed contract; the [note probe](../../examples/clap-note-probe/src/lib.rs) is the executable CLAP example.
 
 ## Sample representation
 

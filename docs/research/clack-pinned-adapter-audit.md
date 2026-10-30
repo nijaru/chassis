@@ -97,6 +97,7 @@ CLAP params                    -> typed metadata + bounded mixed base/modulation
 CLAP note ports                -> explicit stable IDs + direction-local host indices
 CLAP native note/expression    -> checked ordered input + bounded caller-owned output
 CLAP NOTE_END                  -> original input-port/voice lifetime feedback
+CLAP MIDI 1/SysEx              -> opaque borrowed input + bounded shared output
 CLAP state                     -> bounded CHSS save/load + coherent parameter/custom publication
 CLAP render                    -> ProcessMode::Realtime / ProcessMode::Offline
 CLAP latency                   -> activation snapshot + host change notification
@@ -105,7 +106,7 @@ CLAP transport                 -> bounded borrowed transport snapshot
 
 The deterministic conformance export has audible sample-accurate `trim` automation, typed float/choice state, f32/f64 processing, and zero declared latency. A separate in-process delayed probe proves nonzero reported latency matches actual delayed audio sample-for-sample.
 
-The output-only note probe exports two native input ports and both precisions, preserving actual mixed input order and reporting voice completion. MIDI dialects, GUI/editor APIs, and broad application/host infrastructure remain deferred.
+The output-only note probe exports two native input ports and both precisions, preserving actual mixed input order and reporting voice completion. The zero-audio MIDI probe routes opaque MIDI 1/SysEx with timed controls. MIDI 2/UMP, GUI/editor APIs, and broad application/host infrastructure remain deferred.
 
 ## Global modulation boundary — reviewed 2026-10-24
 
@@ -139,7 +140,7 @@ The readonly-descriptor regression checks original pointer/context identity, cal
 
 ## Native-note boundary — reviewed 2026-10-30
 
-The pinned [CLAP events contract](https://github.com/free-audio/clap/blob/a47f6badb49d948fd009998f28309cdab78979c9/include/clap/events.h) defines exact `-1` wildcard addressing, zero-velocity note-on, held expression sets, and input-port `NOTE_END` feedback. Chassis checks raw fields before Clack's permissive negative-to-wildcard conversion. Native event downcasts check exact space/type/size; unclaimed MIDI payload pointers are never dereferenced. The complete raw list is bounded and time-validated before DSP; preallocated family/index scratch preserves stronger mixed-list order.
+The pinned [CLAP events contract](https://github.com/free-audio/clap/blob/a47f6badb49d948fd009998f28309cdab78979c9/include/clap/events.h) defines exact `-1` wildcard addressing, zero-velocity note-on, held expression sets, and input-port `NOTE_END` feedback. Chassis checks raw fields before Clack's permissive negative-to-wildcard conversion. Native event downcasts check exact space/type/size; payloads of unclaimed dialects are never dereferenced. The complete raw list is bounded and time-validated before DSP; preallocated family/index scratch preserves stronger mixed-list order.
 
 `extensions/src/note_ports/plugin.rs` reads immutable main-thread configuration through shared access. Unlike the pinned tail getter, this callback does not borrow live DSP. Setup rejects name truncation, invalid IDs, incomplete mappings, and unsupported dialects; native indices fit nonnegative `i16`.
 
@@ -148,6 +149,18 @@ Two additional same-pin corrections are confined to `common/src/events/event_typ
 The fixture retains deferred end feedback across blocks when its wildcard tuple would terminate a live retrigger. A regression fails the earlier per-block clearing implementation. Coalescing covered ended tuples leaves at most one deferred target for its single live voice, so activation capacity and output-attempt bounds remain sufficient without callback growth.
 
 A separate unused host-side defect remains at this pin: `extensions/src/note_ports/host.rs` constructs `HostNotePorts` with `&&clap_host_note_ports`, a pointer to a reference rather than the vtable. Chassis does not register that host implementation; native metadata tests use the independent plugin-extension query wrappers. These tests do not qualify the unused host vtable or all Clack extension implementations.
+
+## MIDI 1/SysEx boundary — reviewed 2026-10-30
+
+The same pinned [CLAP events contract](https://github.com/free-audio/clap/blob/a47f6badb49d948fd009998f28309cdab78979c9/include/clap/events.h#L304-L333) defines a concrete unsigned `u16` MIDI port, exactly three MIDI bytes, and a separately borrowed SysEx payload. It specifies neither unused-byte normalization nor additional byte grammar/framing. Chassis preserves opaque contents and boundaries, including empty SysEx and zero-velocity note-on. The [note-port contract](https://github.com/free-audio/clap/blob/a47f6badb49d948fd009998f28309cdab78979c9/include/clap/ext/note-ports.h) supplies independent supported bits and one supported preference per port; no MPE/MIDI 2 capability is inferred.
+
+`common/src/events/event_types/midi.rs::MidiEvent` gains `#[repr(C)]` required by its unsafe event/raw cast contract. `MidiSysExEvent` already has that layout. MIDI 2 remains rejected before a typed borrow. The adapter uses checked exact-size downcasts, not the raw helper constructors or unchecked core-space dispatcher. The pin's generated `from_raw`/reference helpers check type/space but not size; they are not validation for an untrusted record. `InputEvents::get` already assumes accessible storage covering the declared header extent.
+
+Clack's unsafe `MidiSysExEvent::data<'a>()` permits an unconstrained return lifetime. The private adapter helper instead anchors its result to the checked callback event borrow, after byte/representability and positive-null checks. Empty data returns an empty slice without touching a null pointer. Activation scratch contains only copied metadata and host indices/sizes; a callback-local source reacquires records. Hosts must still provide initialized, immutable payload allocations of sufficient extent for process. Scalar checks cannot prove arbitrary pointer provenance, extent, or concurrency.
+
+Output construction loans a core slice only through the immediate `try_push`. A retaining host must copy both descriptor and payload before returning. Clack `EventBuffer` and wrapper copies do not deep-copy payloads; the exported fixture's test host uses a preallocated owned payload arena. MIDI wrapper equality also omits time/flags, while SysEx equality compares pointers, so tests inspect explicit fields and copied bytes. Known live/do-not-record flags map explicitly; unknown MIDI header bits reject rather than disappear through Clack's truncating `flags()` accessor.
+
+The event-only ABI fixture exposed a pre-existing empty-topology rejection in sample-precision discovery. With no audio ports there is no wire sample representation: after exact descriptor-count checks, Chassis dispatches the required f32 process capability while preserving the supplied callback frame count. A regression fails before this correction; unexpected audio descriptors remain invalid. Neither dummy audio buffers nor a second event-processing lifecycle are introduced.
 
 ## Parameter text boundary — reviewed 2026-10-24
 
@@ -184,17 +197,17 @@ Common, plugin, and extensions are vendored from `c5975f9` with original source/
 - `extensions/wrapper.rs`: a crate-private `handle_process` uses the existing pointer/lifecycle lookup and panic containment, returning `None` without calling `plugin_log`;
 - `plugin/instance.rs`: only the process ABI callback uses that helper. Its existing `None -> CLAP_PROCESS_ERROR` mapping is unchanged.
 
-The later ownership corrections are `common/src/events.rs` (whole-event provenance), `common/src/events/io/output.rs` (scoped read-only table constructor), `plugin/src/process.rs` and `plugin/instance.rs` (scoped process events), and `extensions/src/params/plugin.rs` (scoped flush output). The common constructor is a new API; existing handler signatures remain unchanged. The two native-expression layout/decoding corrections above complete the current Rust delta; other source is retained apart from trailing-whitespace normalization. Cargo resolves one copy of each patched crate for Chassis, extensions, and the test host. Normal diagnostics and lifecycle/panic containment are unchanged outside the nonlogging process path.
+The later ownership corrections are `common/src/events.rs` (whole-event provenance), `common/src/events/io/output.rs` (scoped read-only table constructor), `plugin/src/process.rs` and `plugin/instance.rs` (scoped process events), and `extensions/src/params/plugin.rs` (scoped flush output). The common constructor is a new API; existing handler signatures remain unchanged. The native-expression layout/decoding and MIDI wrapper layout corrections above complete the current Rust delta; other source is retained apart from trailing-whitespace normalization. Cargo resolves one copy of each patched crate for Chassis, extensions, and the test host. Normal diagnostics and lifecycle/panic containment are unchanged outside the nonlogging process path.
 
 Chassis deterministic process errors carry static messages, so dropping them does not allocate/deallocate. Boxed/custom errors and arbitrary DSP panics are not covered: catch-unwind remains, but panic hooks, payloads, and arbitrary destructors need not be realtime-safe. Process failure terminates the run; this patch promises no post-panic reuse.
 
 The actual-entry partial-alias rejection regression failed before this patch with one allocation. It now measures acceptance and rejection with zero allocations/deallocations and no host-log calls. No-host-log rejection was also measured locally; the source path cannot fall back to stderr. Packaged validator/fuzz and lifecycle/panic checks are recorded in [validation](../design/validation.md).
 
-Keep this delta narrow. Remove vendored overrides only when a reviewed upstream replacement preserves nonlogging process rejection, read-only descriptor ownership, event provenance, and native-expression layout/decoding, and passes adapter qualification.
+Keep this delta narrow. Remove vendored overrides only when a reviewed upstream replacement preserves nonlogging process rejection, read-only descriptor ownership, event provenance, native-expression layout/decoding, and MIDI wrapper layout, and passes adapter qualification.
 
 ## Current qualification boundary
 
-The configured Linux/macOS/Windows workflows package all three CLAP fixtures and run pinned `clap-validator` 0.4.1 plus bounded fuzz. The [validation guide](../design/validation.md) owns exact revision-scoped results; configured gates are not proof that an arbitrary later revision passed.
+The configured Linux/macOS/Windows workflows package all four CLAP fixtures and run pinned `clap-validator` 0.4.1 plus bounded fuzz. The [validation guide](../design/validation.md) owns exact revision-scoped results; configured gates are not proof that an arbitrary later revision passed.
 
 The REAPER baseline (2026-09-06) records macOS-arm64 coverage of scan/instantiate, deterministic automation render, state round-trip, active save, and PDC alignment; see `docs/design/validation.md` for the recorded matrix.
 

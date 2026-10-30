@@ -1,5 +1,8 @@
 //! Opaque MIDI projection. Host payload loans never enter persistent scratch.
 
+#[cfg(test)]
+mod tests;
+
 use chassis_runtime::{
     events::{EventDialect, EventFlags, EventOutputError, EventPortIndex},
     midi::{MidiEvent, MidiEventSource, MidiMessage},

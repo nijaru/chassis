@@ -5,6 +5,7 @@ members = [
     "examples/clap-conformance",
     "examples/clap-delayed-probe",
     "examples/clap-note-probe",
+    "examples/clap-midi-probe",
 ]
 exclude = ["vendor/clack/plugin", "vendor/clack/extensions", "vendor/clack/common"]
 resolver = "3"

@@ -1,6 +1,6 @@
 # Events, Notes, MIDI, and Transport
 
-Status: bounded semantic note input/output, seven native expressions, event-port schemas/dense indices, source-defined mixed ordering, and parameter automation/global float modulation are implemented in core and projected through CLAP. MIDI/SysEx/UMP, per-note parameter modulation, and span processing remain design direction; public API is not frozen.
+Status: semantic notes, seven native expressions, opaque MIDI 1/SysEx, bounded shared output, source-defined mixed ordering, and parameter automation/global float modulation are implemented in core and projected through CLAP. MIDI 2/UMP, per-note parameter modulation, and span processing remain design direction; public API is not frozen.
 
 ## Goal
 
@@ -36,7 +36,7 @@ Chassis guarantees nondecreasing sample offsets within each source sequence and 
 
 A generic span helper may group all boundaries occurring at sample `N` and make their typed changes available for the subsequent audio span. If a product genuinely requires a total cross-family order at an identical sample, that is a capability requirement: an adapter lacking such source information cannot manufacture it faithfully.
 
-`ProcessContext::with_input_order` accepts a borrowed sequence of parameter/note indices with exact coverage and nondecreasing offsets. `ordered_events()` returns that source order, or `None` for independent streams. Withholding parameter trajectories during resource replacement filters this view without changing the remaining note order.
+`ProcessContext::with_events` borrows parameter, note, and MIDI views. `with_input_order` accepts family indices with exact coverage, preserved family order, and nondecreasing offsets. `ordered_events()` returns that source order, or `None` for independent streams. Withholding parameter trajectories during resource replacement filters this view without changing the remaining note/MIDI order.
 
 Output events are emitted in the order required by the target backend; Chassis rejects decreasing offsets among successfully emitted events.
 
@@ -109,9 +109,11 @@ Keep unlike format-specific dimensions separate unless their conversion semantic
 
 ## Raw MIDI
 
-The planned raw MIDI path must support controller/program/vendor messages and utilities that need bytes rather than semantic notes. It is not implemented yet.
+`MidiEvent` preserves sample offset, concrete event-port identity, and portable live/do-not-record annotations. `MidiMessage::Short` contains exactly three opaque bytes, including unused bytes supplied by the source. `MidiMessage::SysEx` borrows an opaque payload, including empty or unframed data. Neither path validates musical grammar, normalizes padding, converts zero-velocity note-on, nor parses or reassembles messages.
 
-MIDI data retains sample offset and event-port identity. SysEx payloads should be borrowed from host/process storage where possible; receiving them must not allocate on the callback.
+`MidiEvents` admits an immutable indexed `MidiEventSource` under event-count and aggregate SysEx-byte bounds. Length, metadata, and payloads must remain stable across traversals of one callback. Runtime admission checks the actual cached counts against the activation's `MidiEventLimits`, even if the source view was constructed with looser limits. Payload bytes are not traversed merely to validate lengths.
+
+Payload loans cannot outlive their source. A receiver retaining data must copy it into independently owned bounded storage; callback copies require preallocated capacity. CLAP input payloads live through process, while output payloads need live only through `try_push`. A retaining host must copy both the descriptor and its payload before returning. Copying a Clack event wrapper or `EventBuffer` does not deep-copy SysEx.
 
 MIDI 2/UMP remains on the roadmap. Do not down-convert information destructively merely to fit a MIDI-1-shaped core.
 
@@ -188,7 +190,9 @@ Instruments/MIDI processors need a realtime-safe output sink that:
 - exposes only event classes that can be represented;
 - keeps product ownership of retry/drop policy when a target cannot accept output.
 
-`ProcessBlock::try_push_note_event` validates block offsets, port direction/dialect, and successful insertion order before forwarding to the caller-owned `NoteEventSink`. `ProcessConfig::with_max_output_note_events` bounds attempts, including invalid or rejected attempts; the default is zero. With a positive budget, processing without a sink reports `NoSink` rather than dropping events.
+`ProcessBlock::try_push_note_event` and `try_push_midi_event` share one caller-owned `EventSink` accepting `OutputEvent`. One successful-output offset orders both families; neither can bypass the other. Both validate block offsets and port direction/dialect. MIDI targets a concrete output port supporting `Midi1`.
+
+`ProcessConfig::with_max_output_note_events` and `with_midi_output_limits` bound each family's attempts, including invalid or rejected attempts; defaults are zero. Attempted SysEx bytes are charged before target validation/dispatch and are not refunded on failure. There is no hidden retry or payload copy. With a positive budget, processing without a sink reports `NoSink` rather than dropping events.
 
 Ordinary output notes/expression address output ports. Voice-end feedback instead addresses the original input port and note tuple. CLAP `NOTE_END` is plugin-to-host only and does not require a fabricated output port. Products must not end a matching voice that remains alive after a same-block retrigger.
 
@@ -202,10 +206,14 @@ Valid examples may include semantic notes -> MIDI 1 when identity/expression los
 
 ## Current implementation and remaining projection
 
-CLAP requires one explicit `ClapNotePort` binding per schema event port. Stable IDs are unique within a direction; direction-local host indices are derived by ID order and translated to schema-wide dense indices. Only the complete native note/expression dialect is advertised. MIDI or mixed-dialect schemas, unrepresentable names/IDs, and incomplete mappings fail setup.
+CLAP requires one explicit `ClapNotePort` binding per schema event port, including one supported preferred dialect. Stable IDs are unique within a direction; direction-local host indices are derived by ID order and translated to schema-wide dense indices. Ports may support native notes, MIDI 1/SysEx, or both; both capability bits are advertised for mixed ports without implicit conversion. Native-capable host indices must fit nonnegative `i16`; MIDI-only indices use `u16`. Unsupported dialects, unrepresentable names/IDs, and incomplete mappings fail setup.
 
-The adapter validates the complete raw list before DSP, with independent total-input, parameter, and note budgets. Known native records require exact sizes and legal raw addressing: only `-1` is a wildcard, not arbitrary negative values. Note-on requires concrete port/channel/key; zero velocity remains note-on. Off velocity is validated; choke's unused velocity is ignored. Unknown event spaces/types remain ignored, while recognized unsupported MIDI families, host-sent note-end, and malformed native records fail processing. Parameter flush remains a separate parameter-only control path.
+The adapter validates the complete raw list before DSP, with independent total-input, parameter, note, MIDI, and aggregate input SysEx-byte bounds. Declared MIDI inputs require positive event and payload bounds. Known records require exact sizes. Native addressing accepts only `-1` as a wildcard; note-on requires concrete port/channel/key, including at zero velocity. Off velocity is validated; choke's unused velocity is ignored. Unknown event spaces/types remain ignored; MIDI 2, host-sent note-end, malformed records, and unknown MIDI header-flag bits fail processing. Both defined MIDI annotations are preserved. Parameter flush remains a separate parameter-only control path.
+
+Activation scratch stores MIDI metadata and SysEx host indices/sizes, never callback-borrowed payloads or host pointers. A callback-local source reacquires checked records and loans payloads only after byte/representability/null guards. Empty null payloads need no dereference. Valid live host storage, extent, initialization, and immutability remain CLAP provider obligations; nonnull pointers alone cannot establish them.
 
 The exported [note probe](../../examples/clap-note-probe/src/lib.rs) is an output-only stereo instrument with two native input ports, both precisions, mixed-order-sensitive strike controls, all seven expressions, and essential voice-end feedback. It exercises a non-effect deployment without a new lifecycle or product synth framework.
 
-Remaining work is MIDI 1/SysEx, MIDI 2/UMP, per-note parameter modulation, product gestures, and span processing. Each needs its own deployment projection and qualification.
+The zero-audio [MIDI probe](../../examples/clap-midi-probe/src/lib.rs) routes two MIDI inputs to two outputs without interpreting bytes. Its timed Boolean enable control makes equal-offset parameter/MIDI ordering observable. ABI tests use a deep-copying output capture rather than retaining host payload pointers.
+
+Remaining work is MIDI 2/UMP, per-note parameter modulation, product gestures, and span processing. Each needs its own deployment projection and qualification.

@@ -36,3 +36,4 @@ package() {
 package chassis_clap_conformance chassis-clap-conformance org.nijaru.chassis.conformance 'Chassis CLAP Conformance'
 package chassis_clap_delayed_probe chassis-delayed-probe com.nijaru.chassis.delayed-probe 'Chassis Delayed Probe'
 package chassis_clap_note_probe chassis-note-probe com.nijaru.chassis.note-probe 'Chassis Note Probe'
+package chassis_clap_midi_probe chassis-midi-probe com.nijaru.chassis.midi-probe 'Chassis MIDI Probe'

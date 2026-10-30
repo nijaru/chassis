@@ -62,6 +62,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "chassis-clap-midi-probe"
+version = "0.0.0"
+dependencies = [
+ "chassis-clap",
+ "chassis-runtime",
+]
+
+[[package]]
 name = "chassis-clap-note-probe"
 version = "0.0.0"
 dependencies = [

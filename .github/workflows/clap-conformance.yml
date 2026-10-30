@@ -41,12 +41,12 @@ jobs:
 
       - name: Validate CLAPs
         run: |
-          for name in chassis-clap-conformance chassis-delayed-probe chassis-note-probe; do
+          for name in chassis-clap-conformance chassis-delayed-probe chassis-note-probe chassis-midi-probe; do
             target/clap-validator/bin/clap-validator validate "target/release/$name.clap"
           done
 
       - name: Bounded CLAP fuzz
         run: |
-          for name in chassis-clap-conformance chassis-delayed-probe chassis-note-probe; do
+          for name in chassis-clap-conformance chassis-delayed-probe chassis-note-probe chassis-midi-probe; do
             target/clap-validator/bin/clap-validator fuzz -j2 -d5s "target/release/$name.clap"
           done
