@@ -51,6 +51,26 @@ These gates do not establish production DAW behavior or representative performan
 
 Hosted workflows and local results are separate evidence. Before publication, hosted jobs were rejected and local checks supplied the interim record. Consult the actual workflow run for the revision under review before claiming Linux/macOS/Windows coverage. The dated validator, host, and benchmark results below are baselines, not automatic qualification of later commits.
 
+### Tail and timed bypass — 2026-10-30
+
+At code revision `5d03a0f62f33af67b255a7abf9c537dca0b41555` on macOS 26.6.2 arm64:
+
+- 215 workspace tests passed on stable Rust 1.99.1 and CI-baseline Rust 1.98.0. Formatting, strict all-feature/all-target Clippy on both compilers, warning-denied rustdoc, local Markdown paths, and release workspace build passed;
+- `cargo deny check` 0.19.0 passed with unused-license-allowance warnings; `cargo machete` 0.9.1 found no unused dependencies. Hosted CI passed its separately pinned tools;
+- core tests cover explicit unique Boolean bypass identity, stepped timing/source order, completed tail snapshots, failed validation and tail-hook panic atomicity, and an echo product preserving dry latency/existing wet tail through bypass and deferred custom-resource replacement;
+- actual exported gain tests cover role flags, inactive/active flush, timed bypass, state/reset, mixed 512-event controls, overflow rejection, and 1,000 maximum-event callbacks in each precision with zero measured allocations/deallocations;
+- tail ABI tests cover initialized inactive queries, activation publication before reentrant latency notification, main-thread queries during mutable DSP, synchronous notification re-entry, projected-value changes, reset, and 1,000 allocation/deallocation-free dynamic callbacks. The unstarted-activation notification regression failed before instance-owned debt replaced processor-local debt;
+- default Stacked-Borrows Miri 0.1.0 (`16d1ffac17`, 2026-10-26) passed the full `host_tail` test and `exported_bypass::readonly_output_tables_preserve_host_ownership`. The latter checks original callback/table/context identity, success/failure propagation, safe local descriptor replacement, and actual inactive/active raw flush;
+- rebuilt packaged conformance: 35 passed / 0 failed / 9 skipped; delayed probe: 21 passed / 0 failed / 23 skipped. Both five-second, two-worker fuzz runs passed with the unchanged pinned validator and reviewed generator correction.
+
+Fuzzing exposed subnormal pass-through in bypass. The fixture now applies its normal subnormal cleanup to the unity-gain dry path; f32/f64 regression inputs and both originally failing seeds passed after correction. This is product policy, not a framework bypass algorithm.
+
+The [Clack audit](../research/clack-pinned-adapter-audit.md) records the independently reviewed read-only descriptor, typed-event provenance, and shared tail-getter boundaries. The Clack revision is unchanged; common/plugin/extensions carry the documented local corrections. The Miri tail fixture owns raw audio tables rather than qualifying the pinned host's multiport builder. These are focused Miri results, not a whole-Clack or whole-workspace claim.
+
+Hosted [Rust CI](https://github.com/nijaru/chassis/actions/runs/40990508543) and [CLAP Conformance](https://github.com/nijaru/chassis/actions/runs/40990508501) succeeded at this exact source revision. Every job passed, including all Linux/macOS/Windows workspace and packaged validator/fuzz jobs.
+
+No production DAW scenario or representative performance benchmark was rerun. Note/event-port deployment, scheduling/activity hints, prepared resource adoption, and arbitrary product DSP remain outside this qualification.
+
 ### Global additive float modulation — 2026-10-24
 
 At code revision `f7459c6aabc8961302b850e7ea5d96571cd87884` on macOS 26.6.2 arm64:
