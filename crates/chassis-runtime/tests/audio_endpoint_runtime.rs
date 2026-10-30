@@ -61,13 +61,10 @@ struct ProbeProcessor {
 impl Processor for ProbeProcessor {}
 
 impl Process<f32> for ProbeProcessor {
-    fn process<B>(
+    fn process(
         &mut self,
-        _block: &mut ProcessBlock<'_, '_, '_, f32, B>,
-    ) -> Result<(), chassis_runtime::runtime::ProcessError>
-    where
-        B: ProcessBufferSource<f32> + ?Sized,
-    {
+        _block: &mut ProcessBlock<'_, f32>,
+    ) -> Result<(), chassis_runtime::runtime::ProcessError> {
         self.process_calls.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
@@ -174,40 +171,19 @@ struct RepeatedInputSource {
     visits: std::cell::Cell<usize>,
 }
 
-struct RepeatedInputs<'a> {
-    visits: &'a std::cell::Cell<usize>,
-    remaining: usize,
-}
-
-impl Iterator for RepeatedInputs<'_> {
-    type Item = ChannelBuffer<'static, f32>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.remaining == 0 {
-            return None;
-        }
-        self.remaining -= 1;
-        self.visits.set(self.visits.get() + 1);
-        Some(ChannelBuffer::input_only(InputEndpoint::new(MAIN_INPUT_INDEX, 0), &[1.0], 1).unwrap())
-    }
-}
-
 impl ProcessBufferSource<f32> for RepeatedInputSource {
-    type Channel<'a> = ChannelBuffer<'static, f32>;
-    type Channels<'a> = RepeatedInputs<'a>;
-
-    fn validate_frame_count(
+    fn visit_channels(
         &mut self,
-        _: usize,
-    ) -> Result<(), chassis_runtime::process::ProcessBlockError> {
-        Ok(())
-    }
-
-    fn channels(&mut self) -> Self::Channels<'_> {
-        RepeatedInputs {
-            visits: &self.visits,
-            remaining: 100,
+        visitor: &mut dyn FnMut(ChannelBuffer<'_, f32>) -> std::ops::ControlFlow<()>,
+    ) -> std::ops::ControlFlow<()> {
+        for _ in 0..100 {
+            self.visits.set(self.visits.get() + 1);
+            visitor(
+                ChannelBuffer::input_only(InputEndpoint::new(MAIN_INPUT_INDEX, 0), &[1.0], 1)
+                    .unwrap(),
+            )?;
         }
+        std::ops::ControlFlow::Continue(())
     }
 }
 

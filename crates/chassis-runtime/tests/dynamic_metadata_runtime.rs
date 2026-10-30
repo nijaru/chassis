@@ -17,10 +17,7 @@ use chassis_runtime::{
         EventDialect, EventPortDescriptor, EventPortDirection, EventPortIndex, EventPortKey,
         NormalizedValue, NoteAddress, NoteEvent, NoteEventKind, NoteEvents,
     },
-    process::{
-        ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessChannel, ProcessConfig,
-        ProcessContext, ProcessMode,
-    },
+    process::{ActivationConfig, ProcessBlock, ProcessConfig, ProcessContext, ProcessMode},
     runtime::{Component, InstanceRuntime, Process, Processor},
     schema::ComponentSchema,
 };
@@ -103,31 +100,28 @@ struct HostedProcessor {
 impl Processor for HostedProcessor {}
 
 impl Process<f32> for HostedProcessor {
-    fn process<B>(
+    fn process(
         &mut self,
-        block: &mut ProcessBlock<'_, '_, '_, f32, B>,
-    ) -> Result<(), chassis_runtime::runtime::ProcessError>
-    where
-        B: ProcessBufferSource<f32> + ?Sized,
-    {
+        block: &mut ProcessBlock<'_, f32>,
+    ) -> Result<(), chassis_runtime::runtime::ProcessError> {
         let note_on = block
             .note_events()
             .for_port(self.notes)
             .any(|event| matches!(event.kind(), NoteEventKind::On { .. }));
         let value = if note_on { 0.5 } else { 0.0 };
 
-        for mut channel in block.channels() {
+        block.for_each_channel(|mut channel| {
             if channel
                 .output_endpoint()
                 .is_none_or(|endpoint| endpoint.port_index() != self.output)
             {
-                continue;
+                return;
             }
             channel
                 .output_mut()
                 .expect("hosted fixture receives output-only channels")
                 .fill(value);
-        }
+        });
         Ok(())
     }
 }

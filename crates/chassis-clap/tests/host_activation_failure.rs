@@ -2,7 +2,7 @@
 
 use chassis_clap::{ClapComponent, SingleComponentEntry};
 use chassis_runtime::{
-    process::{ActivationConfig, ProcessBlock, ProcessBufferSource},
+    process::{ActivationConfig, ProcessBlock},
     runtime::{Component, Process, Processor},
 };
 use clack_host::{factory::plugin::PluginFactory, prelude::*};
@@ -47,13 +47,10 @@ struct ActivationProcessor;
 impl Processor for ActivationProcessor {}
 
 impl Process<f32> for ActivationProcessor {
-    fn process<B>(
+    fn process(
         &mut self,
-        _block: &mut ProcessBlock<'_, '_, '_, f32, B>,
-    ) -> Result<(), chassis_runtime::runtime::ProcessError>
-    where
-        B: ProcessBufferSource<f32> + ?Sized,
-    {
+        _block: &mut ProcessBlock<'_, f32>,
+    ) -> Result<(), chassis_runtime::runtime::ProcessError> {
         Ok(())
     }
 }

@@ -3,7 +3,7 @@
 use chassis_clap::{ClapComponent, SingleComponentEntry};
 use chassis_runtime::{
     parameters::{ParameterDescriptor, ParameterStore, ParameterValue},
-    process::{ActivationConfig, ProcessBlock, ProcessBufferSource},
+    process::{ActivationConfig, ProcessBlock},
     runtime::{Component, ComponentStateError, Process, Processor},
     schema::{ComponentId, ComponentSchema, ComponentSchemaError, StateSchemaVersion},
     state::{StateDocument, StateEntry, StateLimits, StateMigration, StateValue},
@@ -122,9 +122,9 @@ impl<const KIND: u8> Component for PolicyProbe<KIND> {
 struct PolicyProcessor;
 impl Processor for PolicyProcessor {}
 impl Process<f32> for PolicyProcessor {
-    fn process<B: ProcessBufferSource<f32> + ?Sized>(
+    fn process(
         &mut self,
-        _: &mut ProcessBlock<'_, '_, '_, f32, B>,
+        _: &mut ProcessBlock<'_, f32>,
     ) -> Result<(), chassis_runtime::runtime::ProcessError> {
         Ok(())
     }

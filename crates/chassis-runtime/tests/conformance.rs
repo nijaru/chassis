@@ -22,8 +22,8 @@ use chassis_runtime::{
     buffer::{ChannelBuffer, InputEndpoint, OutputEndpoint},
     parameters::{ParameterDescriptor, ParameterIndex, ParameterValue},
     process::{
-        ActivationConfig, ProcessBlock, ProcessBlockError, ProcessBufferSource, ProcessChannel,
-        ProcessConfig, ProcessContext, ProcessMode,
+        ActivationConfig, ProcessBlock, ProcessBlockError, ProcessConfig, ProcessContext,
+        ProcessMode,
     },
     runtime::{
         ActivateError, Component, InstanceProcessError, InstanceRuntime, InstanceRuntimeError,
@@ -128,13 +128,10 @@ impl Processor for ConformanceProcessor {
 
 impl Process<f32> for ConformanceProcessor {
     #[allow(clippy::cast_possible_truncation)]
-    fn process<B>(
+    fn process(
         &mut self,
-        block: &mut ProcessBlock<'_, '_, '_, f32, B>,
-    ) -> Result<(), chassis_runtime::runtime::ProcessError>
-    where
-        B: ProcessBufferSource<f32> + ?Sized,
-    {
+        block: &mut ProcessBlock<'_, f32>,
+    ) -> Result<(), chassis_runtime::runtime::ProcessError> {
         self.metrics.process_calls.fetch_add(1, Ordering::Relaxed);
         let parameter_events = block.parameter_events();
         let gain_index = block.parameters().index("input.gain");
@@ -143,7 +140,7 @@ impl Process<f32> for ConformanceProcessor {
             _ => f64::from(self.gain),
         };
 
-        for mut buffer in block.channels() {
+        block.for_each_channel(|mut buffer| {
             let is_main_pair = buffer
                 .input_endpoint()
                 .is_some_and(|endpoint| endpoint.port_index() == self.main_input)
@@ -151,7 +148,7 @@ impl Process<f32> for ConformanceProcessor {
                     .output_endpoint()
                     .is_some_and(|endpoint| endpoint.port_index() == self.main_output);
             if !is_main_pair {
-                continue;
+                return;
             }
 
             let samples = buffer
@@ -172,7 +169,7 @@ impl Process<f32> for ConformanceProcessor {
                     *sample *= self.gain;
                 }
             }
-        }
+        });
         Ok(())
     }
 }

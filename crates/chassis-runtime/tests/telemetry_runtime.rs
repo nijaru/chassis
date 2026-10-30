@@ -7,10 +7,7 @@ use chassis_runtime::{
     audio::{AudioPortIndex, DEFAULT_EFFECT_CONFIGURATION},
     automation::ParameterEvents,
     buffer::{ChannelBuffer, InputEndpoint, OutputEndpoint},
-    process::{
-        ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessChannel, ProcessConfig,
-        ProcessContext, ProcessMode,
-    },
+    process::{ActivationConfig, ProcessBlock, ProcessConfig, ProcessContext, ProcessMode},
     runtime::{Component, InstanceRuntime, Process, Processor},
     telemetry::F32Telemetry,
 };
@@ -55,27 +52,24 @@ impl Processor for MeterProcessor {}
 
 impl Process<f32> for MeterProcessor {
     #[allow(clippy::cast_precision_loss)]
-    fn process<B>(
+    fn process(
         &mut self,
-        block: &mut ProcessBlock<'_, '_, '_, f32, B>,
-    ) -> Result<(), chassis_runtime::runtime::ProcessError>
-    where
-        B: ProcessBufferSource<f32> + ?Sized,
-    {
+        block: &mut ProcessBlock<'_, f32>,
+    ) -> Result<(), chassis_runtime::runtime::ProcessError> {
         let mut peak = 0.0_f32;
         let mut sum_squares = 0.0_f32;
         let mut sample_count = 0_u32;
 
-        for buffer in block.channels() {
+        block.for_each_channel(|buffer| {
             let Some(samples) = buffer.input() else {
-                continue;
+                return;
             };
             for sample in samples {
                 peak = peak.max(sample.abs());
                 sum_squares += sample * sample;
                 sample_count += 1;
             }
-        }
+        });
 
         let rms = if sample_count == 0 {
             0.0

@@ -18,7 +18,7 @@ use chassis_runtime::{
     automation::ParameterEventValue,
     modulation::GlobalFloatModulation,
     parameters::{ChoiceOption, ParameterDescriptor, ParameterIndex},
-    process::{ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessChannel},
+    process::{ActivationConfig, ProcessBlock},
     runtime::{Component, LatencySamples, Process, Processor},
 };
 use clack_extensions::{
@@ -191,18 +191,14 @@ impl Processor for ProbeProcessor {
 }
 
 impl ProbeProcessor {
-    fn process_trim<S: Copy, B: ProcessBufferSource<S> + ?Sized>(
-        &self,
-        block: &mut ProcessBlock<'_, '_, '_, S, B>,
-        apply: impl Fn(&mut S, f64),
-    ) {
+    fn process_trim<S: Copy>(&self, block: &mut ProcessBlock<'_, S>, apply: impl Fn(&mut S, f64)) {
         let Some(ParameterEventValue::Float(base)) = block.parameters().get_event_value(self.trim)
         else {
             panic!("trim is a float");
         };
         let amount = block.modulation(self.trim).unwrap();
         let events = block.parameter_events();
-        for mut channel in block.channels() {
+        block.for_each_channel(|mut channel| {
             if channel
                 .input_endpoint()
                 .is_some_and(|endpoint| endpoint.port_index() == self.main_input)
@@ -226,23 +222,23 @@ impl ProbeProcessor {
                     );
                 }
             }
-        }
+        });
     }
 }
 impl Process<f32> for ProbeProcessor {
     #[allow(clippy::cast_possible_truncation)]
-    fn process<B: ProcessBufferSource<f32> + ?Sized>(
+    fn process(
         &mut self,
-        block: &mut ProcessBlock<'_, '_, '_, f32, B>,
+        block: &mut ProcessBlock<'_, f32>,
     ) -> Result<(), chassis_runtime::runtime::ProcessError> {
         self.process_trim(block, |sample, gain| *sample *= gain as f32);
         Ok(())
     }
 }
 impl Process<f64> for ProbeProcessor {
-    fn process<B: ProcessBufferSource<f64> + ?Sized>(
+    fn process(
         &mut self,
-        block: &mut ProcessBlock<'_, '_, '_, f64, B>,
+        block: &mut ProcessBlock<'_, f64>,
     ) -> Result<(), chassis_runtime::runtime::ProcessError> {
         self.process_trim(block, |sample, gain| *sample *= gain);
         Ok(())

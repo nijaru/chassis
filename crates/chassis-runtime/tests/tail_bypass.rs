@@ -9,10 +9,7 @@ use chassis_runtime::{
         ParameterDefinitionError, ParameterDescriptor, ParameterIndex, ParameterStore,
         ParameterStoreError, ParameterValue,
     },
-    process::{
-        ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessChannel, ProcessConfig,
-        ProcessContext, ProcessMode,
-    },
+    process::{ActivationConfig, ProcessBlock, ProcessConfig, ProcessContext, ProcessMode},
     runtime::{
         Component, ComponentStateError, InstanceRuntime, LatencySamples, Process, Processor,
         TailLength,
@@ -133,9 +130,9 @@ impl Processor for EchoProcessor {
     }
 }
 impl Process<f64> for EchoProcessor {
-    fn process<B: ProcessBufferSource<f64> + ?Sized>(
+    fn process(
         &mut self,
-        block: &mut ProcessBlock<'_, '_, '_, f64, B>,
+        block: &mut ProcessBlock<'_, f64>,
     ) -> Result<(), chassis_runtime::runtime::ProcessError> {
         let Some(ParameterEventValue::Boolean(initial)) =
             block.parameters().get_event_value(BYPASS)
@@ -143,7 +140,8 @@ impl Process<f64> for EchoProcessor {
             unreachable!()
         };
         let events = block.parameter_events();
-        for (channel, mut buffer) in block.channels().enumerate() {
+        let mut channel = 0;
+        block.for_each_channel(|mut buffer| {
             let mut bypass = events.boolean_cursor(BYPASS, initial);
             for (offset, sample) in buffer
                 .copy_input_to_output()
@@ -166,7 +164,8 @@ impl Process<f64> for EchoProcessor {
                 *sample = output;
                 self.positions[channel] = (position + 1) % (2 * self.wet_length);
             }
-        }
+            channel += 1;
+        });
         Ok(())
     }
 }

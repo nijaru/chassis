@@ -13,10 +13,7 @@ use chassis_runtime::{
     },
     automation::ParameterEvents,
     buffer::{ChannelBuffer, OutputEndpoint},
-    process::{
-        ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessChannel, ProcessConfig,
-        ProcessContext, ProcessMode,
-    },
+    process::{ActivationConfig, ProcessBlock, ProcessConfig, ProcessContext, ProcessMode},
     runtime::{Component, InstanceRuntime, Process, Processor},
     schema::ComponentSchema,
 };
@@ -85,29 +82,26 @@ struct MultiOutputProcessor {
 impl Processor for MultiOutputProcessor {}
 
 impl Process<f32> for MultiOutputProcessor {
-    fn process<B>(
+    fn process(
         &mut self,
-        block: &mut ProcessBlock<'_, '_, '_, f32, B>,
-    ) -> Result<(), chassis_runtime::runtime::ProcessError>
-    where
-        B: ProcessBufferSource<f32> + ?Sized,
-    {
-        for mut channel in block.channels() {
+        block: &mut ProcessBlock<'_, f32>,
+    ) -> Result<(), chassis_runtime::runtime::ProcessError> {
+        block.for_each_channel(|mut channel| {
             let Some(endpoint) = channel.output_endpoint() else {
-                continue;
+                return;
             };
             let value = if endpoint.port_index() == self.main {
                 0.125
             } else if endpoint.port_index() == self.aux {
                 0.75
             } else {
-                continue;
+                return;
             };
             channel
                 .output_mut()
                 .expect("multi-output fixture receives output-only channels")
                 .fill(value);
-        }
+        });
         Ok(())
     }
 }

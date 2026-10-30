@@ -18,10 +18,7 @@ use chassis_runtime::{
         EventDialect, EventPortDescriptor, EventPortDirection, EventPortIndex, EventPortKey,
         NormalizedValue, NoteAddress, NoteEvent, NoteEventKind, NoteEvents,
     },
-    process::{
-        ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessChannel, ProcessConfig,
-        ProcessContext, ProcessMode,
-    },
+    process::{ActivationConfig, ProcessBlock, ProcessConfig, ProcessContext, ProcessMode},
     runtime::{Component, InstanceRuntime, Process, Processor},
     schema::ComponentSchema,
 };
@@ -95,22 +92,19 @@ struct InstrumentProcessor {
 impl Processor for InstrumentProcessor {}
 
 impl Process<f32> for InstrumentProcessor {
-    fn process<B>(
+    fn process(
         &mut self,
-        block: &mut ProcessBlock<'_, '_, '_, f32, B>,
-    ) -> Result<(), chassis_runtime::runtime::ProcessError>
-    where
-        B: ProcessBufferSource<f32> + ?Sized,
-    {
+        block: &mut ProcessBlock<'_, f32>,
+    ) -> Result<(), chassis_runtime::runtime::ProcessError> {
         let note_events = block.note_events();
         let initial_gate = self.gate;
 
-        for mut channel in block.channels() {
+        block.for_each_channel(|mut channel| {
             if channel
                 .output_endpoint()
                 .is_none_or(|endpoint| endpoint.port_index() != self.output)
             {
-                continue;
+                return;
             }
 
             let samples = channel
@@ -127,7 +121,7 @@ impl Process<f32> for InstrumentProcessor {
                 }
                 *sample = if gate { 0.25 } else { 0.0 };
             }
-        }
+        });
 
         for event in note_events.for_port(self.notes) {
             apply_gate_event(&mut self.gate, event.kind());

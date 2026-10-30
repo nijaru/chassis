@@ -5,7 +5,7 @@ use std::convert::Infallible;
 use chassis_clap::{ClapComponent, SingleComponentEntry};
 use chassis_runtime::{
     audio::{AudioPortIndex, MAIN_INPUT, MAIN_OUTPUT},
-    process::{ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessChannel},
+    process::{ActivationConfig, ProcessBlock},
     runtime::{Component, Process, Processor},
 };
 use clack_host::{factory::plugin::PluginFactory, prelude::*};
@@ -58,14 +58,11 @@ struct FrameProcessor {
 impl Processor for FrameProcessor {}
 
 impl Process<f32> for FrameProcessor {
-    fn process<B>(
+    fn process(
         &mut self,
-        block: &mut ProcessBlock<'_, '_, '_, f32, B>,
-    ) -> Result<(), chassis_runtime::runtime::ProcessError>
-    where
-        B: ProcessBufferSource<f32> + ?Sized,
-    {
-        for mut channel in block.channels() {
+        block: &mut ProcessBlock<'_, f32>,
+    ) -> Result<(), chassis_runtime::runtime::ProcessError> {
+        block.for_each_channel(|mut channel| {
             if channel
                 .input_endpoint()
                 .is_some_and(|endpoint| endpoint.port_index() == self.main_input)
@@ -75,7 +72,7 @@ impl Process<f32> for FrameProcessor {
             {
                 let _ = channel.copy_input_to_output();
             }
-        }
+        });
         Ok(())
     }
 }

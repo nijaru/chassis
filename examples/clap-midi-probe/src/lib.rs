@@ -9,7 +9,7 @@ use chassis_runtime::{
     automation::{ParameterEventChange, ParameterEventValue},
     events::{EventDialect, EventPortDescriptor, EventPortDirection, EventPortIndex, EventPortKey},
     parameters::{ParameterDescriptor, ParameterIndex, ParameterStore},
-    process::{ActivationConfig, InputEventRef, ProcessBlock, ProcessBufferSource},
+    process::{ActivationConfig, InputEventRef, ProcessBlock},
     runtime::{Component, Process, ProcessError, Processor},
     schema::{ComponentId, ComponentSchema, ComponentSchemaError, StateSchemaVersion},
     state::StateEntry,
@@ -140,13 +140,7 @@ pub struct MidiProbeProcessor {
 impl Processor for MidiProbeProcessor {}
 
 impl Process<f32> for MidiProbeProcessor {
-    fn process<B>(
-        &mut self,
-        block: &mut ProcessBlock<'_, '_, '_, f32, B>,
-    ) -> Result<(), ProcessError>
-    where
-        B: ProcessBufferSource<f32> + ?Sized,
-    {
+    fn process(&mut self, block: &mut ProcessBlock<'_, f32>) -> Result<(), ProcessError> {
         let Some(ParameterEventValue::Boolean(mut enabled)) =
             block.parameters().get_event_value(self.enabled)
         else {

@@ -3,7 +3,7 @@
 
 use chassis_clap::{ClapComponent, SingleComponentEntry};
 use chassis_runtime::{
-    process::{ActivationConfig, ProcessBlock, ProcessBufferSource},
+    process::{ActivationConfig, ProcessBlock},
     runtime::{Component, LatencySamples, Process, Processor, TailLength},
     schema::{ComponentId, ComponentSchema, ComponentSchemaError, StateSchemaVersion},
 };
@@ -94,9 +94,9 @@ impl Processor for TailProcessor {
     }
 }
 impl Process<f32> for TailProcessor {
-    fn process<B: ProcessBufferSource<f32> + ?Sized>(
+    fn process(
         &mut self,
-        _: &mut ProcessBlock<'_, '_, '_, f32, B>,
+        _: &mut ProcessBlock<'_, f32>,
     ) -> Result<(), chassis_runtime::runtime::ProcessError> {
         self.0 = NEXT_TAIL.load(Ordering::Relaxed);
         if PAUSE.load(Ordering::Relaxed) {

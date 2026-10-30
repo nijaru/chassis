@@ -13,7 +13,7 @@ use chassis_runtime::{
         AudioIoConfigurationSpec, AudioIoPolicy, AudioPortDescriptor, ChannelLayout,
         ConfiguredAudioPort, PortDirection, PortKey, PortRole,
     },
-    process::{ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessChannel},
+    process::{ActivationConfig, ProcessBlock},
     runtime::{Component, Process, ProcessError, Processor},
     schema::{ComponentId, ComponentSchema, ComponentSchemaError, StateSchemaVersion},
     transport::TransportValues,
@@ -133,32 +133,20 @@ fn observations(values: &TransportValues) -> [f64; FIELDS] {
     ]
 }
 impl Process<f64> for TransportProbe {
-    fn process<B>(
-        &mut self,
-        block: &mut ProcessBlock<'_, '_, '_, f64, B>,
-    ) -> Result<(), ProcessError>
-    where
-        B: ProcessBufferSource<f64> + ?Sized,
-    {
+    fn process(&mut self, block: &mut ProcessBlock<'_, f64>) -> Result<(), ProcessError> {
         let values = observations(block.transport().values());
-        for mut channel in block.channels() {
+        block.for_each_channel(|mut channel| {
             channel.output_mut().unwrap().copy_from_slice(&values);
-        }
+        });
         Ok(())
     }
 }
 impl Process<f32> for TransportProbe {
-    fn process<B>(
-        &mut self,
-        block: &mut ProcessBlock<'_, '_, '_, f32, B>,
-    ) -> Result<(), ProcessError>
-    where
-        B: ProcessBufferSource<f32> + ?Sized,
-    {
+    fn process(&mut self, block: &mut ProcessBlock<'_, f32>) -> Result<(), ProcessError> {
         // This fixture's observations use f64 so tempo slope is not truncated.
-        for mut channel in block.channels() {
+        block.for_each_channel(|mut channel| {
             channel.output_mut().unwrap().fill(0.0);
-        }
+        });
         Ok(())
     }
 }

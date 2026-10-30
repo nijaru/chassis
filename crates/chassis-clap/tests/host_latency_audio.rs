@@ -5,7 +5,7 @@ use std::convert::Infallible;
 use chassis_clap::{ClapComponent, SingleComponentEntry};
 use chassis_runtime::{
     audio::{AudioPortIndex, MAIN_INPUT, MAIN_OUTPUT},
-    process::{ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessChannel},
+    process::{ActivationConfig, ProcessBlock},
     runtime::{Component, LatencySamples, Process, Processor},
 };
 use clack_extensions::latency::{HostLatency, HostLatencyImpl, PluginLatency};
@@ -75,14 +75,11 @@ impl Processor for DelayedProcessor {
 }
 
 impl Process<f32> for DelayedProcessor {
-    fn process<B>(
+    fn process(
         &mut self,
-        block: &mut ProcessBlock<'_, '_, '_, f32, B>,
-    ) -> Result<(), chassis_runtime::runtime::ProcessError>
-    where
-        B: ProcessBufferSource<f32> + ?Sized,
-    {
-        for mut channel in block.channels() {
+        block: &mut ProcessBlock<'_, f32>,
+    ) -> Result<(), chassis_runtime::runtime::ProcessError> {
+        block.for_each_channel(|mut channel| {
             let is_main = channel
                 .input_endpoint()
                 .is_some_and(|endpoint| endpoint.port_index() == self.main_input)
@@ -90,7 +87,7 @@ impl Process<f32> for DelayedProcessor {
                     .output_endpoint()
                     .is_some_and(|endpoint| endpoint.port_index() == self.main_output);
             if !is_main {
-                continue;
+                return;
             }
 
             let index = usize::try_from(
@@ -112,7 +109,7 @@ impl Process<f32> for DelayedProcessor {
                     *position = 0;
                 }
             }
-        }
+        });
         Ok(())
     }
 }

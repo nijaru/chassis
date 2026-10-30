@@ -12,10 +12,7 @@ use chassis_runtime::{
         EventPortSchemaError, NormalizedValue, NoteAddress, NoteEvent, NoteEventKind,
         NoteEventPortError, NoteEvents,
     },
-    process::{
-        ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessConfig, ProcessContext,
-        ProcessMode,
-    },
+    process::{ActivationConfig, ProcessBlock, ProcessConfig, ProcessContext, ProcessMode},
     runtime::{
         ActivateError, Component, InstanceProcessError, InstanceRuntime, InstanceRuntimeError,
         Process, Processor,
@@ -78,13 +75,10 @@ struct EventProcessor;
 impl Processor for EventProcessor {}
 
 impl Process<f32> for EventProcessor {
-    fn process<B>(
+    fn process(
         &mut self,
-        _block: &mut ProcessBlock<'_, '_, '_, f32, B>,
-    ) -> Result<(), chassis_runtime::runtime::ProcessError>
-    where
-        B: ProcessBufferSource<f32> + ?Sized,
-    {
+        _block: &mut ProcessBlock<'_, f32>,
+    ) -> Result<(), chassis_runtime::runtime::ProcessError> {
         Ok(())
     }
 }

@@ -12,7 +12,7 @@ use std::{
 use chassis_clap::{ClapComponent, F32AndF64, SingleComponentEntry};
 use chassis_runtime::{
     parameters::ParameterDescriptor,
-    process::{ActivationConfig, ProcessBlock, ProcessBufferSource},
+    process::{ActivationConfig, ProcessBlock},
     runtime::{Component, Process, ProcessError, Processor},
 };
 use clack_host::{
@@ -75,25 +75,13 @@ struct BenchProcessor;
 impl Processor for BenchProcessor {}
 
 impl Process<f32> for BenchProcessor {
-    fn process<B>(
-        &mut self,
-        _block: &mut ProcessBlock<'_, '_, '_, f32, B>,
-    ) -> Result<(), ProcessError>
-    where
-        B: ProcessBufferSource<f32> + ?Sized,
-    {
+    fn process(&mut self, _block: &mut ProcessBlock<'_, f32>) -> Result<(), ProcessError> {
         Ok(())
     }
 }
 
 impl Process<f64> for BenchProcessor {
-    fn process<B>(
-        &mut self,
-        _block: &mut ProcessBlock<'_, '_, '_, f64, B>,
-    ) -> Result<(), ProcessError>
-    where
-        B: ProcessBufferSource<f64> + ?Sized,
-    {
+    fn process(&mut self, _block: &mut ProcessBlock<'_, f64>) -> Result<(), ProcessError> {
         Ok(())
     }
 }

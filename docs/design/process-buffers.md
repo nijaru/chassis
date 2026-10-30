@@ -1,6 +1,6 @@
 # Processing and Audio Buffer Model
 
-Status: safe channel relationships, generic allocation-free `ProcessBufferSource<S>`, and mapped CLAP f32/f64 traversal are implemented. Author-facing higher-level bus views remain pre-alpha.
+Status: uniform safe channel views, object-safe allocation-free `ProcessBufferSource<S>` visitors, and mapped CLAP f32/f64 traversal are implemented. Author-facing higher-level bus views remain pre-alpha.
 
 ## Safe relationships
 
@@ -32,9 +32,9 @@ Endpoints carry schema-local dense `AudioPortIndex` plus channel index. Stable k
 - separate -> bounded input-to-output copy on every call, then output slice;
 - input-only/output-only -> error because no valid paired in-place view exists.
 
-This operation explicitly initializes output; it is not an idempotent mutable accessor. Initialize once for an in-place algorithm, then use `output_mut()` for subsequent stages. Products with out-of-place algorithms can use input/output access directly. Zero-copy is not a goal by itself; keep the bounded copy unless measurement justifies more complex ownership.
+This operation explicitly initializes output; it is not an idempotent mutable accessor. Initialize once for an in-place algorithm, then use `output_mut()` for subsequent stages. Out-of-place algorithms match `ChannelBuffer::Separate { input_samples, output_samples, .. }` to consume both disjoint slices simultaneously. In-place algorithms match `InPlace { samples, .. }` and use the single mutable slice. Separate `input()` and `output_mut()` accessor calls cannot express simultaneous borrowing; enum destructuring is the authoring boundary. Zero-copy is not a goal by itself; keep the bounded copy unless measurement justifies more complex ownership.
 
-## Generic no-allocation source
+## Object-safe no-allocation source
 
 Runtime-negotiated port/channel counts cannot safely be retained as lifetime-bearing `ChannelBuffer` values in processor storage, while constructing an owned vector every callback violates the realtime contract.
 
@@ -42,17 +42,14 @@ The implemented boundary is:
 
 ```text
 ProcessBufferSource<S>
-  validate_frame_count(expected)
-  channels() -> allocation-free iterator
+  visit_channels(&mut dyn FnMut(ChannelBuffer<'_, S>) -> ControlFlow<()>)
+    -> ControlFlow<()>
 
-ProcessChannel<S>
-  relationship
-  semantic endpoints
-  frame count
-  input / output_mut / copy_input_to_output
+ChannelBuffer<'_, S>
+  uniform enum with semantic endpoints and safe sample slices
 ```
 
-A materialized slice uses `ChannelBufferSlice`; a format adapter can yield safe host-derived channel wrappers lazily. Laziness changes when the safe view is produced, not the alias proof required for it.
+A materialized slice uses `ChannelBufferSlice` and `ChannelBuffer::reborrow()`; a format adapter constructs the same enum lazily. There is no second channel trait or generic source type in the product process signature. Each view is borrowed only for one visitor call and cannot be retained across calls. Laziness changes when the safe view is produced, not the alias proof required for it. Sources must stop immediately and propagate `ControlFlow::Break` when requested.
 
 Every callback covers each active input/output endpoint exactly once, in any order, with paired or single-direction views. Missing/silent channels require explicit sample views; omission is not silence. Sources are finite and repeat the same topology, relationships, and dimensions across traversals. Runtime validation uses activation-owned endpoint coverage scratch, rejecting missing, duplicate, or endpoint-free views before DSP. Since each accepted view consumes a unique endpoint, even a repeated source is rejected within the activation's endpoint count plus one yielded view.
 
@@ -60,7 +57,9 @@ Every callback covers each active input/output endpoint exactly once, in any ord
 
 ## ProcessBlock
 
-`ProcessBlock<S, B>` exposes actual frame count, process mode/transport context, borrowed canonical base parameters, bounded ordered parameter and note events, and one borrowed buffer source. Activation configuration is used for validation, not retained as a public block accessor.
+`ProcessBlock<'a, S>` exposes actual frame count, process mode/transport context, borrowed canonical base parameters, bounded ordered parameter and note events, and one borrowed buffer source. Activation configuration is used for validation, not retained as a public block accessor.
+
+`Process<S>::process(&mut self, block: &mut ProcessBlock<'_, S>)` has no source generic or independent source/context/parameter lifetimes. `block.for_each_channel(|channel| ...)` visits all views; `block.try_for_each_channel(|channel| -> Result<(), E> { ... })` stops on the first error. Neither helper allocates or rolls back earlier writes.
 
 Before audio traversal, core rejects frame/event-bound or block-association failures. Before product DSP runs, it also validates complete audio topology, source dimensions, parameter type/domain, and note-port capabilities. Stable key/backend mapping belongs to setup and is not rediscovered per callback.
 
@@ -103,7 +102,7 @@ The CLAP adapter advertises f64 only through the explicit f64-capable export mar
 - no stable-string/schema searches when setup can retain dense mappings;
 - replacement/reclamation of large objects stays off the callback.
 
-Mechanical allocation/work-bound instrumentation is still required before production claims; source inspection alone is not proof.
+`tests/realtime_alloc.rs` mechanically checks a sample-generic processor using simultaneous separate input/output slices at f32 and f64, including allocation-free dimension/topology rejection. Early-stop and repeated traversal are covered by core source tests. Full format qualification and representative performance evidence remain separate; source inspection and Rust tests alone are not production qualification.
 
 ## Remaining design work
 

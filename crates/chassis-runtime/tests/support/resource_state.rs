@@ -4,7 +4,7 @@ use chassis_runtime::{
     automation::ParameterEventValue,
     modulation::GlobalFloatModulation,
     parameters::{ChoiceOption, ParameterDescriptor, ParameterIndex, ParameterStore},
-    process::{ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessChannel},
+    process::{ActivationConfig, ProcessBlock},
     runtime::{Component, ComponentStateError, Process, Processor},
     schema::{ComponentId, ComponentSchema, ComponentSchemaError, StateSchemaVersion},
     state::{StateDocument, StateEntry, StateMigration, StateValue},
@@ -167,9 +167,9 @@ impl Processor for TableProcessor {
     }
 }
 impl Process<f64> for TableProcessor {
-    fn process<B: ProcessBufferSource<f64> + ?Sized>(
+    fn process(
         &mut self,
-        block: &mut ProcessBlock<'_, '_, '_, f64, B>,
+        block: &mut ProcessBlock<'_, f64>,
     ) -> Result<(), chassis_runtime::runtime::ProcessError> {
         let Some(ParameterEventValue::Float(initial)) =
             block.parameters().get_event_value(ParameterIndex::new(0))
@@ -178,7 +178,7 @@ impl Process<f64> for TableProcessor {
         };
         let events = block.parameter_events();
         let amount = block.modulation(ParameterIndex::new(0)).unwrap();
-        for mut channel in block.channels() {
+        block.for_each_channel(|mut channel| {
             let mut cursor = self
                 .modulation
                 .cursor(events, ParameterIndex::new(0), initial, amount)
@@ -196,7 +196,7 @@ impl Process<f64> for TableProcessor {
                     *output = f64::from(self.table[index]);
                 }
             }
-        }
+        });
         Ok(())
     }
 }

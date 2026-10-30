@@ -19,8 +19,8 @@ use chassis_runtime::{
     buffer::{ChannelBuffer, InputEndpoint, OutputEndpoint},
     parameters::{ParameterDescriptor, ParameterStore, ParameterValue},
     process::{
-        ActivationConfig, ProcessBlock, ProcessBlockError, ProcessBufferSource, ProcessChannel,
-        ProcessConfig, ProcessContext, ProcessMode,
+        ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessConfig, ProcessContext,
+        ProcessMode,
     },
     runtime::{Component, InstanceRuntime, Process, Processor},
 };
@@ -100,24 +100,21 @@ impl Processor for EffectProcessor {}
 
 impl Process<f32> for EffectProcessor {
     #[allow(clippy::cast_possible_truncation)]
-    fn process<B>(
+    fn process(
         &mut self,
-        block: &mut ProcessBlock<'_, '_, '_, f32, B>,
-    ) -> Result<(), chassis_runtime::runtime::ProcessError>
-    where
-        B: ProcessBufferSource<f32> + ?Sized,
-    {
+        block: &mut ProcessBlock<'_, f32>,
+    ) -> Result<(), chassis_runtime::runtime::ProcessError> {
         let gain = match block.parameters().get("gain") {
             Some(ParameterValue::Float(value)) => *value as f32,
             _ => 1.0,
         };
-        for mut buffer in block.channels() {
+        block.for_each_channel(|mut buffer| {
             if let Ok(samples) = buffer.copy_input_to_output() {
                 for sample in samples {
                     *sample *= gain;
                 }
             }
-        }
+        });
         Ok(())
     }
 }
@@ -133,36 +130,15 @@ struct SplitChannelBuffers<'buffers, 'samples, S> {
     second: &'buffers mut [ChannelBuffer<'samples, S>],
 }
 
-impl<'samples, S> ProcessBufferSource<S> for SplitChannelBuffers<'_, 'samples, S> {
-    type Channel<'a>
-        = &'a mut ChannelBuffer<'samples, S>
-    where
-        Self: 'a,
-        S: 'a;
-
-    type Channels<'a>
-        = core::iter::Chain<
-        core::slice::IterMut<'a, ChannelBuffer<'samples, S>>,
-        core::slice::IterMut<'a, ChannelBuffer<'samples, S>>,
-    >
-    where
-        Self: 'a,
-        S: 'a;
-
-    fn validate_frame_count(&mut self, expected: usize) -> Result<(), ProcessBlockError> {
-        for buffer in self.first.iter().chain(self.second.iter()) {
-            if buffer.frame_count() != expected {
-                return Err(ProcessBlockError::BufferFrameCountMismatch {
-                    expected,
-                    actual: buffer.frame_count(),
-                });
-            }
+impl<S> ProcessBufferSource<S> for SplitChannelBuffers<'_, '_, S> {
+    fn visit_channels(
+        &mut self,
+        visitor: &mut dyn FnMut(ChannelBuffer<'_, S>) -> core::ops::ControlFlow<()>,
+    ) -> core::ops::ControlFlow<()> {
+        for buffer in self.first.iter_mut().chain(self.second.iter_mut()) {
+            visitor(buffer.reborrow())?;
         }
-        Ok(())
-    }
-
-    fn channels(&mut self) -> Self::Channels<'_> {
-        self.first.iter_mut().chain(self.second.iter_mut())
+        core::ops::ControlFlow::Continue(())
     }
 }
 

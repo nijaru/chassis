@@ -27,7 +27,7 @@ use chassis_runtime::{
     },
     process::{
         ActivationConfig, ChannelBufferSlice, InputEventIndex, InputEventRef, ProcessBlock,
-        ProcessBufferSource, ProcessChannel, ProcessConfig, ProcessContext, ProcessMode,
+        ProcessConfig, ProcessContext, ProcessMode,
     },
     runtime::{Component, InstanceProcessError, InstanceRuntime, Process, ProcessError, Processor},
     state::{StateDocument, StateLimits},
@@ -144,21 +144,32 @@ impl Component for Effect {
 
 impl Processor for GainProcessor {}
 
-impl Process<f32> for GainProcessor {
-    fn process<B>(
+impl<S> Process<S> for GainProcessor
+where
+    S: Copy + From<f32> + std::ops::Mul<Output = S>,
+{
+    fn process(
         &mut self,
-        block: &mut ProcessBlock<'_, '_, '_, f32, B>,
-    ) -> Result<(), chassis_runtime::runtime::ProcessError>
-    where
-        B: ProcessBufferSource<f32> + ?Sized,
-    {
-        for mut channel in block.channels() {
-            if let Ok(samples) = channel.copy_input_to_output() {
-                for sample in samples {
-                    *sample *= 0.5;
+        block: &mut ProcessBlock<'_, S>,
+    ) -> Result<(), chassis_runtime::runtime::ProcessError> {
+        block.for_each_channel(|channel| match channel {
+            ChannelBuffer::Separate {
+                input_samples,
+                output_samples,
+                ..
+            } => {
+                // Out-of-place DSP consumes both slices directly: no forced copy.
+                for (input, output) in input_samples.iter().zip(output_samples) {
+                    *output = *input * S::from(0.5);
                 }
             }
-        }
+            ChannelBuffer::InPlace { samples, .. } => {
+                for sample in samples {
+                    *sample = *sample * S::from(0.5);
+                }
+            }
+            ChannelBuffer::InputOnly { .. } | ChannelBuffer::OutputOnly { .. } => {}
+        });
         Ok(())
     }
 }
@@ -292,8 +303,102 @@ fn repeated_post_activation_process_calls_do_not_allocate_or_deallocate() {
     assert_eq!(DEALLOCATIONS.load(Ordering::Relaxed), 0);
 
     runtime.deactivate().expect("deactivation succeeds");
+    separate_callbacks_do_not_allocate_or_reclaim::<f32>();
+    separate_callbacks_do_not_allocate_or_reclaim::<f64>();
     pending_resource_callbacks_do_not_allocate_or_reclaim();
     mixed_event_callbacks_do_not_allocate_or_reclaim();
+}
+
+fn separate_callbacks_do_not_allocate_or_reclaim<S>()
+where
+    S: Copy + From<f32> + std::ops::Mul<Output = S> + PartialEq + std::fmt::Debug,
+{
+    let component = Effect;
+    let mut runtime = InstanceRuntime::for_component(&component).unwrap();
+    runtime
+        .activate(&component, process_config(), DEFAULT_EFFECT_CONFIGURATION)
+        .unwrap();
+    let input = [S::from(2.0); 512];
+    let mut left = [S::from(-99.0); 512];
+    let mut right = [S::from(-99.0); 512];
+    ALLOCATIONS.store(0, Ordering::Relaxed);
+    DEALLOCATIONS.store(0, Ordering::Relaxed);
+    COUNT_THIS_THREAD.with(|counting| counting.set(true));
+    for _ in 0..100 {
+        let mut buffers = [
+            ChannelBuffer::separate(
+                InputEndpoint::new(MAIN_INPUT_INDEX, 0),
+                &input,
+                OutputEndpoint::new(MAIN_OUTPUT_INDEX, 0),
+                &mut left,
+                512,
+            )
+            .unwrap(),
+            ChannelBuffer::separate(
+                InputEndpoint::new(MAIN_INPUT_INDEX, 1),
+                &input,
+                OutputEndpoint::new(MAIN_OUTPUT_INDEX, 1),
+                &mut right,
+                512,
+            )
+            .unwrap(),
+        ];
+        runtime
+            .process(512, process_context(&[]), &mut buffers)
+            .unwrap();
+    }
+    assert_eq!(left, [S::from(1.0); 512]);
+    assert_eq!(right, left);
+    assert_eq!(input, [S::from(2.0); 512], "separate input is untouched");
+    // Rejection must neither allocate nor enter DSP. The complete topology is
+    // legal, but a directly constructed separate output is one sample short.
+    left.fill(S::from(-99.0));
+    let mut invalid = [
+        ChannelBuffer::Separate {
+            input: InputEndpoint::new(MAIN_INPUT_INDEX, 0),
+            input_samples: &input,
+            output: OutputEndpoint::new(MAIN_OUTPUT_INDEX, 0),
+            output_samples: &mut left[..511],
+        },
+        ChannelBuffer::separate(
+            InputEndpoint::new(MAIN_INPUT_INDEX, 1),
+            &input,
+            OutputEndpoint::new(MAIN_OUTPUT_INDEX, 1),
+            &mut right,
+            512,
+        )
+        .unwrap(),
+    ];
+    assert!(matches!(
+        runtime.process(512, process_context(&[]), &mut invalid),
+        Err(InstanceProcessError::InvalidBlock(_))
+    ));
+    assert_eq!(left, [S::from(-99.0); 512]);
+    let mut duplicate = [
+        ChannelBuffer::separate(
+            InputEndpoint::new(MAIN_INPUT_INDEX, 0),
+            &input,
+            OutputEndpoint::new(MAIN_OUTPUT_INDEX, 0),
+            &mut left,
+            512,
+        )
+        .unwrap(),
+        ChannelBuffer::separate(
+            InputEndpoint::new(MAIN_INPUT_INDEX, 0),
+            &input,
+            OutputEndpoint::new(MAIN_OUTPUT_INDEX, 1),
+            &mut right,
+            512,
+        )
+        .unwrap(),
+    ];
+    assert!(matches!(
+        runtime.process(512, process_context(&[]), &mut duplicate),
+        Err(InstanceProcessError::InvalidAudioEndpoint(_))
+    ));
+    COUNT_THIS_THREAD.with(|counting| counting.set(false));
+    assert_eq!(ALLOCATIONS.load(Ordering::Relaxed), 0);
+    assert_eq!(DEALLOCATIONS.load(Ordering::Relaxed), 0);
 }
 
 fn pending_resource_callbacks_do_not_allocate_or_reclaim() {
@@ -412,10 +517,7 @@ impl Component for EventEcho {
 }
 impl Processor for EventEcho {}
 impl Process<f32> for EventEcho {
-    fn process<B: ProcessBufferSource<f32> + ?Sized>(
-        &mut self,
-        block: &mut ProcessBlock<'_, '_, '_, f32, B>,
-    ) -> Result<(), ProcessError> {
+    fn process(&mut self, block: &mut ProcessBlock<'_, f32>) -> Result<(), ProcessError> {
         // The iterator borrows input storage, not the block/sink. Products can
         // emit directly while traversing real source order.
         for event in block.ordered_events().unwrap() {

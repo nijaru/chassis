@@ -221,12 +221,7 @@ pub trait Process<S>: Processor {
     /// Return a typed product failure for essential output or DSP failures.
     /// Failure ends this run; partial audio, output events, and history are not
     /// rolled back.
-    fn process<B>(
-        &mut self,
-        block: &mut ProcessBlock<'_, '_, '_, S, B>,
-    ) -> Result<(), ProcessError>
-    where
-        B: ProcessBufferSource<S> + ?Sized;
+    fn process(&mut self, block: &mut ProcessBlock<'_, S>) -> Result<(), ProcessError>;
 }
 
 /// Realtime-safe product failure with no owned/allocated error payload.
@@ -869,15 +864,14 @@ where
     ///
     /// Product processor panics propagate to the caller without retaining endpoints.
     /// A deployment must contain them at its foreign-function boundary.
-    pub fn process_source<S, B>(
+    pub fn process_source<S>(
         &mut self,
         frame_count: u32,
         context: ProcessContext<'_>,
-        source: &mut B,
+        source: &mut dyn ProcessBufferSource<S>,
     ) -> Result<(), InstanceProcessError>
     where
         P: Process<S>,
-        B: ProcessBufferSource<S> + ?Sized,
     {
         self.process_source_impl(frame_count, context, source, None)
     }
@@ -889,30 +883,28 @@ where
     /// A product error retains neither completed tail nor base/modulation
     /// endpoints. Audio, output events, and processor history may already have
     /// changed; terminate the processing run rather than assume recovery.
-    pub fn process_source_with_output<S, B>(
+    pub fn process_source_with_output<S>(
         &mut self,
         frame_count: u32,
         context: ProcessContext<'_>,
-        source: &mut B,
+        source: &mut dyn ProcessBufferSource<S>,
         sink: &mut dyn EventSink,
     ) -> Result<(), InstanceProcessError>
     where
         P: Process<S>,
-        B: ProcessBufferSource<S> + ?Sized,
     {
         self.process_source_impl(frame_count, context, source, Some(sink))
     }
 
-    fn process_source_impl<'source, S, B>(
+    fn process_source_impl<'source, S>(
         &mut self,
         frame_count: u32,
         context: ProcessContext<'_>,
-        source: &'source mut B,
-        sink: Option<&'source mut dyn EventSink>,
+        source: &'source mut dyn ProcessBufferSource<S>,
+        mut sink: Option<&'source mut dyn EventSink>,
     ) -> Result<(), InstanceProcessError>
     where
         P: Process<S>,
-        B: ProcessBufferSource<S> + ?Sized,
     {
         let Self {
             schema,
@@ -933,7 +925,7 @@ where
             processor,
         } = active;
 
-        ProcessBlock::<S, B>::validate_context(*process, frame_count, context)
+        ProcessBlock::<S>::validate_context(*process, frame_count, context)
             .map_err(InstanceProcessError::InvalidBlock)?;
         audio_buffers
             .validate(source, resolved_audio)
@@ -974,7 +966,9 @@ where
             source,
         )
         .map_err(InstanceProcessError::InvalidBlock)?;
-        block.set_event_sink(sink);
+        if let Some(sink) = &mut sink {
+            block.set_event_sink(Some(&mut **sink));
+        }
         processor
             .process(&mut block)
             .map_err(InstanceProcessError::Processor)?;

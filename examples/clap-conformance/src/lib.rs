@@ -10,7 +10,7 @@ use chassis_runtime::{
     buffer::BufferRelationship,
     modulation::GlobalFloatModulation,
     parameters::{ChoiceOption, ParameterDescriptor, ParameterIndex},
-    process::{ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessChannel},
+    process::{ActivationConfig, ProcessBlock},
     runtime::{Component, Process, Processor},
 };
 
@@ -112,13 +112,7 @@ struct ConformanceProcessor {
 impl Processor for ConformanceProcessor {}
 
 impl ConformanceProcessor {
-    fn process_trim<S: Copy, B>(
-        &self,
-        block: &mut ProcessBlock<'_, '_, '_, S, B>,
-        apply: impl Fn(&mut S, f64),
-    ) where
-        B: ProcessBufferSource<S> + ?Sized,
-    {
+    fn process_trim<S: Copy>(&self, block: &mut ProcessBlock<'_, S>, apply: impl Fn(&mut S, f64)) {
         let Some(ParameterEventValue::Float(base)) = block.parameters().get_event_value(self.trim)
         else {
             panic!("conformance trim is a float");
@@ -130,7 +124,7 @@ impl ConformanceProcessor {
         };
         let amount = block.modulation(self.trim).expect("trim has a held signal");
         let events = block.parameter_events();
-        for mut buffer in block.channels() {
+        block.for_each_channel(|mut buffer| {
             match buffer.relationship() {
                 BufferRelationship::InPlace | BufferRelationship::Separate => {
                     let mut bypass = events.boolean_cursor(self.bypass, bypassed);
@@ -162,31 +156,25 @@ impl ConformanceProcessor {
                     panic!("conformance effect has no output-only channels")
                 }
             }
-        }
+        });
     }
 }
 
 impl Process<f32> for ConformanceProcessor {
-    fn process<B>(
+    fn process(
         &mut self,
-        block: &mut ProcessBlock<'_, '_, '_, f32, B>,
-    ) -> Result<(), chassis_runtime::runtime::ProcessError>
-    where
-        B: ProcessBufferSource<f32> + ?Sized,
-    {
+        block: &mut ProcessBlock<'_, f32>,
+    ) -> Result<(), chassis_runtime::runtime::ProcessError> {
         self.process_trim(block, apply_trim_f32);
         Ok(())
     }
 }
 
 impl Process<f64> for ConformanceProcessor {
-    fn process<B>(
+    fn process(
         &mut self,
-        block: &mut ProcessBlock<'_, '_, '_, f64, B>,
-    ) -> Result<(), chassis_runtime::runtime::ProcessError>
-    where
-        B: ProcessBufferSource<f64> + ?Sized,
-    {
+        block: &mut ProcessBlock<'_, f64>,
+    ) -> Result<(), chassis_runtime::runtime::ProcessError> {
         self.process_trim(block, apply_trim_f64);
         Ok(())
     }

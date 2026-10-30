@@ -1,8 +1,10 @@
 //! Activation-owned scratch for whole callback topology validation.
 
+use core::ops::ControlFlow;
+
 use crate::{
     audio::{AudioEndpointError, AudioPortIndex, PortDirection, ResolvedAudioIoConfiguration},
-    process::{ProcessBufferSource, ProcessChannel},
+    process::ProcessBufferSource,
 };
 
 pub(super) struct AudioBufferValidation {
@@ -30,44 +32,49 @@ impl AudioBufferValidation {
         Ok(Self { offsets, seen })
     }
 
-    pub(super) fn validate<S, B>(
+    pub(super) fn validate<S>(
         &mut self,
-        source: &mut B,
+        source: &mut dyn ProcessBufferSource<S>,
         resolved: &ResolvedAudioIoConfiguration,
-    ) -> Result<(), AudioEndpointError>
-    where
-        B: ProcessBufferSource<S> + ?Sized,
-    {
+    ) -> Result<(), AudioEndpointError> {
         self.seen.fill(false);
         let mut count = 0;
-        for channel in source.channels() {
-            let input = channel.input_endpoint();
-            let output = channel.output_endpoint();
-            if input.is_none() && output.is_none() {
-                return Err(AudioEndpointError::EmptyChannel);
+        let mut result = Ok(());
+        let _ = source.visit_channels(&mut |channel| {
+            result = (|| {
+                let input = channel.input_endpoint();
+                let output = channel.output_endpoint();
+                if input.is_none() && output.is_none() {
+                    return Err(AudioEndpointError::EmptyChannel);
+                }
+                if let Some(endpoint) = input {
+                    self.visit(
+                        resolved,
+                        endpoint.port_index(),
+                        endpoint.channel(),
+                        PortDirection::Input,
+                    )?;
+                    count += 1;
+                }
+                if let Some(endpoint) = output {
+                    self.visit(
+                        resolved,
+                        endpoint.port_index(),
+                        endpoint.channel(),
+                        PortDirection::Output,
+                    )?;
+                    count += 1;
+                }
+                Ok(())
+            })();
+            // Every view consumes a unique endpoint, or stops traversal now.
+            if result.is_err() {
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
             }
-            if let Some(endpoint) = input {
-                self.visit(
-                    resolved,
-                    endpoint.port_index(),
-                    endpoint.channel(),
-                    PortDirection::Input,
-                )?;
-                count += 1;
-            }
-            if let Some(endpoint) = output {
-                self.visit(
-                    resolved,
-                    endpoint.port_index(),
-                    endpoint.channel(),
-                    PortDirection::Output,
-                )?;
-                count += 1;
-            }
-            // Every view consumes at least one unique accepted endpoint. A
-            // repeated/infinite source therefore fails within endpoint_count + 1
-            // yielded views; no callback-owned map or unbounded scan is needed.
-        }
+        });
+        result?;
         if count != self.seen.len() {
             return Err(AudioEndpointError::IncompleteTopology {
                 expected: self.seen.len(),

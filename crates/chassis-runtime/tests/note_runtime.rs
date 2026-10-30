@@ -18,10 +18,7 @@ use chassis_runtime::{
         EventDialect, EventPortDescriptor, EventPortDirection, EventPortIndex, EventPortKey,
         NormalizedValue, NoteAddress, NoteEvent, NoteEventKind, NoteEvents,
     },
-    process::{
-        ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessConfig, ProcessContext,
-        ProcessMode,
-    },
+    process::{ActivationConfig, ProcessBlock, ProcessConfig, ProcessContext, ProcessMode},
     runtime::{Component, InstanceRuntime, Process, Processor},
 };
 
@@ -75,13 +72,10 @@ struct NoteProbeProcessor {
 impl Processor for NoteProbeProcessor {}
 
 impl Process<f32> for NoteProbeProcessor {
-    fn process<B>(
+    fn process(
         &mut self,
-        block: &mut ProcessBlock<'_, '_, '_, f32, B>,
-    ) -> Result<(), chassis_runtime::runtime::ProcessError>
-    where
-        B: ProcessBufferSource<f32> + ?Sized,
-    {
+        block: &mut ProcessBlock<'_, f32>,
+    ) -> Result<(), chassis_runtime::runtime::ProcessError> {
         let note_ons = block
             .note_events()
             .iter()

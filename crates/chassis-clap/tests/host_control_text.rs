@@ -6,7 +6,7 @@ use chassis_runtime::{
         ChoiceOption, ParameterControlError, ParameterControlPolicy, ParameterDescriptor,
         ParameterKind, ParameterStore, ParameterValue,
     },
-    process::{ActivationConfig, ProcessBlock, ProcessBufferSource},
+    process::{ActivationConfig, ProcessBlock},
     runtime::{Component, Process, Processor},
     schema::{ComponentId, ComponentSchema, ComponentSchemaError, StateSchemaVersion},
     state::StateEntry,
@@ -73,9 +73,9 @@ struct Definition;
 struct Dsp;
 impl Processor for Dsp {}
 impl Process<f32> for Dsp {
-    fn process<B: ProcessBufferSource<f32> + ?Sized>(
+    fn process(
         &mut self,
-        _: &mut ProcessBlock<'_, '_, '_, f32, B>,
+        _: &mut ProcessBlock<'_, f32>,
     ) -> Result<(), chassis_runtime::runtime::ProcessError> {
         Ok(())
     }

@@ -7,7 +7,7 @@ use std::{
 
 use chassis_clap::{ClapComponent, SingleComponentEntry};
 use chassis_runtime::{
-    process::{ActivationConfig, ProcessBlock, ProcessBufferSource},
+    process::{ActivationConfig, ProcessBlock},
     runtime::{Component, Process, Processor},
 };
 use clack_host::{factory::plugin::PluginFactory, prelude::*};
@@ -91,13 +91,10 @@ struct NoopProcessor;
 impl Processor for NoopProcessor {}
 
 impl Process<f32> for NoopProcessor {
-    fn process<B>(
+    fn process(
         &mut self,
-        _block: &mut ProcessBlock<'_, '_, '_, f32, B>,
-    ) -> Result<(), chassis_runtime::runtime::ProcessError>
-    where
-        B: ProcessBufferSource<f32> + ?Sized,
-    {
+        _block: &mut ProcessBlock<'_, f32>,
+    ) -> Result<(), chassis_runtime::runtime::ProcessError> {
         Ok(())
     }
 }
@@ -180,13 +177,10 @@ struct ProcessPanicProcessor;
 impl Processor for ProcessPanicProcessor {}
 
 impl Process<f32> for ProcessPanicProcessor {
-    fn process<B>(
+    fn process(
         &mut self,
-        _block: &mut ProcessBlock<'_, '_, '_, f32, B>,
-    ) -> Result<(), chassis_runtime::runtime::ProcessError>
-    where
-        B: ProcessBufferSource<f32> + ?Sized,
-    {
+        _block: &mut ProcessBlock<'_, f32>,
+    ) -> Result<(), chassis_runtime::runtime::ProcessError> {
         panic!("intentional process panic");
     }
 }

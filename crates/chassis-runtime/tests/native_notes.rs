@@ -14,7 +14,7 @@ use chassis_runtime::{
     parameters::{ParameterDescriptor, ParameterIndex, ParameterStore},
     process::{
         ActivationConfig, ChannelBufferSlice, InputEventIndex, InputEventOrderError, InputEventRef,
-        ProcessBlock, ProcessBufferSource, ProcessConfig, ProcessContext, ProcessMode,
+        ProcessBlock, ProcessConfig, ProcessContext, ProcessMode,
     },
     runtime::{
         Component, ComponentStateError, InstanceProcessError, InstanceRuntime, Process,
@@ -202,10 +202,7 @@ impl Processor for ProbeProcessor {
     }
 }
 impl Process<f32> for ProbeProcessor {
-    fn process<B: ProcessBufferSource<f32> + ?Sized>(
-        &mut self,
-        block: &mut ProcessBlock<'_, '_, '_, f32, B>,
-    ) -> Result<(), ProcessError> {
+    fn process(&mut self, block: &mut ProcessBlock<'_, f32>) -> Result<(), ProcessError> {
         let observed = &self.probe.observed;
         observed.calls.fetch_add(1, Ordering::Relaxed);
         observed.typed_notes.store(

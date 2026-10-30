@@ -14,10 +14,7 @@ use chassis_runtime::{
     },
     automation::ParameterEvents,
     buffer::{ChannelBuffer, InputEndpoint, OutputEndpoint},
-    process::{
-        ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessChannel, ProcessConfig,
-        ProcessContext, ProcessMode,
-    },
+    process::{ActivationConfig, ProcessBlock, ProcessConfig, ProcessContext, ProcessMode},
     runtime::{ActivateError, Component, InstanceRuntime, Process, Processor},
     schema::ComponentSchema,
 };
@@ -126,14 +123,11 @@ struct LayoutProcessor {
 impl Processor for LayoutProcessor {}
 
 impl Process<f32> for LayoutProcessor {
-    fn process<B>(
+    fn process(
         &mut self,
-        block: &mut ProcessBlock<'_, '_, '_, f32, B>,
-    ) -> Result<(), chassis_runtime::runtime::ProcessError>
-    where
-        B: ProcessBufferSource<f32> + ?Sized,
-    {
-        for mut channel in block.channels() {
+        block: &mut ProcessBlock<'_, f32>,
+    ) -> Result<(), chassis_runtime::runtime::ProcessError> {
+        block.for_each_channel(|mut channel| {
             let is_main = channel
                 .input_endpoint()
                 .is_some_and(|endpoint| endpoint.port_index() == self.main_input)
@@ -141,7 +135,7 @@ impl Process<f32> for LayoutProcessor {
                     .output_endpoint()
                     .is_some_and(|endpoint| endpoint.port_index() == self.main_output);
             if !is_main {
-                continue;
+                return;
             }
             for sample in channel
                 .copy_input_to_output()
@@ -149,7 +143,7 @@ impl Process<f32> for LayoutProcessor {
             {
                 *sample *= self.factor;
             }
-        }
+        });
         Ok(())
     }
 }

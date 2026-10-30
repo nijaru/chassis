@@ -242,6 +242,41 @@ impl<'a, S> ChannelBuffer<'a, S> {
         })
     }
 
+    /// Reborrow this view without copying samples or retaining references.
+    #[must_use]
+    pub fn reborrow(&mut self) -> ChannelBuffer<'_, S> {
+        match self {
+            Self::InPlace {
+                input,
+                output,
+                samples,
+            } => ChannelBuffer::InPlace {
+                input: *input,
+                output: *output,
+                samples,
+            },
+            Self::Separate {
+                input,
+                input_samples,
+                output,
+                output_samples,
+            } => ChannelBuffer::Separate {
+                input: *input,
+                input_samples,
+                output: *output,
+                output_samples,
+            },
+            Self::InputOnly { input, samples } => ChannelBuffer::InputOnly {
+                input: *input,
+                samples,
+            },
+            Self::OutputOnly { output, samples } => ChannelBuffer::OutputOnly {
+                output: *output,
+                samples,
+            },
+        }
+    }
+
     /// Return the proven buffer relationship.
     #[must_use]
     pub const fn relationship(&self) -> BufferRelationship {

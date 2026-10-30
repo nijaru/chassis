@@ -12,8 +12,8 @@ use chassis_runtime::{
         ParameterKind, ParameterValue, ParameterValueError,
     },
     process::{
-        ActivationConfig, ProcessBlock, ProcessBlockError, ProcessBufferSource, ProcessChannel,
-        ProcessConfig, ProcessContext, ProcessMode,
+        ActivationConfig, ProcessBlock, ProcessBlockError, ProcessConfig, ProcessContext,
+        ProcessMode,
     },
     runtime::{Component, InstanceProcessError, InstanceRuntime, Process, Processor},
     schema::{ComponentId, ComponentSchema, ComponentSchemaError, StateSchemaVersion},
@@ -71,13 +71,10 @@ impl Component for Effect {
 impl Processor for Gain {}
 
 impl Process<f64> for Gain {
-    fn process<B>(
+    fn process(
         &mut self,
-        block: &mut ProcessBlock<'_, '_, '_, f64, B>,
-    ) -> Result<(), chassis_runtime::runtime::ProcessError>
-    where
-        B: ProcessBufferSource<f64> + ?Sized,
-    {
+        block: &mut ProcessBlock<'_, f64>,
+    ) -> Result<(), chassis_runtime::runtime::ProcessError> {
         let ParameterValue::Float(initial) = block
             .parameters()
             .get_index(ParameterIndex::new(0))
@@ -88,7 +85,7 @@ impl Process<f64> for Gain {
         let initial = *initial;
         let events = block.parameter_events();
         let amount = block.modulation(ParameterIndex::new(0)).unwrap();
-        for mut channel in block.channels() {
+        block.for_each_channel(|mut channel| {
             let mut cursor = self
                 .0
                 .cursor(events, ParameterIndex::new(0), initial, amount)
@@ -101,7 +98,7 @@ impl Process<f64> for Gain {
             {
                 *sample *= cursor.value_at(u32::try_from(offset).unwrap()).unwrap();
             }
-        }
+        });
         Ok(())
     }
 }

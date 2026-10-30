@@ -6,7 +6,7 @@ use chassis_runtime::{
     automation::ParameterEventValue,
     modulation::GlobalFloatModulation,
     parameters::{ParameterDescriptor, ParameterIndex, ParameterStore},
-    process::{ActivationConfig, ProcessBlock, ProcessBufferSource, ProcessChannel},
+    process::{ActivationConfig, ProcessBlock},
     runtime::{Component, ComponentStateError, Process, Processor},
     schema::{ComponentId, ComponentSchema, ComponentSchemaError, StateSchemaVersion},
     state::{StateDocument, StateEntry, StateMigration, StateValue},
@@ -170,9 +170,9 @@ impl<const RACE: bool> Drop for TableDsp<RACE> {
 }
 impl<const RACE: bool> Processor for TableDsp<RACE> {}
 impl<const RACE: bool> Process<f32> for TableDsp<RACE> {
-    fn process<B: ProcessBufferSource<f32> + ?Sized>(
+    fn process(
         &mut self,
-        block: &mut ProcessBlock<'_, '_, '_, f32, B>,
+        block: &mut ProcessBlock<'_, f32>,
     ) -> Result<(), chassis_runtime::runtime::ProcessError> {
         if RACE && BLOCK_ONCE.swap(false, Ordering::Relaxed) {
             let (entered, release) = DSP_GATE.get().unwrap();
@@ -188,9 +188,9 @@ impl<const RACE: bool> Process<f32> for TableDsp<RACE> {
         };
         let events = block.parameter_events();
         let amount = block.modulation(ParameterIndex::new(0)).unwrap();
-        for mut channel in block.channels() {
+        block.for_each_channel(|mut channel| {
             let Some(output) = channel.output_mut() else {
-                continue;
+                return;
             };
             let mut cursor = self
                 .1
@@ -206,7 +206,7 @@ impl<const RACE: bool> Process<f32> for TableDsp<RACE> {
                     *sample = f32::from(self.0[0]);
                 }
             }
-        }
+        });
         Ok(())
     }
 }

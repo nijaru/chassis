@@ -8,7 +8,7 @@ use std::{
 use chassis_clap::{ClapComponent, SingleComponentEntry};
 use chassis_runtime::{
     parameters::ParameterDescriptor,
-    process::{ActivationConfig, ProcessBlock, ProcessBufferSource},
+    process::{ActivationConfig, ProcessBlock},
     runtime::{Component, Process, Processor},
     state::{StateDocument, StateValue},
 };
@@ -84,13 +84,10 @@ struct StateProcessor {
 impl Processor for StateProcessor {}
 
 impl Process<f32> for StateProcessor {
-    fn process<B>(
+    fn process(
         &mut self,
-        _block: &mut ProcessBlock<'_, '_, '_, f32, B>,
-    ) -> Result<(), chassis_runtime::runtime::ProcessError>
-    where
-        B: ProcessBufferSource<f32> + ?Sized,
-    {
+        _block: &mut ProcessBlock<'_, f32>,
+    ) -> Result<(), chassis_runtime::runtime::ProcessError> {
         self.entered.wait();
         self.release.wait();
         Ok(())

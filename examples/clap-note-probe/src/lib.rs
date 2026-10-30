@@ -14,7 +14,7 @@ use chassis_runtime::{
         NoteEvent, NoteEventKind, NoteExpression, NoteExpressionKind,
     },
     parameters::{ParameterDescriptor, ParameterIndex, ParameterStore},
-    process::{ActivationConfig, InputEventRef, ProcessBlock, ProcessBufferSource, ProcessChannel},
+    process::{ActivationConfig, InputEventRef, ProcessBlock},
     runtime::{Component, Process, ProcessError, Processor, TailLength},
     schema::{ComponentId, ComponentSchema, ComponentSchemaError, StateSchemaVersion},
     state::StateEntry,
@@ -272,13 +272,7 @@ impl NoteProbeProcessor {
         Ok(())
     }
 
-    fn report_ends<S, B>(
-        &mut self,
-        block: &mut ProcessBlock<'_, '_, '_, S, B>,
-    ) -> Result<(), ProcessError>
-    where
-        B: ProcessBufferSource<S> + ?Sized,
-    {
+    fn report_ends<S>(&mut self, block: &mut ProcessBlock<'_, S>) -> Result<(), ProcessError> {
         // NOTE_END time is ignored by CLAP. Retain feedback that would end a
         // live matching retrigger, including across blocks. Canonicalization in
         // end_voice leaves at most one such tuple for this monophonic client.
@@ -302,14 +296,11 @@ impl NoteProbeProcessor {
         Ok(())
     }
 
-    fn render<S, B>(
+    fn render<S>(
         &mut self,
-        block: &mut ProcessBlock<'_, '_, '_, S, B>,
+        block: &mut ProcessBlock<'_, S>,
         convert: impl Fn(f64) -> S,
-    ) -> Result<(), ProcessError>
-    where
-        B: ProcessBufferSource<S> + ?Sized,
-    {
+    ) -> Result<(), ProcessError> {
         let Some(ParameterEventValue::Float(mut base)) =
             block.parameters().get_event_value(self.strike)
         else {
@@ -356,7 +347,7 @@ impl NoteProbeProcessor {
                 .map_or([0.0; 2], |voice| voice.sample(self.sample_rate));
         }
         self.report_ends(block)?;
-        for mut channel in block.channels() {
+        block.for_each_channel(|mut channel| {
             let endpoint = channel.output_endpoint().expect("output-only instrument");
             debug_assert_eq!(endpoint.port_index(), self.output);
             let index = usize::try_from(endpoint.channel()).expect("stereo index fits");
@@ -368,7 +359,7 @@ impl NoteProbeProcessor {
             {
                 *sample = convert(frame[index]);
             }
-        }
+        });
         Ok(())
     }
 }
@@ -402,24 +393,12 @@ fn to_f64(value: f64) -> f64 {
 }
 
 impl Process<f32> for NoteProbeProcessor {
-    fn process<B>(
-        &mut self,
-        block: &mut ProcessBlock<'_, '_, '_, f32, B>,
-    ) -> Result<(), ProcessError>
-    where
-        B: ProcessBufferSource<f32> + ?Sized,
-    {
+    fn process(&mut self, block: &mut ProcessBlock<'_, f32>) -> Result<(), ProcessError> {
         self.render(block, to_f32)
     }
 }
 impl Process<f64> for NoteProbeProcessor {
-    fn process<B>(
-        &mut self,
-        block: &mut ProcessBlock<'_, '_, '_, f64, B>,
-    ) -> Result<(), ProcessError>
-    where
-        B: ProcessBufferSource<f64> + ?Sized,
-    {
+    fn process(&mut self, block: &mut ProcessBlock<'_, f64>) -> Result<(), ProcessError> {
         self.render(block, to_f64)
     }
 }

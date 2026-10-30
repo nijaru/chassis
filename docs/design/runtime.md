@@ -34,7 +34,7 @@ Processor
   reports activation latency and current conservative tail bound
 
 Process<S>
-  sample-representation-specific processing over borrowed ProcessBlock<S>
+  sample-representation-specific processing over borrowed ProcessBlock<'_, S>
   returns Result<(), ProcessError>
 
 Deployment publication bridge
@@ -182,13 +182,13 @@ A source must repeat the same finite topology and dimensions across traversals. 
 
 `Processor` exclusively owns mutable active DSP history such as filters, delay lines, envelopes, lookahead buffers, oversampling state, models, and scratch.
 
-`ProcessBlock<S>` borrows:
+`ProcessBlock<'a, S>` borrows:
 
 - callback frame count and process mode;
 - canonical consumed base parameter state and held modulation baseline;
 - sample-accurate bounded parameter/note/event sources;
 - transport/process context;
-- a safe `ProcessBufferSource<S>`;
+- one borrowed object-safe `dyn ProcessBufferSource<S>`, visiting uniform `ChannelBuffer` enum views through `for_each_channel` or early-stopping `try_for_each_channel`;
 - one optional caller-owned bounded note/MIDI output sink, shared by native notes, MIDI 1/SysEx, and opaque MIDI 2/UMP.
 
 Adapters/embeddings prove raw pointer/alias facts before safe channel views enter core. Setup owns stable-to-dense endpoint translation and whole-I/O policy acceptance. Callback code consumes pre-resolved dense identities without callback-owned channel vectors or stable-string lookup.
