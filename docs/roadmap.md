@@ -22,6 +22,68 @@ The current runtime and CLAP fixtures implement much of this boundary, but prepa
 
 Established effect, instrument, resource-backed, and event-processing workloads are sufficient requirements sources. No named product migration is needed. Equally, a feature's presence in a DAW or another framework does not make it a core prerequisite. Per-note parameter modulation, timestamped transport, wider channel-layout families, and larger observation streams can remain explicitly unsupported in the initial stable surface.
 
+## Usable milestones within Phase 1
+
+Deliver these cumulatively: M1 → M2 → M3 → M4. They are functional checkpoints, not version numbers or automatic releases. All remain pre-alpha until an explicit compatibility/stability decision. None is declared complete by this plan; current evidence and gaps remain owned by the design contracts and validation guide.
+
+At every milestone, provide a documented runnable public-API example or existing fixture, focused regression coverage, relevant realtime/resource-bound checks, and explicit supported behavior and exclusions. Reuse valid evidence and existing fixtures; do not create a demo catalog. Keep CLAP actual-entry and packaged qualification current when its boundary changes. Authoring usability, failure behavior, and representative cost checks accompany each slice rather than waiting for M4.
+
+### M1 — dependable fixed-resource DSP
+
+**Usable outcome:** build a basic effect, instrument, or event processor through direct Rust embedding or CLAP, with activation-owned resources and dependable state recall.
+
+Required slices:
+
+- **State/control closure:** accepted edits and automation preserve complete save/reopen and reactivation under the same schema/policy; rejected replacements remain failure-atomic.
+- **Lifecycle and failure closure:** validate the supported activation/reset/deactivation and process-failure rules, endpoint completion, and input/output capacity outcomes before calling the subset dependable.
+- **End-to-end subset proof:** exercise supported audio/event/control behavior and authoring through existing public-API fixtures, with bounded callback work and no allocation/reclamation regression.
+
+**Exit:** the known state-validity gap is closed, supported lifecycle/failure cases are protected, and the fixed-resource examples run with documented limits and revision-scoped qualification. Current CLAP plain-step control and existing declared capabilities remain usable; broader trajectory portability is completed in M2.
+
+**Not required:** compatible resource hot-swapping, new gesture APIs, a GUI, a device backend, or another format. The state-enforcement design remains unresolved and must be settled against the regressions before implementation; see [state validity](design/parameters-state.md#state-validity-closure).
+
+### M2 — complete control handling
+
+**Usable outcome:** application controls and host automation can drive the M1 processors without each consumer inventing its own state synchronization and notification protocol.
+
+Required slices:
+
+- **Trajectory fidelity:** establish source-domain and block-boundary evaluation with independent reference cases, including nonlinear mapping and the implicit preceding-sample anchor.
+- **Control origins and gestures:** implement typed begin/change/end changes, host notification ordering, observation and echo suppression, including stopped processing and pending reactivation.
+- **Bounded control delivery:** qualify contention/capacity outcomes and state precedence without callback waits, hidden allocation, or silent success-shaped loss of essential controls.
+
+**Exit:** a headless control fixture and the existing CLAP boundary demonstrate correct origin/gesture behavior, values and trajectories, including state races and declared overload outcomes. M1 behavior remains qualified after any API migration.
+
+**Not required:** an editor toolkit/window, per-note parameter modulation, timestamped transport, or a VST3 adapter. Trajectory representation and control-publication design must be chosen from their contract proofs, not fixed in the roadmap; see [parameters/state](design/parameters-state.md).
+
+### M3 — resource-backed DSP
+
+**Usable outcome:** a processor can replace compatible prepared tables, samples, or kernels while running, without each product rebuilding unsafe lifetime and reclamation machinery.
+
+Required slices:
+
+- **Preparation and adoption:** publish and adopt compatible data with bounded work; retain reactivation for incompatible configuration/resource changes.
+- **Supersession and reclamation:** handle full publication capacity, delayed consumers and stale completions while keeping destruction off the callback.
+- **Cancellation and teardown:** qualify load/reset/deactivation/destruction and late worker completion, including module-unload fencing and repeatable offline preparation.
+
+**Exit:** an in-repository resource-backed public-API fixture demonstrates replacement, failure, supersession and teardown with ownership/concurrency and callback-bound evidence. M1/M2 state and control guarantees survive those transitions.
+
+**Not required:** a general-purpose executor, decoder, disk streamer, FFT/convolution backend, or production sampler. Resolve compatible-adoption policy and object/result ownership before selecting the mechanism; see [runtime services](design/runtime-services.md#control---realtime-publication).
+
+### M4 — qualified core baseline
+
+**Usable outcome:** consumers can depend on an explicitly declared core surface rather than infer support from individual examples.
+
+Required slices:
+
+- **Integrated authoring and costs:** consolidate evidence across the effect, instrument, event-only and resource-backed cases; remove superseded APIs and resolve measured ergonomic/execution-cost problems.
+- **Deployment and host qualification:** complete current Rust/dependency and relevant allocation/concurrency/unsafe checks, CLAP packaging/validator/fuzz, and the supported real-host scenarios.
+- **Compatibility review:** settle the supported API/features/platforms, compiler policy, error/resource limits, state fixtures/migrations and known exclusions.
+
+**Exit:** all [core stability gates](#core-stability-gates) have matching evidence, with blockers and unsupported cases explicit. Review API and wire-format commitments separately; an explicit stability/version/publication decision is still required.
+
+**Not required:** expanding the core capability list, implementing a higher layer, or publishing a release. Qualification at this milestone consolidates earlier checks; it is not the first time earlier slices are tested.
+
 ## Core stability gates
 
 Complete these before expanding into higher layers or declaring the initial core stable:
@@ -37,7 +99,7 @@ Completeness is relative to this declared boundary, not every future audio capab
 
 ## Phase 2 — review a narrow extension after core stability
 
-Choose the next useful layer only after Phase 1's gates are met. Do not start a parallel application-framework expansion to avoid unfinished core work. The existing CLAP boundary continues to supply integration feedback throughout Phase 1.
+Choose the next useful layer only after M4 and Phase 1's gates are met. Do not start a parallel application-framework expansion to avoid unfinished core work. The existing CLAP boundary continues to supply integration feedback throughout Phase 1.
 
 Possible candidates are a standalone device path, an editor adapter, an additional plugin format, or serial graph composition. Select one from user value, its dependency/safety boundary, and the maintenance cost; qualification must include its lifecycle and failure cases. A complete GUI, standalone product, graph scheduler, or second format is not an initial-core gate.
 
