@@ -1,10 +1,10 @@
 # Product Identity and Export Metadata
 
-Status: design direction; manifest syntax/generation algorithm are not frozen.
+Status: explicit CLAP export metadata is implemented. Manifest/ID-generation tooling below is a possible later extension, not an initial-core requirement or accepted maintenance commitment; its syntax and algorithm are not frozen.
 
 ## Goal
 
-A product declares canonical export metadata. Planned build tooling may generate repetitive format metadata without making shipped identity depend forever on a derivation algorithm.
+A product declares canonical export metadata. Possible later tooling may generate repetitive format metadata without making shipped identity depend forever on a derivation algorithm. Manual explicit identities remain sufficient for the initial supported export path.
 
 Semantic persistence identity is already owned by `ComponentSchema` as `ComponentId` + `StateSchemaVersion`. Export identities may share that text, but are not its authority and need not match it. Current fixtures deliberately use distinct semantic and CLAP IDs. A future manifest must preserve this separation rather than overriding runtime state identity.
 
@@ -27,12 +27,12 @@ Common metadata also includes display name, vendor, product capabilities/kind, s
 
 Format IDs should not generally be recomputed from scratch on every build once a product has an identity manifest.
 
-Preferred workflow:
+If manifest tooling is selected:
 
 ```text
 canonical product metadata
         ↓
-build-tool identity initialization [planned]
+build-tool identity initialization [possible later]
         ↓
 generate/validate format IDs once
         ↓
@@ -137,11 +137,11 @@ au:
 bundle ids: ...
 ```
 
-Exact file syntax is not frozen before the tooling spike.
+Choose exact file syntax only if the tooling work is selected.
 
 ## Release protection
 
-Before first public product release, identity tooling should:
+Before a supported product release, validate and preserve the declared identities whether supplied manually or generated. If identity tooling is selected, it should:
 
 - validate canonical/vendor metadata;
 - generate unresolved IDs once;
@@ -152,4 +152,4 @@ Before first public product release, identity tooling should:
 
 A released format identity changes only through an explicit compatibility-breaking migration decision. Normal refactors/upgrades cannot regenerate it.
 
-Hosted CI is not required for this guarantee: the identity command/fixtures are the authoritative check and can run locally or in any future automation.
+Identity checks and compatibility fixtures can run locally or in hosted automation. They do not require a Chassis identity command or manifest generator.

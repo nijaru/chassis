@@ -1,56 +1,62 @@
 # Roadmap
 
-Chassis aims to be a reusable Rust audio framework, not only a plugin SDK. Applications own product DSP, visual design, and DAW document/workflow semantics. [Architecture](architecture.md) defines that boundary.
+Chassis's initial target is a complete, correct, and stable DSP execution core, not a broad application framework. [Architecture](architecture.md) owns scope and ownership; [the execution plan](next-runtime-slice.md) orders current work; [validation](design/validation.md) records executed evidence. All APIs and CHSS bytes remain pre-alpha.
 
-This roadmap records unfinished capabilities, not a requirement to build every layer before any useful surface can stabilize. [Current execution plan](next-runtime-slice.md) owns immediate sequencing. Package names and boundaries are chosen from implementation needs, not this list.
+## Phase 1 — finish the shared DSP core
 
-## What exists
+The core is component execution and the difficult machinery around it. It is not a multi-node graph or a complete audio application engine.
 
-- One format-independent schema/instance/processor model, including component-owned state defaults/validation/migrations, resource-safe deferred reactivation, and activation-scoped audio I/O.
-- Direct runtime fixtures for effects, event-only components, a note-driven instrument, multiple outputs, sidechains/layout switching, and dynamic metadata.
-- Complete callback topology validation, alias-classified CLAP buffers, f32/f64 processing, typed parameters/dense choice events, sample-accurate automation, explicit custom-state reactivation, latency/restart, process modes, and bounded scalar telemetry.
-- Explicitly opted-in global additive float modulation, separate held-input lifetime, clamped effective cursors, and resource-safe desired/consumed signal separation in core and CLAP.
-- Validated musical block-start transport: independent timelines, tempo/increment, meter/bar data, loop endpoints/state, and recording pre-roll, with CLAP availability-preserving projection.
-- Descriptor-owned normalized-control and formatting/parsing policy, shared by framework controls and deployment text without changing plain-unit automation/state.
-- Native CLAP deployment for fixed mapped audio configurations, typed parameters, coherent complete state with deferred resource reactivation, automation, render mode, latency, completed tail snapshots, and explicit timed Boolean bypass.
-- Native CLAP note ports, bounded input/output and voice-end feedback, all seven expressions, preserved mixed input order, and an output-only stereo instrument export.
-- Opaque MIDI 1/SysEx and four-word MIDI 2/UMP transport in core and CLAP, callback-local payload loans, per-message port capabilities, shared note/MIDI output ordering, and a zero-audio mixed-dialect processor export.
-- Rust/concurrency/allocation tests, packaged CLAP validator/fuzz gates, and dated host/performance baselines.
-
-Core capability is not deployment support or MIDI 2 device/protocol compliance. VST3/AU, editors, devices, graphs, hosting, and media integrations are not implemented. [Validation](design/validation.md) owns exact evidence and its revision limits.
-
-## Near-term semantic and deployment work
-
-1. Select bounded runtime/authoring gaps from established audio-software requirements and intended framework uses. A user-named client is not a prerequisite; existing software/source and focused workloads can establish the contract. Per-note modulation, parameter gestures, span processing, and timed transport remain independently scoped candidates; preserve existing bounded transport without lossy conversion.
-2. Add prepared adoption/reclamation and background-work lifecycle only when the resource-backed client needs more than reactivation.
-
-Automation completion has one runtime owner; CLAP synchronizes/publishes dense values without replaying events or scanning stable choice identities on the callback. A reviewed local Clack plugin patch returns rejected-process failure without synchronous reporting. Unsupported CLAP event dialects remain explicitly rejected.
-
-These are independently deliverable contracts. Do not turn “core closure” into a blanket freeze or defer all deployment feedback until after a large core redesign.
-
-## Remaining framework directions
-
-| Area | Required contract/evidence before support claims |
+| Maintained concern | Initial boundary |
 | --- | --- |
-| Common DSP utilities | Reusable units, ramps, buffers, metering, filters, and reviewed FFT/resampling/convolution integrations as actual workloads require; numerical behavior and realtime/offline parity |
-| Editor integration | Product gestures with echo suppression, observation/binding, attach/detach/recreation, sizing/scaling/focus/teardown; optional toolkit dependencies; a real editor fixture |
-| VST3 / Audio Unit | Reviewed wrapper or justified native implementation; differential identity/state/audio/event/automation/modulation/latency/tail/bypass and editor qualification |
-| Devices / standalone | Audio/MIDI enumeration, open/close/reconfiguration, negotiation, timestamps, xruns/device loss/recovery; reuse the same runtime rather than a second DSP path |
-| Graph / scheduling | Audio/event routing, validated execution plans, topology publication, latency compensation, bounded execution, deterministic offline behavior; parallelism only with evidence |
-| Plugin hosting | Scanning/loading/lifecycle, processing/parameters/state/editor access, failure policy, graph integration; plugin ABI types stay out of semantic runtime APIs |
-| Media / offline applications | Reviewed codecs, source/sink/seek/write semantics, rate/channel adaptation, deterministic rendering; separate random-access/multi-pass abstraction only if required |
-| Authoring / delivery | Executable examples, useful public packaging, identity/export metadata, build/validation/packaging tools, signing hooks where required, compatibility fixtures and documented guarantees |
+| Component execution | Coherent schema, accepted whole-I/O configuration, safe f32/f64 buffers, dense process identities, activation/reset/deactivation, direct embedding and sequential offline use |
+| Controls and events | Typed base values and trajectories, explicit modulation, gestures/control origins, source ordering, native notes/expression and opaque MIDI transport; unsupported capabilities remain explicit |
+| Semantic state | Complete validated replacement, migrations, coherent save, stable identity, and a save/load contract consistent with admitted control changes |
+| Resources | Preparation away from the callback, bounded adoption of compatible prepared data, stale-result rejection, off-thread reclamation, and safe cancellation/teardown; reactivation for incompatible resources |
+| Shared services | Bounded control/DSP publication, scalar observations, explicit latency/tail/bypass semantics, and observable overload/failure policies |
+| Authoring | Useful typed/scoped access and a small set of workload-backed helpers; lightweight kernels need no component identity or persistence machinery |
+| Existing deployment | Maintain CLAP's faithful projection, packaging, validator/fuzz checks, and actual-entry tests while the core evolves |
 
-A graph does not own tracks or clips. Media integration does not own project asset management. Editor integration does not own a widget library or visual identity. Existing product ports are useful evidence, not completion gates or migration commitments.
+Not every component uses every service. Optional core capabilities must impose no hidden executor, queue, allocation, or observation work when unused. Resource lifetime/publication is committed core work; a general-purpose executor, disk streamer, FFT backend, and instrument engine are not.
 
-## Conditional work
+The current runtime and CLAP fixtures implement much of this boundary, but prepared adoption, control-origin/gesture semantics, and other closure work remain. Implemented inventories and revision-scoped evidence belong to their contracts and the validation guide, not a second completion log here.
 
-AAX depends on SDK/licensing/access and demand. ARA, LV2, sandboxed hosting, surround/ambisonics, immersive/object metadata, network audio, and specialized ML integrations require explicit supported use cases. Labeled channel layouts need real mapping/ordering evidence; a generic channel count is insufficient. These directions do not justify prebuilt abstraction families.
+Established effect, instrument, resource-backed, and event-processing workloads are sufficient requirements sources. No named product migration is needed. Equally, a feature's presence in a DAW or another framework does not make it a core prerequisite. Per-note parameter modulation, timestamped transport, wider channel-layout families, and larger observation streams can remain explicitly unsupported in the initial stable surface.
 
-## Promotion and stability
+## Core stability gates
 
-Promote a facility when its owner, lifecycle, failure behavior, and boundaries are explicit; it removes concrete reusable plumbing; realtime work/resources are bounded; and deployments preserve its semantics or reject unsupported use. Add focused fixtures for the uncovered risks, not a catalog of named demos.
+Complete these before expanding into higher layers or declaring the initial core stable:
 
-Stabilize a supported surface only after its actual clients and deployment boundaries exercise it. State/identity compatibility, MSRV, supported feature/platform combinations, host evidence, and known limitations must be explicit. Unrelated future graph/device/media work need not block a narrower qualified release, and a narrower release does not imply support for the whole roadmap.
+1. **Consistent semantics.** Resolve known admission/state/resource contradictions. Successful framework-generated state must reload under the same schema and component policy. Define how admitted automation, coupled state, desired controls, and applied resources preserve that property; do not repair invalid state silently at save time.
+2. **Portable processing contracts.** Specify trajectory domains and boundary anchors, supported event targeting, layout semantics, offline behavior, and failure transitions. Qualify typed gestures/control origins, observation and echo suppression without a window-system dependency. Use primary format contracts and bounded source-level probes to challenge CLAP-centric assumptions without requiring another production adapter.
+3. **Closed resource lifecycles.** Qualify preparation, publication, adoption, supersession, cancellation, deactivation and unload. No last-owner destruction or waiting on the callback; no background result may revive retired instance state. Preparation required for repeatable offline output must not depend on wall-clock races.
+4. **Usable, bounded authoring.** Exercise linked-channel/sidechain DSP, typed controls, direct embedding, and a resource-backed processor. Measure realistic parameter/event/channel workloads; document supported budgets and overload behavior rather than equating bounded work with negligible cost. Add helpers only where they remove demonstrated repeated work.
+5. **Matching evidence.** Pass repository Rust/dependency gates, focused allocation/concurrency/unsafe checks, and current CLAP package/validator/fuzz qualification. Refresh the supported real-host automation, save/reopen, restart and PDC scenarios. Keep host, performance, format, and Rust evidence separate and tied to the tested revision.
+6. **Explicit compatibility decision.** Review the supported API/feature/platform matrix, error and resource limits, state/identity policy, versioned compatibility fixtures, compiler policy, and known exclusions. State the API and wire-format commitments separately. Stability, version milestones, publication, and commercial terms still require explicit decisions.
 
-The project remains unpublished pre-alpha. Version milestones and publication require explicit release decisions; this roadmap does not authorize them.
+Completeness is relative to this declared boundary, not every future audio capability. Existing implementations and old tests do not freeze weak interfaces: replace them and migrate all callers while pre-alpha. A contract-level decision remains open until implementation and relevant checks support it.
+
+## Phase 2 — review a narrow extension after core stability
+
+Choose the next useful layer only after Phase 1's gates are met. Do not start a parallel application-framework expansion to avoid unfinished core work. The existing CLAP boundary continues to supply integration feedback throughout Phase 1.
+
+Possible candidates are a standalone device path, an editor adapter, an additional plugin format, or serial graph composition. Select one from user value, its dependency/safety boundary, and the maintenance cost; qualification must include its lifecycle and failure cases. A complete GUI, standalone product, graph scheduler, or second format is not an initial-core gate.
+
+## Possible directions, not maintenance commitments
+
+| Candidate | Decision needed before adoption |
+| --- | --- |
+| More DSP utilities or reviewed FFT/resampling/convolution integration | Which reusable numerical contract is needed, why an existing library is insufficient on its own, and who maintains the integration |
+| Editor/toolkit integration and audio visualization | Supported attachment/threading/teardown and observation needs; core gestures do not require a window system, widget library, or renderer |
+| VST3 / Audio Unit | Wrapper versus native adapter, semantic parity, target hosts, packaging and sustained conformance effort |
+| Audio/MIDI devices and standalone bootstrap | Supported backends/platforms, actual configuration and clock mapping, loss/recovery and xruns |
+| Graph execution and PDC | A separate composition/scheduling contract, topology and latency publication, cycle policy, processor-history preservation, and measured execution cost |
+| Plugin hosting | Discovery/crash handling, lifecycle/editor/state integration, third-party failure boundaries and isolation policy |
+| Media, streaming, range rendering and analysis jobs | Seek/history semantics, cache and I/O budgets, underrun policy, cancellation, output integrity and repeatability; not one universal block-processing trait |
+
+Use mature dependencies where they fit the safety, numerical, and licensing requirements. Add packages only for actual dependency, safety, platform, optionality, or release boundaries. AAX, ARA, network audio, immersive formats, mobile/web/embedded targets, and GPU/ML integrations require separate scope and maintenance decisions; none is implied by a generic core.
+
+## Out of scope
+
+Chassis does not own product algorithms, DAW tracks/clips/arrangements, application documents and undo, asset organization, or product UX. It does not aim to supply a general GUI toolkit, graphics engine, video pipeline, audiovisual composition system, or a replacement implementation of every DSP primitive and backend.
+
+An application can use Chassis as one part of a DAW, editor, instrument, analyzer, or other audio product without Chassis implementing the rest of that product's engine. Future extension choices must preserve that distinction.

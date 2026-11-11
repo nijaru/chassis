@@ -32,11 +32,13 @@ CLAP export        -> chassis-clap -> chassis-runtime
                                   -> Clack
 ```
 
-## Future integrations
+## Extension boundaries
+
+These boundaries preserve future embedding choices; they are not commitments to build each subsystem. The initial core and the separate maintenance review for extensions are defined in [the roadmap](../roadmap.md).
 
 Editor toolkit, device, hosted-plugin, codec, and heavy DSP dependencies must remain optional and must not flow into the format-independent runtime. Graph/scheduling belongs above ordinary component/runtime semantics; it must not introduce a second processor model or DAW document concepts.
 
-VST3/AU projection may use a reviewed wrapper. A native adapter package is justified only when Chassis owns its implementation. A wrapper build target is not a Rust package simply because it exports another format.
+If VST3/AU deployment is selected, compare a reviewed wrapper with a native adapter against the supported semantic contract. A native adapter package is justified only when Chassis owns its implementation. A wrapper build target is not a Rust package simply because it exports another format.
 
 Common DSP utilities may start as modules. Split them when independent use or optional FFT/resampling/convolution dependencies provide a real boundary. Use mature dependencies rather than duplicating their algorithms merely to fill a package.
 

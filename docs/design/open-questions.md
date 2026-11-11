@@ -1,40 +1,33 @@
 # Open Design Decisions
 
-This file owns unresolved decisions, not implemented inventories or a second roadmap. [Execution plan](../next-runtime-slice.md) owns next work; [validation](validation.md) owns evidence; [roadmap](../roadmap.md) owns deferred scope. All APIs and CHSS bytes remain pre-alpha.
+This file owns unresolved decisions, not implemented inventories or a second roadmap. [The execution plan](../next-runtime-slice.md) orders work; [validation](validation.md) owns evidence; [the roadmap](../roadmap.md) owns the initial core boundary, stability gates, and possible later extensions. All APIs and CHSS bytes remain pre-alpha.
 
-## Modulation and event ordering
+## State validity and resource compatibility
 
-Global additive float modulation has an explicit [domain, combination, ordering, and held-input lifecycle](parameters-state.md#global-additive-float-modulation). Which additional capabilities preserve per-note expression and MIDI 2 information without flattening targeting or unlike value domains? Equal timestamps do not establish a cross-family causal order when the source has separate streams. An output sink must report target rejection rather than silently discard essential events.
+How do descriptor-valid independent edits and automation preserve reloadable complete semantic state when a component has cross-field constraints? Which values are automation-safe, which changes require a validated coupled transaction, and which mismatches mean only that current resources are stale? Resolve the [known validity gap](parameters-state.md#state-validity-closure) before treating complete persistence as stable.
 
-See [events/transport](events-transport.md) for the accepted ordering constraints and current implemented subset.
+## Control trajectories and origins
 
-## State compatibility
+Which representation preserves source interpolation domains and boundary anchors without callback use of non-realtime presentation policy? [Trajectory portability](parameters-state.md#trajectory-portability-before-stabilization) records the VST3 normalized-ramp counterexample that the initial core proof must address.
 
-When should the provisional CHSS envelope become a compatibility promise? Released-schema fixtures, cross-format round trips, resource limits, and an explicit compatibility policy must justify that decision; the existing binary fixture alone does not.
+How do typed gestures and origin-aware changes preserve host notification ordering, observation, echo suppression, and state/resource authority while processing is stopped or a replacement is pending? These are core control questions; they do not require an editor toolkit.
 
-## Tail, bypass, and activity
+## Prepared data and background-work lifetime
 
-Define finite/infinite tail reporting independently of latency. Determine host-bypass identity/timing, latency/tail preservation, and product DSP policy without equating bypass to dry/wet or forcing one crossfade algorithm. Introduce portable activity/sleep hints only if actual deployment behavior benefits and conservative fallback is explicit.
+Who owns active and pending immutable resources, coalesced replacements, and deferred reclamation? Which transitions permit compatible adoption, and which require reactivation? What invalidates results on load/reset/deactivation/unload? Cancellation can be late; teardown must remain safe, and offline output cannot depend on wall-clock races.
 
-## Prepared data and tasks
+This is committed core closure work. Establish the [resource lifecycle](runtime-services.md#control---realtime-publication) with an in-repository workload before choosing a mechanism. An executor implementation or general task framework is a separate decision.
 
-Who owns active and pending immutable resources, coalesced replacements, and deferred reclamation? What invalidates task generations on load/reset/deactivation/unload? Cancellation may be late; teardown must remain safe, and offline output cannot depend on wall-clock races. Establish these from a resource-backed fixture before choosing an executor.
+## Bounds and failure policy
 
-## Outer-layer pressure
+What happens at each supported capacity boundary: event admission/output, control publication, resource supersession and observations? Essential events and replaceable observations need not have the same loss/failure policy. Make outcomes visible without realtime logging, blocking, or hidden allocation. Clarify which failures end a run and which permit continued valid processing.
 
-The heterogeneous core fixtures establish useful evidence for the current schema/lifecycle model, not immunity from refactoring. Reopen it for a concrete mismatch, not speculative generality.
+Additional event targeting, portable activity/sleep hints, larger observation streams, and richer I/O policies are not automatic core gates. The supported subset must remain explicit; no silent flattening of note identity, MIDI information, source ordering, or labeled layouts.
 
-Remaining decisions belong to actual clients:
+## Compatibility and extension decisions
 
-- I/O-policy families or bus helpers when explicit configurations become materially unwieldy;
-- speaker/ambisonic identity and ordering when mapped layout support is implemented;
-- editor lifetime/threading, gesture echoes, scaling, and toolkit ownership;
-- wrapper versus native VST3/AU adapters after semantic/lifecycle qualification;
-- device clock/reconfiguration/recovery and graph topology/PDC publication;
-- hosted-plugin failure/isolation policy and media/random-access boundaries.
+When should the provisional API and CHSS envelope become compatibility promises, and what is their supported scope? Define initial versioned fixtures, migration/resource limits and the compatibility policy before release; retain released-schema fixtures thereafter. Cross-format round trips qualify a later selected adapter, not an obligation to implement another format before core stability.
 
-Keep application documents and workflows outside these contracts. Do not settle a future crate graph as a substitute for answering the ownership question.
+After the core gates, which narrow extension is worth maintaining? Editor attachment/toolkits, devices/standalone, more plugin formats, graphs/PDC, hosting, and media/offline job infrastructure are candidates, not accepted obligations. Their boundaries must preserve the existing semantic authority, but the core need not implement every subsystem surrounding its consumers.
 
-## Release decisions
-
-Before any stable support claim, specify the supported surfaces, platform/format/feature matrix, MSRV/version/state policy, production-host evidence, and known limits. Broader roadmap ambition is not evidence for an unimplemented capability. Version milestones, publication, and commercial/contribution terms require separate explicit decisions.
+Before a stable support claim, settle the supported API/platform/format/feature matrix, compiler/version/state policy, production-host evidence and known limits. Version milestones, publication, and commercial/contribution terms remain separate explicit decisions. Do not choose a future crate graph as a substitute for a scope and ownership decision.

@@ -1,6 +1,6 @@
 # Authoring API and Convention Model
 
-Status: explicit manual runtime/state/process APIs are implemented and pre-alpha. `ComponentSchema` + `InstanceRuntime<P>` are the semantic ownership model; direct coherent schema authority, dense process identities, owned audio/event metadata, whole-I/O policy, and schema-owned runtime state identity are implemented. Remaining work is audio-semantic closure and higher-layer authoring ergonomics, not migration from proof-era core APIs.
+Status: explicit manual runtime/state/process APIs are implemented and pre-alpha. `ComponentSchema` + `InstanceRuntime<P>` are the semantic ownership model; direct coherent schema authority, dense process identities, owned audio/event metadata, whole-I/O policy, and schema-owned runtime state identity are implemented. Remaining initial work is core correctness, resource/control lifecycle, and workload-backed authoring ergonomics, not migration from proof-era APIs or completion of a broad application framework. [The roadmap](../roadmap.md) owns that boundary.
 
 ## Goal
 
@@ -13,7 +13,7 @@ A normal audio component should mostly contain:
 
 Chassis should own repeated audio-runtime plumbing, state lifecycle, timing/event semantics, validation, deployment integration, and tooling without hiding realtime costs or compatibility identity.
 
-Plugins should be especially easy to author because they are a common Chassis deployment, but the component API must remain equally valid for embedded processors, graph nodes, standalone applications, hosts, and audio engines.
+Plugins should be easy to author without defining the component model. Current targets are plugin deployment, direct Rust embedding, and sequential offline processing. Preserve that neutrality for possible later graph, standalone, or host consumers without requiring Chassis to supply those subsystems.
 
 ## Current explicit model
 
@@ -242,33 +242,19 @@ Global additive float modulation shares the ordered parameter-control stream but
 
 Editor/application-originated parameter edits need typed begin/change/end gesture semantics, observation, and echo suppression. They must never expose unrestricted mutable processor access.
 
-## GUI/editor boundary
+## Control and optional editor boundary
 
-Chassis owns editor lifecycle/integration semantics that audio software repeatedly needs:
+Typed gestures, control origins, observation and bounded telemetry are shared core concerns and can be exercised without a window system. They must not expose unrestricted mutable processor access.
 
-- parent/native-window attachment;
-- resize/scaling/focus lifecycle;
-- parameter observation and gestures;
-- realtime telemetry subscription;
-- teardown/recreation.
+Native editor attachment, resize/scaling/focus, toolkit integration and editor teardown/recreation are possible later extensions, not initial-core requirements or accepted maintenance commitments. If selected, they must preserve the same control authority and permit processing without an editor. Product visual design, a widget toolkit, and a graphics/video engine remain outside the core.
 
-Chassis does not own product visual design or a GUI widget toolkit. Toolkit adapters remain optional.
+## Embedding boundary
 
-## General audio software escape hatches
+The core must remain usable without a stereo-plugin assumption. Its explicit paths support custom/multiple I/O configurations, event-only components, multibus/multi-output processing, opaque MIDI/SysEx/UMP, custom semantic state/migrations, and product-prepared activation resources.
 
-A general audio framework must allow explicit lower-level paths for:
+Applications may compose these processors with their own devices, graphs, editors, or offline jobs. That does not promise a Chassis subsystem for every surrounding need. Random-access/multipass work need not adopt the block processor's history/lifecycle; editor and backend capabilities belong outside semantic runtime APIs.
 
-- custom/multiple I/O layouts;
-- event-only/zero-audio components;
-- multibus and multi-output processing;
-- raw MIDI/SysEx/MIDI 2 where semantic events are insufficient;
-- custom offline/random-access processing;
-- manual state fields/migrations;
-- unusual activation resources;
-- custom editor/window integration;
-- format/device/platform-specific optional capabilities.
-
-Escape hatches do not relax memory safety, realtime bounds, schema/state authority, or compatibility identity.
+Embedding does not relax memory safety, realtime bounds, schema/state authority, or compatibility identity.
 
 ## Convenience API rule
 
@@ -287,6 +273,6 @@ The current heterogeneous schema/runtime fixtures did not expose a need for more
 
 ## Tooling direction
 
-Build/release tooling should eventually own workspace/product discovery, export builds, local install, validators, identity/deployment manifests, packaging, signing, notarization, compatibility fixtures, and templates.
+Maintain the current export packaging and conformance tools as the core evolves. Further authoring/release tooling needs its own usefulness and maintenance decision; a product-discovery system, installer, signing/notarization pipeline, or template generator is not an initial-core gate.
 
-Keep build/release concerns out of runtime proc macros and keep application/DAW project semantics outside Chassis.
+Keep build/release concerns out of runtime proc macros and application/DAW project semantics outside Chassis.

@@ -109,4 +109,4 @@ The CLAP adapter advertises f64 only through the explicit f64-capable export mar
 
 Cross-channel algorithms already use `with_channels`; they do not depend on future bus helpers. Higher-level port discovery or sidechain views may simplify repeated endpoint selection, but must not add hidden per-block maps or allocation.
 
-Future interleaved/incompatible backend layouts require activation-owned bounded conversion scratch plus measured cost. Higher-channel-count/surround/ambisonics layouts remain product-driven roadmap work.
+Future interleaved/incompatible backend layouts require activation-owned bounded conversion scratch plus measured cost. Higher-channel-count/surround/ambisonics layouts remain possible later extensions, not initial-core commitments; any selected layout needs explicit identity and ordering rather than channel-count-only mapping.

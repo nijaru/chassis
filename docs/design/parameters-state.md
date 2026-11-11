@@ -82,6 +82,14 @@ Linear points are block-local endpoints, not future ramp targets. A ramp spannin
 
 Choice values in the store share schema-owned IDs, including values accepted from control edits or decoded state. Each stored choice also caches its parameter-local dense index at the sole mutation boundary. `get_event_value` and `set_event_value` project durable base values through fixed-width payloads without scanning stable identities; CLAP uses them for synchronization and completed publication, and flush keeps already-normalized dense values. Control/state lookup remains off-thread. Realtime choice replacement/drop is safe because an event never owns the last ID allocation reference. Serialization still writes stable choice IDs, never the cached index.
 
+## Trajectory portability before stabilization
+
+**Planned contract work, not current adapter support.** The present core trajectory is plain-unit and block-local. Before stabilizing that representation, preserve the interpolation domain and boundary anchors supplied by a supported source, rather than assuming every backend means the same thing by a linear point.
+
+[VST3's parameter queue contract](https://steinbergmedia.github.io/vst3_doc/vstinterfaces/classSteinberg_1_1Vst_1_1IParamValueQueue.html) supplies normalized linear segments and can omit the first point in favor of an implicit sample -1 baseline. Converting endpoints and interpolating plain values is not equivalent under nonlinear mapping: with `plain = normalized²`, the midpoint is `0.25`, not `0.5`. Moving the baseline to sample zero also changes the boundary slope. Current CLAP plain-value steps do not expose this mismatch.
+
+A bounded source-contract fixture must establish the supported conversion/evaluation behavior before choosing prepared realtime mapping, a richer trajectory representation, or bounded expansion. Existing presentation-policy hooks are non-realtime; do not invoke them on the callback merely to support another source domain. A production VST3 adapter is a later scope decision, not a prerequisite for this core proof.
+
 ## Complete CLAP state publication
 
 Realtime automation endpoint publication follows:
@@ -144,6 +152,12 @@ The first accepted active custom-state change freezes the pre-load DSP base/modu
 
 Direct `parameters_mut()` edits and realtime automation validate descriptor domains, not arbitrary product cross-field invariants. Use complete state replacement for coupled control edits; activation checks complete component policy again. Processors must safely handle every admitted automation value with their current resources, requesting restart/retaining valid resources when necessary.
 
+### State validity closure
+
+**Known gap; accepted stabilization invariant, enforcement design pending.** Descriptor-valid control edits and automation can violate component cross-field policy. In the resource-backed table fixture, an accepted index value can exceed the current table's semantic range: processing handles that mismatch and requests restart, but save still succeeds and the same component then rejects the document on load and reactivation. Complete-load validation alone does not make all reachable durable states valid.
+
+Before stability, framework-generated state must reload under the same schema and component policy. Distinguish semantic validity from active-resource compatibility, and define which independent controls are automation-safe versus which coupled edits require a validated transaction. Preserve explicit desired/consumed state and failure atomicity; save-time repair or running arbitrary product validation on the callback is not a solution. The [execution plan](../next-runtime-slice.md#1-close-statecontrol-validity-first) requires committed direct-edit and automation regressions before selecting the enforcement/API change. Current behavior above remains implemented until that work lands.
+
 `StateExportError` distinguishes missing identity, document construction, and encoding. `StateValidationError` directly identifies identity/version, parameter completeness/domain, component-schema, defaults, and component-policy failures; parameter failures do not require nested wrapper matching. `StateLoadError` distinguishes decode, migration, and validation. Wrapped failures retain their specific evidence through `Error::source`.
 
 Migration/decoding are non-realtime operations. Retain fixtures for every released schema.
@@ -182,13 +196,9 @@ Realtime-originated host notifications require a narrow bounded capability; prod
 
 ## Remaining freeze gates
 
-Before freezing parameter/state APIs:
+The [roadmap](../roadmap.md#core-stability-gates) owns the full core-stability gate. This contract still needs state-validity closure, source-domain/boundary trajectory proof, product-originated gesture/echo semantics, and refreshed automated-render/active-save evidence. Prepared adoption must preserve this state/control authority; its ownership belongs to [runtime services](runtime-services.md), not a generalized copy of the CLAP scalar bridge.
 
-- refresh native automated-render and active-save scenarios against changed exported artifacts;
-- define/qualify product-originated gesture and echo semantics;
-- add cross-format state/automation round trips once VST3/AU projections exist;
-- freeze CHSS v1 only after released-product fixtures and cross-format evidence justify compatibility;
-- do not generalize the adapter publication helper into core or add callback resource adoption until typed publication/reclamation has a concrete client need.
+API and CHSS compatibility are separate explicit decisions, supported by versioned fixtures and a migration policy. A second format is not required to stabilize the declared core subset; if another adapter is later selected, its state/automation round trips become that adapter's qualification gate. Do not defer initial compatibility policy until there are already released products.
 
 ## Authoring direction
 

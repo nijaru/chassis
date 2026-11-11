@@ -1,12 +1,12 @@
 # Common Runtime Services
 
-Status: activation-scoped latency/restart, completed tail metadata, explicit host-bypass controls, and fixed-width coherent `f32` telemetry are implemented. Prepared publication/reclamation and task lifecycle remain design direction; public API is not frozen.
+Status: activation-scoped latency/restart, completed tail metadata, explicit host-bypass controls, and fixed-width coherent `f32` telemetry are implemented. Prepared publication/reclamation and background-work lifetime are committed core closure work, not implemented capabilities. Executor and queue choices remain open; public API is not frozen.
 
 ## Goal
 
-Provide common realtime/control infrastructure when the same semantics recur across effects and instruments, without making every supported service part of the initial core or hiding lifecycle costs.
+Provide the shared realtime/control machinery needed to use DSP safely: metadata, controls/observations, and resource preparation/publication/reclamation. The [roadmap](../roadmap.md) defines the initial subset and stability gate; this contract does not commit Chassis to application services or a general-purpose executor.
 
-Likely common areas are latency/tail metadata, bypass integration, realtime telemetry/control, and eventually background preparation. Each service needs one owner, explicit lifetime, and a product that does not use it should pay essentially no runtime cost.
+Each service needs one owner and an explicit lifetime. Components that do not use a capability must incur no hidden task, queue, or observation work.
 
 ## Latency
 
@@ -86,9 +86,9 @@ Avoid an untyped `Box<dyn Any>` queue as the primary mechanism.
 
 ## Background preparation
 
-Background work supports IR/sample decoding, expensive kernel construction, analysis, and resource indexing. Its lifecycle is planned framework scope, but components that do not use it must incur no hidden task/executor cost. A release prerequisite is a supported-scope decision, not a consequence of simple-effect examples.
+Core resource closure must handle preparation that finishes late, is superseded, or overlaps teardown. An in-repository resource-backed workload can establish that lifecycle without a separate product migration. Preparation algorithms, file decoding/streaming, and a general-purpose task executor are not required core services merely because resources may use them.
 
-When Chassis adds a task abstraction, its lifetime must be designed before its executor implementation.
+Specify result ownership, invalidation, cancellation and teardown before choosing a task abstraction or executor. Caller-owned execution is sufficient for the first proof; no hidden task/executor cost is allowed for components that do not use it.
 
 ### No implicit process-global executor
 
@@ -135,4 +135,4 @@ Likewise, do not use new algebraic/fast-math-style floating point operations mer
 
 ## Implementation boundary
 
-Latency/restart, tail metadata, bypass identity/timing, and scalar telemetry are current capabilities; prepared control-to-DSP publication is not. A resource-backed fixture must establish replacement, reclamation, stale-result rejection, cancellation/unload, and offline behavior before a task API or executor is chosen. Analyzer streams, richer diagnostics, denormal guards, and bypass DSP helpers likewise need concrete requirements rather than an expanded service catalog.
+Latency/restart, tail metadata, bypass identity/timing, and scalar telemetry are current capabilities; prepared control-to-DSP publication is not. It is part of the initial core closure sequence in [the execution plan](../next-runtime-slice.md#3-close-prepared-resource-ownership). A resource-backed fixture must establish replacement, reclamation, stale-result rejection, cancellation/unload, and offline behavior before choosing the mechanism. Executor implementations, analyzer streams, denormal guards, and bypass DSP helpers are separate decisions, not an automatic service catalog.

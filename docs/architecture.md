@@ -2,11 +2,15 @@
 
 ## Scope
 
-Chassis is a Rust framework for reusable audio infrastructure. Plugins are its first deployment path, not its core abstraction. Effects, instruments, event processors, embedded components, and offline processing use the same component/runtime model. Devices, graphs, hosting, editors, media, and standalone deployment are intended outer layers, not currently implemented capabilities.
+Chassis is a Rust DSP framework for building audio software. The initial target is a complete, correct, and stable component execution core: audio buffers and topology, timed controls/events, semantic state, activation, resource replacement, and bounded realtime/control communication. Plugins are its first deployment path, not its core abstraction. Effects, instruments, event processors, direct Rust embedding, and sequential offline processing exercise the same runtime.
 
-Applications own product algorithms, visual design, documents, and workflows. Chassis may supply a DAW's audio engine, routing, devices, hosted plugins, and rendering without defining tracks, clips, arrangements, projects, undo models, or mixer UX. Specialized restoration/ML algorithms and instrument engines remain clients unless repeated use establishes a reusable primitive.
+Here, the core DSP engine means component execution and its shared lifecycle/resource machinery, not a device engine, multi-node graph, plugin host, or DAW. Stabilize that bounded surface before expanding into higher layers. Existing CLAP deployment remains a maintained integration and qualification boundary; a full editor, standalone application, or second plugin format is not a prerequisite for core stability.
 
-Use mature libraries for codecs, FFTs, resampling, device backends, and toolkits when they fit the safety, semantics, maintenance, and license requirements. Owning an integration does not require reimplementing its algorithms.
+Devices, graphs, hosting, editor/toolkit integration, media pipelines, and standalone bootstrap are possible later extensions, not accepted maintenance commitments. Audio-software categories inform core requirements without making every facility those products use part of Chassis. Each extension needs a separate scope, dependency, qualification, and maintenance decision after the core gates in [the roadmap](roadmap.md#core-stability-gates) are met.
+
+Applications own product algorithms, visual design, documents, and workflows. A DAW can embed Chassis processors without Chassis defining tracks, clips, arrangements, projects, undo, or mixer UX. Chassis is audio-first: bounded observations belong to the core; visualizers and editor adapters may build on them, but a widget toolkit, rendering engine, video pipeline, and audiovisual composition model do not.
+
+Keep DSP kernels lightweight: a filter, ramp, or meter does not need a component schema or persistence identity. Add a small reusable helper where an established workload justifies its semantics and maintenance, not a comprehensive DSP catalog. Use mature libraries for substantial algorithms and optional integrations when their safety, numerical behavior, dependencies, and licenses fit; owning a contract does not require reimplementing its backend.
 
 ## Layers and packages
 
@@ -14,7 +18,7 @@ Use mature libraries for codecs, FFTs, resampling, device backends, and toolkits
 Products / applications
         |
         +-- deployment and editor integration
-        +-- device / graph / hosting / media infrastructure [planned]
+        +-- device / graph / hosting / media infrastructure [possible later]
         |
         v
 Format-independent component runtime
@@ -23,9 +27,9 @@ Format-independent component runtime
 Lightweight utilities / reviewed dependencies
 ```
 
-These are logical responsibilities, not a prescribed crate graph. The current production packages are `chassis-runtime` and `chassis-clap`; [package boundaries](design/crate-boundaries.md) explains the actual split. New boundaries require dependency, safety, platform, optionality, or independent-use pressure.
+The upper layers are extension boundaries, not a promise to implement them. These are logical responsibilities, not a prescribed crate graph. The current production packages are `chassis-runtime` and `chassis-clap`; [package boundaries](design/crate-boundaries.md) explains the actual split. New boundaries require dependency, safety, platform, optionality, or independent-use pressure.
 
-The CLAP adapter uses pinned Clack as its ABI/lifetime trust boundary. VST3/AU may initially use a reviewed wrapper; native implementations are justified by concrete correctness/capability/lifecycle limits. A wrapper target is not supported merely because it builds.
+The CLAP adapter uses pinned Clack as its ABI/lifetime trust boundary. If another format is selected later, compare a reviewed wrapper with a native adapter against the supported semantics and lifecycle. A wrapper target is not supported merely because it builds; source-contract probes can test core assumptions before another adapter exists.
 
 Keep format, toolkit, device, codec, and OS concepts at their integration boundaries. Do not wrap a dependency merely to hide its name; wrap where Chassis must own stronger semantic or lifecycle guarantees.
 
@@ -80,6 +84,6 @@ Prepared-resource publication, reclamation, tasks, and telemetry are specified i
 
 ## Qualification and evolution
 
-Separate Rust correctness, realtime bounds, format conformance, state/identity compatibility, performance, and production-host support. Historical baselines do not qualify later revisions. [Validation](design/validation.md) owns exact evidence; [execution plan](next-runtime-slice.md) owns immediate sequencing; [roadmap](roadmap.md) owns remaining framework scope.
+Separate Rust correctness, realtime bounds, format conformance, state/identity compatibility, performance, and production-host support. Historical baselines do not qualify later revisions. [Validation](design/validation.md) owns exact evidence; [execution plan](next-runtime-slice.md) owns immediate sequencing; [roadmap](roadmap.md) owns the core-stability gates and the boundary between committed work and possible extensions. No stability claim, version milestone, or release follows automatically from completing a phase.
 
 Development tracks stable Rust and Edition 2024 without a declared MSRV promise. CI's explicit compiler is a validation baseline. Dependency/source changes follow [dependency policy](dependencies.md) and the AGPL/commercial distribution constraints in [licensing](licensing.md).

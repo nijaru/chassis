@@ -1,102 +1,67 @@
 # Current Execution Plan
 
-This file owns immediate sequencing. [Roadmap](roadmap.md) owns deferred framework scope; [validation](design/validation.md) owns executed evidence. All APIs and CHSS bytes remain pre-alpha.
+Finish and qualify the initial DSP core before building higher layers. [Architecture](architecture.md) owns the scope; [roadmap](roadmap.md#core-stability-gates) owns the stability gates and deferred extension decisions; [validation](design/validation.md) owns executed evidence. This plan changes sequencing, not current implementation or support claims. APIs and CHSS bytes remain pre-alpha.
 
-## Design decision after the boundary audit
+## Baseline
 
-Retain the format-independent `ComponentSchema` / `InstanceRuntime<P>` / `Processor` ownership split and the runtime-versus-CLAP package boundary. The heterogeneous clients and publication tests support those choices. The audit exposed weak admission and transition contracts, not a need for another lifecycle, facade, graph model, or I/O-policy language.
+Retain the `ComponentSchema` / `InstanceRuntime<P>` / `Processor` ownership split and the runtime-versus-CLAP package boundary. Typed handles, scoped channel views, coherent complete-state publication, native notes/expression, opaque MIDI transport, block-start transport, and activation-scoped latency are implemented. State-validity closure remains open in step 1 below. Their current limitations remain in the matching [design contracts](design/runtime.md); completed qualification belongs to the validation guide rather than a historical completion log here.
 
-The implemented corrections are:
+Current custom-state replacement uses deferred reactivation and withholds controls from old resources. Compatible prepared adoption and a general background-work lifecycle are not implemented. The [pinned Clack audit](research/clack-pinned-adapter-audit.md) remains authoritative; this plan does not authorize a dependency refresh.
 
-- complete, unique, activation-bounded callback audio topology rather than independent endpoint checks;
-- adapter-owned raw alias classification before sample references, with host allocation/concurrency obligations explicit;
-- dense parameter-local choice events rather than callback string validation;
-- valid semantic documents at construction, including migration output;
-- explicit reactivation requests for accepted active custom-state changes;
-- faithful CLAP stepped values, discrete layouts, output metadata, choice labels, and exported reset behavior;
-- explicit destructive input-to-output initialization rather than a misleading mutable accessor.
+## 1. Close state/control validity first
 
-Their contracts live in [buffers](design/process-buffers.md), [parameters/state](design/parameters-state.md), [runtime](design/runtime.md), and the [Clack audit](research/clack-pinned-adapter-audit.md). They do not make the broader framework production-ready.
+Owner: [parameters and state](design/parameters-state.md#state-validity-closure).
 
-## Closed — realtime rejection and dense parameter projection
+The resource-backed table fixture exposes a reproducible contract gap: an in-domain direct parameter edit or successful automated block can produce an encoded state that the same component rejects on reload and requested reactivation. Descriptor-domain validation and component cross-field validation do not currently preserve the same set of reachable states.
 
-The existing Clack pin remains. A reviewed vendored `clack-plugin` patch bypasses reporting only for process callbacks and preserves actual `CLAP_PROCESS_ERROR`, lifecycle checks, and panic containment. Registry 0.2.0 has unchanged process reporting and is not a replacement for this fix. [Source audit](research/clack-pinned-adapter-audit.md) owns the delta; [validation](design/validation.md) owns revision-scoped evidence.
+- Add committed regressions for both ordinary edits and automation followed by save/reopen and reactivation; confirm the current failure before changing behavior.
+- Separate semantic validity from current-resource compatibility. Define which values may be independently automated and which coupled changes require complete validated replacement.
+- Make accepted durable state reloadable under the same schema/policy. Keep desired state, consumed controls and applied resources explicit; do not hide the problem with save-time repair, callback validation of arbitrary product code, or silent clamping.
+- Migrate core and CLAP callers together. Preserve failure atomicity, held external modulation, and off-callback ownership/reclamation.
 
-The roadmap review also found remaining stable-choice scans in CLAP synchronization, flush, and publication. The runtime store now owns a cached dense choice projection alongside canonical persistent identity; all callback projection uses fixed-width values. Setup/control/state paths still resolve stable identities. Arbitrary boxed errors and DSP panics remain outside realtime qualification.
+The invariant is accepted; its API/enforcement design must be resolved against the regressions before implementation. Do not mark the existing complete-state surface closed merely because loads themselves validate.
 
-## Closed — component-owned core state and deferred reactivation
+## 2. Finish portable control and processing semantics
 
-`Component` owns custom defaults, complete-state validation, and adjacent migration registration. `for_component` is the only public runtime constructor; defaults are validated even without persistence identity. One `activate(config, parameters, custom_state)` hook replaces the historical hook chain, and loads borrow the component rather than accept per-call policy.
+Owners: [parameters/state](design/parameters-state.md#trajectory-portability-before-stabilization), [events/transport](design/events-transport.md), and [authoring](design/authoring-api.md).
 
-A resource-backed table fixture couples parameter addressing to custom data and processes before restart. The first accepted active custom-state change freezes the pre-load DSP parameter projection. Incoming base automation remains validated but is discarded, with no endpoint completion, until deactivation/reactivation. Later loads and base control edits affect saveable desired state only; admitted modulation still updates desired held input without reaching old DSP. Reset and state reversion cannot unfreeze the old resources. This deliberately sacrifices parameter automation while a host defers restart; retaining it would require a qualified resource-compatibility policy.
+- Specify trajectory interpolation domains and block-boundary anchors. VST3's normalized linear queues and implicit sample -1 anchor cannot generally be projected as the current sample-zero plain-unit ramps under nonlinear mapping. Use a bounded reference fixture; choose faithful prepared evaluation or bounded expansion before freezing the representation. A VST3 adapter is not required for this proof.
+- Add typed begin/change/end gestures, origin-aware control publication, observation and echo suppression through a headless control fixture. Include stopped processing, host-originated edits, and state/resource transitions. A GUI toolkit or native window is not required.
+- Review the supported event-targeting, frame/layout, reset and process-failure contracts. Keep unsupported per-note parameter modulation and timestamped transport explicit instead of expanding all event families as a closure requirement.
+- Declare overload outcomes for essential events, replaceable controls, and observations. Keep rejection bounded and observable without realtime logging or hidden allocation.
 
-## Closed — complete CLAP state projection
+## 3. Close prepared-resource ownership
 
-CLAP now projects one coherent parameter/custom generation across shared/main-thread and active lifetimes. Component policy admits defaults, migrated loads, and activation snapshots; original defaults must also fit deployment wire bounds. Custom ownership stays off the callback. A resource epoch gates old DSP parameters/automation until reactivation, including reset, repeated loads, and reversion. A block already in flight may finish, but stale endpoint publication cannot overwrite desired state.
+Owner: [runtime services](design/runtime-services.md#control---realtime-publication).
 
-Actual-entry resource-backed tests exercise default save, migration, deferred restart, zero-allocation pending callbacks, rejection, save/reopen, and a load racing DSP completion. [Parameters/state](design/parameters-state.md#complete-clap-state-publication) owns the transition and contention contract; [validation](design/validation.md) owns revision-scoped qualification.
+Use an in-repository IR/table/wavetable-like workload; no external product port is required.
 
-Start with reactivation-based resource replacement. Bounded prepared adoption, coalescing, stale-result rejection, deferred reclamation, cancellation, and unload fencing need a concrete client before choosing a queue or executor. No hidden global executor or last-owner `Arc` destruction on the callback.
+- Prepare compatible replacements away from the callback and adopt them with bounded work. Keep reactivation for changes that cannot preserve the accepted topology/latency/resource contract.
+- Prove ownership of active, pending, superseded and retired data, including full-capacity publication and delayed consumers.
+- Reject stale completions across load/reset/deactivation/destruction; define cancellation and module-unload fencing even when workers complete late.
+- Reclaim retired data off-thread and make offline preparation explicit and repeatable.
 
-## Closed — parameter authoring policy
+Choose the publication/lifetime mechanism from that proof. Executor policy remains separate: no hidden process-global pool, generic task framework, disk streamer, or host thread-pool integration is required merely to complete resource adoption. A caller-owned worker can exercise the lifecycle.
 
-Descriptors now own immutable normalized-control and formatting/parsing policy. Core and actual-entry tests cover nonlinear mapping, units/precision, extreme domains, discrete rounding, stable-choice round trips, configuration drift, and output-buffer rejection. CLAP delegates text without reinterpreting product syntax; its plain automation stays unchanged. A host's generic normalized knob cannot inherit an arbitrary framework taper through CLAP.
+## 4. Consolidate authoring and bounded costs
 
-[Parameters/state](design/parameters-state.md#control-mapping-and-presentation) owns this contract; [validation](design/validation.md) owns revision-scoped evidence. No macros, new crate, or unit/curve catalog is needed.
+Owners: [authoring](design/authoring-api.md), [buffers](design/process-buffers.md), and the resource/control contracts above.
 
-## Closed — global additive float modulation
+- Exercise an effect with linked channels/sidechain, an instrument, an event-only processor, and the resource-backed workload through public APIs. Include direct embedding/composition without building a graph subsystem.
+- Compare realistic channel/parameter/event workloads, including the raw alias boundary and independent trajectory cursors. Evaluate span/segment access or indexing only where the workload demonstrates an ergonomic or execution-cost problem.
+- Add a small helper where it removes repeated DSP plumbing without hiding costs. Kernels such as ramps or meters do not need a component schema; a filter/oscillator/FFT catalog, graph DSL, macros, and an umbrella crate are not completion gates.
+- Remove superseded paths, tests and documentation as interfaces change. Pre-alpha compatibility shims are unnecessary.
 
-Explicitly opted-in floats now accept global held plain-unit amounts in the same bounded ordered stream as base automation. Cached effective cursors add/clamp without changing base or saved state. Held external signals survive reset, reactivation, and state loads. Custom transitions freeze both consumed base and modulation while retaining desired signals for reactivation; CLAP's separate transient projection preserves accepted modulation even when a newer state load defeats base completion.
+## 5. Qualify and review the declared core
 
-Core and actual-entry fixtures exercise mixed trajectories, lifecycle/state exclusion, resource gating, malformed/targeted rejection, and allocation bounds. Per-note parameter and non-float modulation remain unsupported rather than flattened; native note expression is a separate capability. [Parameters/state](design/parameters-state.md#global-additive-float-modulation) owns the contract; [validation](design/validation.md) owns revision-scoped evidence.
+Complete the [core stability gates](roadmap.md#core-stability-gates), not a broad application-framework checklist:
 
-## Closed — tail and bypass
+- run current Rust/dependency gates and focused allocation, concurrency, failure and unsafe-boundary checks;
+- after adapter changes, rebuild/package all exported fixtures and run the pinned validator plus bounded fuzz;
+- refresh real-host automation, save/reopen, active save, restart and PDC for the supported baseline; historical REAPER evidence does not qualify changed artifacts;
+- record representative performance with exact workloads and conditions, without turning microbenchmarks into cross-framework or production guarantees;
+- review compatibility fixtures, supported capabilities/platforms, compiler policy and the separate API/state-format commitments before any stability claim.
 
-Tail now reports a completed conservative bound independently of activation latency. CLAP queries use a shared snapshot, with audio-thread notifications and notification debt preserved across unstarted activations. Bypass is an explicit unique Boolean role in ordinary persistent, sample-timed controls; product DSP owns its transition and audio policy.
+Only then select a narrow extension from the roadmap. Do not start editor rendering, devices/standalone, a graph scheduler, hosting, media pipelines, or another production format as a substitute for closing these gates. Existing CLAP integration feedback continues throughout core work.
 
-The core echo fixture preserves latency and existing tail; the exported gain fixture demonstrates timed unity-gain dry processing with subnormal cleanup in f32/f64, and the delayed export reports its actual delay extent. The boundary review also corrected read-only event-descriptor ownership and typed-event pointer provenance at the existing Clack pin. [Runtime services](design/runtime-services.md) owns the semantic contract; the [source audit](research/clack-pinned-adapter-audit.md) owns the FFI delta and [validation](design/validation.md) owns qualified revisions.
-
-## Closed — complete native notes
-
-The input-only slice was expanded to include native expression and bounded output so the exported instrument can report voice completion honestly. CLAP now projects explicit native note-port identities, preserves actual mixed parameter/note order, and supports all seven native expression dimensions. Caller-owned bounded output includes voice-end feedback to the original input port; essential rejection can terminate processing without completing parameter/modulation endpoints or tail metadata.
-
-The output-only stereo note probe exercises two input ports with distinct host/schema ordering, f32/f64, strike controls captured at onset, expressions, and same-block retrigger lifetime feedback. The existing Clack pin gains narrowly audited expression layout/decoding corrections. The isolated validator also corrects out-of-contract expression ranges, with a regression that fails its original generator. [Events/transport](design/events-transport.md) owns semantics; the [source audit](research/clack-pinned-adapter-audit.md) and [validation](design/validation.md) own boundary review and revision-scoped evidence.
-
-## Closed — MIDI 1/SysEx
-
-Core and CLAP now preserve opaque three-byte messages, borrowed SysEx payload boundaries, concrete ports, defined live/do-not-record annotations, and actual mixed parameter/note/MIDI ordering. Count/aggregate byte limits bound callback admission and output attempts; rejected pushes do not refund payload budget. One caller-owned output sink orders both note and MIDI families. Callback-local payload loans leave only POD metadata in persistent scratch.
-
-The zero-audio MIDI probe routes two inputs to two outputs with deliberate host/schema index differences and a timed Boolean enable control. The same-pin Clack delta adds the required MIDI wrapper layout annotation. [Events/transport](design/events-transport.md) owns semantics, the [source audit](research/clack-pinned-adapter-audit.md) owns the FFI boundary, and [validation](design/validation.md) owns revision-scoped evidence.
-
-## Closed — MIDI 2/UMP transport
-
-Core and CLAP preserve all four numeric UMP storage words, concrete ports, flags, and mixed-event timing through the existing MIDI family and shared sink. Dialect checks are per message; event/attempt capacity is shared with MIDI 1/SysEx, while UMP consumes no SysEx-byte budget. The existing MIDI probe now exercises mixed, MIDI 1-only, and MIDI 2-only port pairs without a new lifecycle or package. The same-pin Clack delta adds `Midi2Event`'s required C layout.
-
-This is opaque four-word transport, not a variable-length UMP stream parser or MIDI 2 protocol/device-compliance implementation. The pinned validator does not generate UMP; focused actual-entry tests and Miri supply separate fidelity evidence. [Events/transport](design/events-transport.md) owns semantics, the [source audit](research/clack-pinned-adapter-audit.md) owns the boundary, and [validation](design/validation.md) owns revision-scoped qualification.
-
-## Closed — musical block-start transport
-
-Core now validates independently available song/sample/beat positions, meter/bar data, loop endpoints/state, recording pre-roll, and tempo/increment. CLAP projects its advertised block-start metadata without substituting its monotonic process clock for song time or fabricating missing fields. Contexts borrow snapshots; malformed available meter/active-loop/slope data fails before DSP, while invalid optional BPM retains the established unavailable-value recovery. Actual-entry coverage exercises availability, stopped/negative timelines, discontinuities, and allocation-free acceptance/rejection. [Events/transport](design/events-transport.md#transport) owns semantics; [validation](design/validation.md) owns revision-scoped evidence.
-
-This unblocks ordinary host-synced phase/position consumption; it does not expose timestamped transport updates or supply a sequencer, clock engine, or product DSP.
-
-## Closed — DSP authoring surface
-
-`Process<S>` now receives one `ProcessBlock<'_, S>` without a backend-source generic. A scoped lazy iterator supports paired slices and simultaneous cross-channel DSP; independent-channel helpers use the same path. Typed parameter handles resolve kind/domain/modulation during setup and build trajectories from consumed block controls. Complete persistence has one instance-owned public path, and CLAP declares export metadata through one descriptor. Superseded traits, partial-store persistence, and metadata constants are removed rather than retained as compatibility shims.
-
-[Authoring](design/authoring-api.md), [buffers](design/process-buffers.md), and [parameters/state](design/parameters-state.md) own those contracts. Higher-level editor/graph/application work does not require another core lifecycle model.
-
-## Next — evidence-driven runtime and authoring extensions
-
-Derive the next bounded requirement from established audio software and the intended framework uses, not only from a user-named new client. Concrete source/workload evidence is enough; a separate product migration is not required. Per-note parameter modulation, parameter gestures, span processing, and prepared resource adoption remain separate follow-up contracts, not an automatic event-model expansion.
-
-Speaker layouts and richer I/O policies remain demand-driven. Core proof is not format support, and additional formats/editors/devices/graphs do not justify freezing incomplete semantic surfaces.
-
-## Qualification maintenance
-
-- Keep current Rust/dependency gates and revision-scoped platform evidence distinct.
-- After adapter changes, rebuild/package all exported fixtures and run the pinned validator plus bounded fuzz.
-- Refresh real-host automation, save/reopen, active save, restart, and PDC when a production DAW is available; the September REAPER record is historical.
-- Refresh representative performance when making a comparison or renewing a claim. The old safe-pair benchmark does not measure the new raw alias boundary.
-
-Existing products remain optional integration evidence. No product migration, version milestone, publication, or deployment is implied by this plan.
+No product migration, version milestone, publication, or deployment is implied by this plan.

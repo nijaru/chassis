@@ -1,6 +1,6 @@
 # Events, Notes, MIDI, and Transport
 
-Status: semantic notes, seven native expressions, opaque MIDI 1/SysEx and MIDI 2/UMP, bounded shared output, source-defined mixed ordering, parameter automation/global float modulation, and musical block-start transport are implemented in core and projected through CLAP. Per-note parameter modulation and span processing remain design direction; public API is not frozen.
+Status: semantic notes, seven native expressions, opaque MIDI 1/SysEx and MIDI 2/UMP, bounded shared output, source-defined mixed ordering, parameter automation/global float modulation, and musical block-start transport are implemented in core and projected through CLAP. Per-note parameter modulation is unsupported; span processing is a workload-dependent authoring candidate, not a core completion requirement. Public API is not frozen.
 
 ## Goal
 
@@ -103,7 +103,7 @@ The native semantic families are:
 - tuning;
 - per-note expression.
 
-Do not freeze a least-common-denominator type until CLAP/VST3/AU/MIDI mappings are tested. Adapters expose only capabilities whose semantics they can preserve or whose degradation policy is explicit.
+Before stabilizing the supported event subset, challenge its mapping assumptions against the relevant CLAP/VST3/AU/MIDI source contracts and bounded fixtures. This does not require implementing every adapter or event capability. Adapters expose only capabilities whose semantics they can preserve or whose degradation policy is explicit; unsupported targeting remains unsupported rather than flattened.
 
 ## Note expression
 
@@ -224,4 +224,4 @@ The exported [note probe](../../examples/clap-note-probe/src/lib.rs) is an outpu
 
 The zero-audio [MIDI probe](../../examples/clap-midi-probe/src/lib.rs) routes three inputs to three outputs without interpreting bytes or words. Its primary pair supports MIDI 1 and MIDI 2, its secondary pair MIDI 1 only, and its third pair MIDI 2 only. Its timed Boolean enable control makes equal-offset parameter/MIDI ordering observable. ABI tests use a deep-copying output capture rather than retaining host payload pointers.
 
-Remaining work includes per-note parameter modulation, product gestures, and span processing. Each needs its own deployment projection and qualification.
+Product-originated gestures are core control closure work in [the execution plan](../next-runtime-slice.md#2-finish-portable-control-and-processing-semantics). Per-note parameter modulation remains an unsupported extension candidate; span/segment processing needs demonstrated authoring or execution-cost benefit. Qualify each selected capability at its actual core/deployment boundary rather than requiring every candidate before core stability.

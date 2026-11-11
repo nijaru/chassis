@@ -463,8 +463,9 @@ The deliberate delayed probe reports 64 samples at 48 kHz and its stereo impulse
 The recorded REAPER baseline below establishes sample-exact PDC alignment for its delayed-probe artifact. Remaining current/support claims require:
 
 - refreshing that real-host observation/alignment after relevant artifact changes;
-- production product restart/reactivation behavior when configuration changes required latency;
-- cross-format latency parity once VST3/AU exist.
+- production product restart/reactivation behavior when configuration changes required latency.
+
+Additional-format parity is a gate for a selected adapter, not a prerequisite for the initial core; see [cross-format qualification](#cross-format-differential-gate).
 
 ## State/adversarial tests
 
@@ -472,7 +473,7 @@ Treat host state as untrusted bytes. Keep coverage for malformed/truncated/overs
 
 `InstanceRuntime` complete-state export/load derives identity/version from its `ComponentSchema`; construction and loads use component-owned defaults/validation/migrations. Schema-only construction and per-load policy overrides are removed. The resource-backed state fixture processes while custom resources are stale, proving that frozen DSP parameters/withheld trajectories cannot overwrite saveable desired state. Lower parameter-store serialization helpers do not constitute a second component identity authority.
 
-Retain golden fixtures for every released schema. The current CHSS v1 envelope remains provisional until its compatibility policy and deployment/cross-format state gates are complete.
+Retain golden fixtures for every released schema. The current CHSS v1 envelope remains provisional pending its explicit compatibility policy and the [state-format promotion gates](state-format.md#v1-promotion-gates-still-open) for selected supported boundaries. An unselected second format is not an initial-core prerequisite.
 
 ## Host matrix
 
@@ -487,7 +488,7 @@ When a production DAW is available, refresh current-head scan/save-reopen/automa
 
 ## Cross-format differential gate
 
-Once VST3/AU projections exist, render the same deterministic product state + input + automation/events through each format and compare audio, state, identities, port configuration, automation timing, latency/tail, and editor-visible parameter semantics. Use bit-exact comparison for framework-only deterministic behavior when possible and explicit tolerances only where semantics require them.
+When another adapter is selected for supported deployment, render the same deterministic product state + input + automation/events through the supported formats and compare audio, state, identities, port configuration, automation timing, latency/tail, and editor-visible parameter semantics where implemented. This gate qualifies those adapters; it does not require adding VST3/AU or an editor to stabilize the initial core. Use bit-exact comparison for framework-only deterministic behavior when possible and explicit tolerances only where semantics require them.
 
 ## Release evidence
 

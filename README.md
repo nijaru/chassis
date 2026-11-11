@@ -1,10 +1,10 @@
 # Chassis
 
-Chassis is a Rust framework for building audio software.
+Chassis is a Rust DSP framework for building audio software.
 
-Its format-independent component/runtime model is intended to support DSP components, effects, instruments, event processors, plugins, standalone applications, plugin hosts, audio engines, offline processing, and embedded use. Plugins are the first and likely most common authoring/deployment path, but plugin-host assumptions do not define the core model.
+The initial target is a complete, correct, and stable DSP execution core: buffers, timed controls/events, state, lifecycle, resources, and realtime/control communication. The same format-independent runtime serves effects, instruments, event processors, direct Rust embedding, and sequential offline processing. CLAP is the first deployment and qualification boundary, not the definition of a component.
 
-Chassis owns broadly reusable audio infrastructure. Applications own their product, document, workflow, and visual semantics. A DAW should be able to use Chassis for its audio engine, devices, processing graph, plugin hosting, rendering, and processor infrastructure without Chassis defining tracks, clips, arrangements, session views, project UX, or editing workflows.
+The initial scope is a DSP runtime, not a general application framework. Devices, graphs, hosting, editors, and media pipelines are possible later extensions, each with a separate maintenance decision after the core is stable. Applications own their algorithms, documents, workflows, and visual design. Audio visualization can consume core observations without making Chassis a graphics or video framework.
 
 **Pre-alpha / work in progress.** The crates are unpublished, and the public APIs and CHSS state format are not stable. Pre-alpha APIs may be replaced aggressively when doing so produces a simpler, safer, more general design.
 
@@ -32,24 +32,24 @@ The repository selects the stable Rust toolchain and Edition 2024. CLAP dependen
 
 CLAP projects native notes/expression, opaque MIDI 1/SysEx, and four-word MIDI 2/UMP events. It preserves mixed parameter/note/MIDI ordering and shares bounded output including native voice-end feedback. Dialects are never converted implicitly; UMP transport does not imply protocol parsing or device compliance. Musical block-start transport preserves available timelines, tempo slope, meter/bar/loop information, and pre-roll without inventing missing host data; timestamped transport updates are not yet exposed. Complete parameter/custom state supports deferred resource reactivation. Accepted and deterministic rejected callbacks pass allocation checks; arbitrary boxed errors and DSP panics remain outside realtime qualification.
 
-Planned framework layers include common DSP utilities, editor integration, VST3/Audio Unit deployment, audio/MIDI devices, standalone deployment, graph/scheduling, plugin hosting, media/offline processing integration, and release/conformance tooling. Package boundaries are created only where dependency, safety, optionality, or release boundaries justify them.
+The [roadmap](docs/roadmap.md) defines the initial core boundary, stability gates, and possible later extensions. The [execution plan](docs/next-runtime-slice.md) orders the remaining core work. No graph, device backend, editor toolkit, media pipeline, or additional format is required to complete that initial surface. Package boundaries follow actual dependency, safety, optionality, or release needs.
 
 The framework roadmap uses focused conformance fixtures rather than migration of an existing plugin as the completion gate. Existing product ports remain useful regression evidence where they exercise framework semantics.
 
 ## Design
 
-`Component` defines immutable schema, capabilities, and factories. `InstanceRuntime<P>` owns durable parameter and semantic state and coordinates activation. `Processor` owns active DSP history. The same processor model should remain usable through plugin adapters, directly inside another Rust application, as a graph node, in a standalone application, and during offline rendering.
+`Component` defines immutable schema, capabilities, and factories. `InstanceRuntime<P>` owns durable parameter and semantic state and coordinates activation. `Processor` owns active DSP history. The same processor model is usable through CLAP, directly inside another Rust application, and for sequential offline processing. A graph or standalone application can later compose that model without becoming a required Chassis subsystem.
 
 DSP implements `Process<S>` with a borrowed `ProcessBlock<'_, S>`. Safe channel enum views support in-place, separate input/output, and cross-channel algorithms without callback-owned collections. Setup-resolved typed parameter handles provide base/effective trajectories from the block's consumed controls. Complete persistence belongs to the instance runtime; CLAP export metadata is declared through one `ClapDescriptor`.
 
 Product-facing core APIs contain no plugin-format, GUI-toolkit, device-backend, or operating-system types. Realtime callbacks have activation-defined resource and event bounds. The test suite checks callback allocations, lifecycle failures, concurrent state publication, f32/f64 processing, malformed state, and other runtime invariants. `chassis_runtime::telemetry` provides the first reusable bounded DSP-to-control snapshot primitive without adding locks or callback allocation.
 
-Chassis may provide common DSP building blocks where doing so creates a coherent reusable audio foundation, but it should use strong existing Rust libraries where appropriate instead of reimplementing codecs, FFTs, resamplers, device backends, or other mature primitives merely for ownership.
+Small DSP helpers can complement the runtime without forcing every filter or ramp into a full component. A comprehensive algorithm catalog is not an initial goal; substantial algorithms and integrations should reuse reviewed libraries rather than create unnecessary maintenance.
 
 Recorded host and performance results, their scope, and remaining qualification work are in the [validation guide](docs/design/validation.md).
 
 - [Architecture](docs/architecture.md)
-- [Roadmap / completion bar](docs/roadmap.md)
+- [Roadmap / core stability gates](docs/roadmap.md)
 - [Current execution plan](docs/next-runtime-slice.md)
 - [Parameters, automation, and state](docs/design/parameters-state.md)
 - [Events, notes, MIDI, and transport](docs/design/events-transport.md)

@@ -230,11 +230,6 @@ Future background tasks, callbacks, editors, deferred reclamation, devices, grap
 
 ## Remaining runtime/core freeze gates
 
-The ownership/schema/identity migration is no longer the blocker. Remaining core work should be driven by concrete audio semantics:
+The [roadmap](../roadmap.md#core-stability-gates) owns the declared initial boundary and its stability gates; [the execution plan](../next-runtime-slice.md) orders remaining work. In particular, the current state/control policy has a [validity gap](parameters-state.md#state-validity-closure), and prepared resource adoption/reclamation remains unimplemented. The ownership migration is complete; the core is not yet stable.
 
-1. extend the qualified global float modulation subset only when a client needs per-note parameter modulation or other domains; keep external signals separate from durable state;
-2. add bounded control -> DSP non-parameter publication and background-work/reclamation lifecycle;
-3. add bus/port convenience or a richer `AudioIoPolicy` only if materially different clients show the current explicit model is insufficient;
-4. continue cross-platform, allocation, concurrency, adapter, and real-host qualification as these contracts change.
-
-The current `ComponentSchema` / `InstanceRuntime` ownership shape is a candidate-stable architecture. Do not reopen it merely to add speculative generality; change it when a concrete client exposes a semantic or ergonomic deficiency.
+Retain `ComponentSchema` / `InstanceRuntime` ownership unless a concrete correctness or authoring mismatch calls for change. Established source contracts and focused in-repository workloads are enough to establish that mismatch; a named product is not required. Per-note parameter modulation, richer I/O policies, graphs, devices, and editor rendering need not be implemented to stabilize the explicitly supported core subset. Pre-alpha interfaces remain replaceable, with callers and contracts migrated together.

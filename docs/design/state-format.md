@@ -1,6 +1,6 @@
 # Chassis State Format
 
-Status: preferred bounded semantic-state prototype implemented and qualified through `62b96cc`; **not yet a stable wire-format promise**. The runtime now owns complete parameter + custom semantic state transactionally. CHSS envelope v1 remains provisional until adapter/cross-format evidence is complete.
+Status: preferred bounded semantic-state prototype implemented and qualified through `62b96cc`; **not yet a stable wire-format promise**. The runtime now owns complete parameter + custom semantic state transactionally. CHSS envelope v1 remains provisional pending an explicit compatibility policy and qualification of the selected supported boundaries; unselected formats are not promotion prerequisites.
 
 ## Goal
 
@@ -206,8 +206,8 @@ Before declaring CHSS envelope v1 stable:
 - run sustained fuzzing/property infrastructure beyond the deterministic adversarial corpus;
 - qualify active state-save/load races through deployment publication semantics;
 - test short/partial adapter stream reads and writes;
-- perform CLAP/VST3/AU cross-format round trips with the same semantic fixture;
-- retain deterministic golden fixtures for every released product schema.
+- round-trip the same semantic fixtures through the selected supported deployment boundaries; add cross-format comparisons if another adapter is selected;
+- establish initial versioned compatibility fixtures and a migration/limits policy, then retain deterministic fixtures for every released product schema.
 
 The parser should remain small enough for manual review; fuzzing supplements rather than replaces reasoning.
 
