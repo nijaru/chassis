@@ -36,11 +36,33 @@ fn host_info() -> HostInfo {
     HostInfo::new("chassis-test", "", "", "").expect("host info is valid")
 }
 
-struct ActivationPanicProbe {
+fn instance(entry: &PluginEntry) -> PluginInstance<TestHostHandlers> {
+    let descriptor = entry
+        .get_factory::<PluginFactory>()
+        .unwrap()
+        .plugin_descriptor(0)
+        .unwrap();
+    PluginInstance::new(
+        |()| TestHostShared,
+        |_| TestHostMainThread,
+        entry,
+        descriptor.id().unwrap(),
+        &host_info(),
+    )
+    .unwrap()
+}
+
+const FACTORY_PANIC: u8 = 0;
+const LATENCY_PANIC: u8 = 1;
+const TAIL_PANIC: u8 = 2;
+static ACTIVATION_DROPS: AtomicU32 = AtomicU32::new(0);
+static ACTIVATION_DSP_CALLS: AtomicU32 = AtomicU32::new(0);
+
+struct ActivationPanicProbe<const STAGE: u8> {
     panic_next_activation: AtomicBool,
 }
 
-impl Default for ActivationPanicProbe {
+impl<const STAGE: u8> Default for ActivationPanicProbe<STAGE> {
     fn default() -> Self {
         Self {
             panic_next_activation: AtomicBool::new(true),
@@ -48,8 +70,8 @@ impl Default for ActivationPanicProbe {
     }
 }
 
-impl Component for ActivationPanicProbe {
-    type Processor = NoopProcessor;
+impl<const STAGE: u8> Component for ActivationPanicProbe<STAGE> {
+    type Processor = ActivationPanicProcessor;
     type ActivationError = Infallible;
 
     fn schema(
@@ -58,86 +80,229 @@ impl Component for ActivationPanicProbe {
         chassis_runtime::schema::ComponentSchema,
         chassis_runtime::schema::ComponentSchemaError,
     > {
-        chassis_runtime::schema::ComponentSchema::stereo_effect_with_state(
-            chassis_runtime::schema::ComponentId::new("org.nijaru.chassis.semantic.crates.chassis-clap.tests.host-panic-containment.activationpanicprobe")
-                .expect("semantic component identity is valid"),
+        chassis_runtime::schema::ComponentSchema::new(
+            chassis_runtime::schema::ComponentId::new("test.activation-panic").unwrap(),
             chassis_runtime::schema::StateSchemaVersion::new(1),
             vec![],
+            chassis_runtime::audio::AudioIoPolicy::any_structurally_valid(),
+            vec![],
+            vec![
+                chassis_runtime::parameters::ParameterDescriptor::float(
+                    "gain", "Gain", 0.0, 1.0, 0.0,
+                )
+                .unwrap()
+                .with_global_modulation()
+                .unwrap(),
+            ],
         )
     }
 
     fn activate(
         &self,
         _config: &ActivationConfig<'_>,
-        _parameters: &chassis_runtime::parameters::ParameterStore,
+        parameters: &chassis_runtime::parameters::ParameterStore,
         _custom_state: &[chassis_runtime::state::StateEntry],
     ) -> Result<Self::Processor, Self::ActivationError> {
+        let panic = self.panic_next_activation.swap(false, Ordering::Relaxed);
         assert!(
-            !self.panic_next_activation.swap(false, Ordering::Relaxed),
-            "intentional activation panic"
+            !panic || STAGE != FACTORY_PANIC,
+            "intentional activation factory panic"
         );
-        Ok(NoopProcessor)
+        Ok(ActivationPanicProcessor {
+            panic_stage: panic.then_some(STAGE),
+            gain: parameters.float_parameter("gain").unwrap(),
+        })
     }
 }
 
-impl ClapComponent for ActivationPanicProbe {
+impl<const STAGE: u8> ClapComponent for ActivationPanicProbe<STAGE> {
     const CLAP_DESCRIPTOR: chassis_clap::ClapDescriptor = chassis_clap::ClapDescriptor {
-        features: &[c"audio-effect", c"stereo"],
+        features: &[c"utility"],
         version: env!("CARGO_PKG_VERSION"),
         ..chassis_clap::ClapDescriptor::new(
             "org.nijaru.chassis.activation-panic-probe",
             "Chassis Activation Panic Probe",
         )
     };
+    const CLAP_AUDIO_PORTS: &'static [chassis_clap::ClapAudioPort] = &[];
+    const CLAP_PARAMETER_IDS: &'static [(&'static str, u32)] = &[("gain", 7)];
+    const CLAP_MAX_PARAMETER_EVENTS: u32 = 8;
 }
 
-struct NoopProcessor;
-
-impl Processor for NoopProcessor {}
-
-impl Process<f32> for NoopProcessor {
+struct ActivationPanicProcessor {
+    panic_stage: Option<u8>,
+    gain: chassis_runtime::parameters::FloatParameter,
+}
+impl Processor for ActivationPanicProcessor {
+    fn latency(&self) -> chassis_runtime::runtime::LatencySamples {
+        assert_ne!(
+            self.panic_stage,
+            Some(LATENCY_PANIC),
+            "intentional activation latency panic"
+        );
+        chassis_runtime::runtime::LatencySamples::new(7)
+    }
+    fn tail(&self) -> chassis_runtime::runtime::TailLength {
+        assert_ne!(
+            self.panic_stage,
+            Some(TAIL_PANIC),
+            "intentional activation tail panic"
+        );
+        chassis_runtime::runtime::TailLength::FiniteSamples(11)
+    }
+}
+impl<S> Process<S> for ActivationPanicProcessor {
     fn process(
         &mut self,
-        _block: &mut ProcessBlock<'_, f32>,
+        block: &mut ProcessBlock<'_, S>,
     ) -> Result<(), chassis_runtime::runtime::ProcessError> {
+        assert_eq!(
+            self.gain.value(block.parameters()).unwrap().to_bits(),
+            0.5_f64.to_bits()
+        );
+        assert_eq!(
+            self.gain
+                .cursor(block)
+                .unwrap()
+                .value_at(0)
+                .unwrap()
+                .to_bits(),
+            0.75_f64.to_bits(),
+            "held modulation survives failed activation"
+        );
+        ACTIVATION_DSP_CALLS.fetch_add(1, Ordering::Relaxed);
         Ok(())
+    }
+}
+impl Drop for ActivationPanicProcessor {
+    fn drop(&mut self) {
+        ACTIVATION_DROPS.fetch_add(1, Ordering::Relaxed);
     }
 }
 
 #[test]
-fn activation_panic_is_contained_and_instance_can_activate_again() {
-    let entry = PluginEntry::load_from_clack::<SingleComponentEntry<ActivationPanicProbe>>(c"")
-        .expect("static activation panic entry loads");
-    let descriptor = entry
-        .get_factory::<PluginFactory>()
-        .expect("plugin factory exists")
-        .plugin_descriptor(0)
-        .expect("activation panic descriptor exists");
-    let mut plugin = PluginInstance::<TestHostHandlers>::new(
-        |()| TestHostShared,
-        |_| TestHostMainThread,
-        &entry,
-        descriptor.id().expect("activation panic id is valid"),
-        &host_info(),
-    )
-    .expect("activation panic probe instantiates");
+fn activation_factory_and_metadata_panics_preserve_state_and_permit_retry() {
+    for (entry, constructed) in
+        [
+            (
+                PluginEntry::load_from_clack::<
+                    SingleComponentEntry<ActivationPanicProbe<FACTORY_PANIC>>,
+                >(c"")
+                .unwrap(),
+                false,
+            ),
+            (
+                PluginEntry::load_from_clack::<
+                    SingleComponentEntry<ActivationPanicProbe<LATENCY_PANIC>>,
+                >(c"")
+                .unwrap(),
+                true,
+            ),
+            (
+                PluginEntry::load_from_clack::<
+                    SingleComponentEntry<ActivationPanicProbe<TAIL_PANIC>>,
+                >(c"")
+                .unwrap(),
+                true,
+            ),
+        ]
+    {
+        assert_activation_failure(&entry, constructed);
+    }
+}
+
+fn assert_activation_failure(entry: &PluginEntry, constructed: bool) {
+    use clack_extensions::{
+        latency::PluginLatency,
+        params::PluginParams,
+        state::PluginState,
+        tail::{PluginTail, TailLength},
+    };
+    use clack_host::events::event_types::{ParamModEvent, ParamValueEvent};
+    ACTIVATION_DROPS.store(0, Ordering::Relaxed);
+    ACTIVATION_DSP_CALLS.store(0, Ordering::Relaxed);
+    let mut plugin = instance(entry);
     let config = PluginAudioConfiguration {
         sample_rate: 48_000.0,
         min_frames_count: 1,
         max_frames_count: 64,
     };
 
+    let params = plugin
+        .plugin_handle()
+        .get_extension::<PluginParams>()
+        .unwrap();
+    let state = plugin
+        .plugin_handle()
+        .get_extension::<PluginState>()
+        .unwrap();
+    let latency = plugin
+        .plugin_handle()
+        .get_extension::<PluginLatency>()
+        .unwrap();
+    let tail = plugin
+        .plugin_handle()
+        .get_extension::<PluginTail>()
+        .unwrap();
+    let mut controls = EventBuffer::new();
+    controls.push(&ParamValueEvent::new(
+        0,
+        ClapId::new(7),
+        Pckn::match_all(),
+        0.5,
+    ));
+    controls.push(&ParamModEvent::new(
+        0,
+        ClapId::new(7),
+        Pckn::match_all(),
+        0.25,
+    ));
+    params.flush(
+        &mut plugin.inactive_plugin_handle().unwrap(),
+        &controls.as_input(),
+        &mut OutputEvents::void(),
+    );
+    let mut before = Vec::new();
+    state.save(&plugin.plugin_handle(), &mut before).unwrap();
+    assert_eq!(latency.get(&plugin.plugin_handle()), 0);
+    assert_eq!(inactive_tail(&mut plugin), 0);
     assert!(
         plugin
             .activate(|_, _| TestHostAudioProcessor, config)
             .is_err()
     );
     assert!(!plugin.is_active());
-
-    let processor = plugin
+    assert_eq!(latency.get(&plugin.plugin_handle()), 0);
+    assert_eq!(inactive_tail(&mut plugin), 0);
+    assert_eq!(
+        ACTIVATION_DROPS.load(Ordering::Relaxed),
+        u32::from(constructed)
+    );
+    assert_eq!(ACTIVATION_DSP_CALLS.load(Ordering::Relaxed), 0);
+    assert_eq!(
+        params.get_value(&plugin.plugin_handle(), ClapId::new(7)),
+        Some(0.5)
+    );
+    let mut after = Vec::new();
+    state.save(&plugin.plugin_handle(), &mut after).unwrap();
+    assert_eq!(after, before);
+    let mut processor = plugin
         .activate(|_, _| TestHostAudioProcessor, config)
-        .expect("same instance activates after contained product panic");
-    plugin.deactivate(processor);
+        .unwrap()
+        .start_processing()
+        .unwrap();
+    assert_eq!(latency.get(&plugin.plugin_handle()), 7);
+    assert_eq!(tail.get(&processor.plugin_handle()), TailLength::Finite(11));
+    assert_eq!(
+        process_without_audio(&mut processor),
+        clap_sys::process::CLAP_PROCESS_CONTINUE
+    );
+    assert_eq!(ACTIVATION_DSP_CALLS.load(Ordering::Relaxed), 1);
+    plugin.deactivate(processor.stop_processing());
+    assert_eq!(
+        ACTIVATION_DROPS.load(Ordering::Relaxed),
+        u32::from(constructed) + 1
+    );
 }
 
 #[derive(Default)]
@@ -199,19 +364,7 @@ impl Process<f32> for ProcessPanicProcessor {
 fn process_panic_becomes_host_processing_failure_and_deactivates_cleanly() {
     let entry = PluginEntry::load_from_clack::<SingleComponentEntry<ProcessPanicProbe>>(c"")
         .expect("static process panic entry loads");
-    let descriptor = entry
-        .get_factory::<PluginFactory>()
-        .expect("plugin factory exists")
-        .plugin_descriptor(0)
-        .expect("process panic descriptor exists");
-    let mut plugin = PluginInstance::<TestHostHandlers>::new(
-        |()| TestHostShared,
-        |_| TestHostMainThread,
-        &entry,
-        descriptor.id().expect("process panic id is valid"),
-        &host_info(),
-    )
-    .expect("process panic probe instantiates");
+    let mut plugin = instance(&entry);
     let processor = plugin
         .activate(
             |_, _| TestHostAudioProcessor,
@@ -348,6 +501,21 @@ impl<const TAIL: bool> Drop for ResetPanicProcessor<TAIL> {
 }
 
 #[allow(unsafe_code)]
+fn inactive_tail(plugin: &mut PluginInstance<TestHostHandlers>) -> u32 {
+    let handle = plugin.plugin_handle();
+    let raw = handle.as_raw();
+    // SAFETY: initialized live instance, main-thread query of Chassis's shared
+    // tail snapshot. The pinned host helper incorrectly requires an audio handle.
+    unsafe {
+        let extension =
+            raw.get_extension.unwrap()(raw, clap_sys::ext::tail::CLAP_EXT_TAIL.as_ptr());
+        assert!(!extension.is_null());
+        let extension = &*extension.cast::<clap_sys::ext::tail::clap_plugin_tail>();
+        extension.get.unwrap()(raw)
+    }
+}
+
+#[allow(unsafe_code)]
 fn process_without_audio(processor: &mut StartedPluginAudioProcessor<TestHostHandlers>) -> i32 {
     // Clack's convenience host process derives zero frames from empty buffers;
     // an event-only component still needs a real, nonempty CLAP process interval.
@@ -389,16 +557,7 @@ fn reset_panics_disable_dsp_and_restart_until_fresh_activation_in_both_wrappers(
         RESET_CALLS.store(0, Ordering::Relaxed);
         RESET_DSP_CALLS.store(0, Ordering::Relaxed);
         RESET_DROPS.store(0, Ordering::Relaxed);
-        let factory = entry.get_factory::<PluginFactory>().unwrap();
-        let descriptor = factory.plugin_descriptor(0).unwrap();
-        let mut plugin = PluginInstance::<TestHostHandlers>::new(
-            |()| TestHostShared,
-            |_| TestHostMainThread,
-            &entry,
-            descriptor.id().unwrap(),
-            &host_info(),
-        )
-        .unwrap();
+        let mut plugin = instance(&entry);
         let config = PluginAudioConfiguration {
             sample_rate: 48_000.0,
             min_frames_count: 1,

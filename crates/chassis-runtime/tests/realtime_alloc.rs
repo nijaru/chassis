@@ -33,6 +33,8 @@ use chassis_runtime::{
     state::{StateDocument, StateLimits},
 };
 
+#[path = "support/linked_composition.rs"]
+mod linked_composition;
 #[path = "support/resource_state.rs"]
 mod resource_state;
 
@@ -307,6 +309,7 @@ fn repeated_post_activation_process_calls_do_not_allocate_or_deallocate() {
     separate_callbacks_do_not_allocate_or_reclaim::<f64>();
     pending_resource_callbacks_do_not_allocate_or_reclaim();
     mixed_event_callbacks_do_not_allocate_or_reclaim();
+    linked_composition::qualify();
 }
 
 fn separate_callbacks_do_not_allocate_or_reclaim<S>()

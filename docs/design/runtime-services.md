@@ -52,7 +52,7 @@ Initially, a processor can conservatively remain active. If real products and ad
 
 Meters, gain reduction, scopes, analyzers, and diagnostics commonly need audio -> UI/control communication.
 
-`telemetry::F32Telemetry` implements fixed-width latest snapshots with single-attempt nonblocking publication and bounded coherent readers. Concurrency and callback allocation/deallocation tests plus a meter fixture cover it.
+`telemetry::F32Telemetry` implements fixed-width latest snapshots with single-attempt nonblocking publication and bounded coherent readers. `Busy` and `GenerationExhausted` reject publication without changing payload or sequence. A stalled writer yields `Contended` after the reader's bounded attempts. Read into scratch storage: an unsuccessful read may have copied unaccepted values, so only a successful generation replaces the last accepted display. Observation loss must not trigger DSP retries or affect essential controls/events. Concurrency, deterministic rejection/contention, and callback allocation/deallocation tests plus a meter fixture cover these boundaries.
 
 Larger ordered streams remain conditional on an analyzer/trace client:
 

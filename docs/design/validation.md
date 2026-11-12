@@ -353,11 +353,27 @@ Current cases include:
 - `host_state_policy.rs`: component-owned scalar migrations/validation, atomic load rejection, schema drift, original custom-default preservation, retained-definition policy admission, and deployment wire-budget rejection;
 - `host_custom_state.rs`: resource-backed complete state through default save, migration/rejection, deferred restart/reset/reversion, active flush, save/reopen, zero-allocation pending callbacks, and a load racing old DSP completion whose accepted modulation survives rejected base completion;
 - `host_reentrancy.rs`: plugin -> host -> plugin main-thread re-entry through parameter-rescan and latency-change callbacks;
-- `host_panic_containment.rs`: activation/process panic containment at the Clack FFI boundary.
+- `host_panic_containment.rs`: factory/activation-metadata panic containment with preserved controls, byte-identical desired state, exact processor destruction and same-instance retry; reset-failure latching in both precision wrappers; process panic containment and teardown.
 - `exported_notes.rs`: native port metadata, f32/f64 mixed input order, onset expressions, exact raw wildcard admission, zero-velocity on, original input-port voice feedback including cross-block debt, host output rejection, and callback allocation/deallocation.
 - `exported_midi.rs`: zero-audio MIDI 1/SysEx and four-word MIDI 2/UMP, per-port dialects, independent routes, exact contents/offsets/flags, payload ownership, mixed controls, whole-batch malformed admission, essential output rejection, and allocation-free maximum/overflow bounds.
 
 The full adapter allocation test covers 1,000 f32 and 1,000 f64 callbacks for each of all-base and mixed base/modulation streams, with stereo main + stereo sidechain and exactly the configured 64 parameter controls, plus actual-entry exact-in-place acceptance and partial-alias rejection, with zero measured allocation/deallocation or host-log calls on the callback thread.
+
+## Fixed-resource subset boundary
+
+M1's current proof combines the fixtures below; it does not require each fixture to implement every capability. The dated checks above own revision/platform qualification. [The execution plan](../next-runtime-slice.md#4-consolidate-authoring-and-bounded-costs) owns remaining authoring-cost work.
+
+| Boundary | Qualified behavior and limits | Proof entrypoints |
+| --- | --- | --- |
+| State/control | Independent parameter domains, custom-state transactions, save/reopen, frozen resource epochs, held external modulation, and fixed CLAP save admission | `semantic_state.rs`, `host_state_policy.rs`, `host_custom_state.rs` |
+| Lifecycle/failure | Failed activation publishes no child/metadata; contained reset failure disables the activation; failed processing completes no base/modulation/tail endpoints. Already-written audio/history/output is not transactional; abandon damaged DSP | `lifecycle_negative.rs`, `host_panic_containment.rs`, `native_notes.rs`, `tail_bypass.rs` |
+| Frames/layouts/buffers | Activation-selected frame and topology bounds, dense endpoint legality, separate/in-place access, accepted exact aliases and rejected partial aliases at the raw boundary | `host_frame_bounds.rs`, `audio_endpoint_runtime.rs`, `layout_sidechain_runtime.rs`, `host_conformance.rs` |
+| Events/controls | Declared global controls, native note/expression addressing, opaque MIDI/SysEx/UMP, source-defined mixed order, explicit essential-output rejection retaining prior output. Per-note parameter modulation remains unsupported | `host_conformance.rs`, `exported_notes.rs`, `exported_midi.rs`, `native_notes.rs` |
+| Capacity/observations | Independent event/count/byte attempt limits; rejected SysEx charges byte capacity. Telemetry rejects busy/exhausted publication without writes and bounds contended reads; only accepted snapshots replace display state | `exported_midi.rs`, `native_notes.rs`, `telemetry.rs` unit tests, `telemetry_alloc.rs` |
+| Public authoring/composition | Effects, instruments, event-only processors and direct embedding. Linked stereo/real-sidechain processing composes two instances through caller-owned audio with timed typed controls and zero measured heap traffic; that workload is separate-buffer `f64`, not a new graph or CLAP fixture | `instrument_runtime.rs`, `exported_notes.rs`, `exported_midi.rs`, `realtime_alloc.rs` and its `support/linked_composition.rs` workload |
+| Execution costs | **Open:** equivalent useful DSP through bare kernels, direct runtime and CLAP; consumed multi-parameter base/modulation, event-density and topology/alias comparisons. Allocation checks and older no-op timings do not close this gate | `benches/adapter_overhead.rs`; execution plan step 4 |
+
+This boundary does not qualify portable source-domain ramps/anchors, gestures/control origins, compatible prepared-resource adoption, a DAW, or representative callback-tail latency. M2/M3 and the broader M4 host/compatibility gates remain separate.
 
 ## Core conformance
 
@@ -377,8 +393,10 @@ The format-independent proof is split by concern while exercising the same publi
 - `crates/chassis-runtime/tests/semantic_state.rs`: schema-owned complete semantic state, custom-state validation, transactional publication, and migration;
 - `crates/chassis-runtime/tests/state_adversarial.rs`: bounded hostile/truncated input, resource limits, failure atomicity, and current schema-owned complete-state loading;
 - `crates/chassis-runtime/tests/lifecycle_negative.rs`: product activation failure, state preservation, inactive post-failure state, successful reuse;
-- `crates/chassis-runtime/tests/realtime_alloc.rs`: repeated typed automation completion with callback-thread allocation/deallocation counting, including choice replacement after control edits and decoded state loading;
-- `crates/chassis-runtime/tests/latency.rs`: activation-scoped latency snapshot/stability/removal/recomputation.
+- `crates/chassis-runtime/tests/realtime_alloc.rs`: repeated typed automation completion with callback-thread allocation/deallocation counting, including choice replacement after control edits and decoded state loading; its `support/linked_composition.rs` workload adds real sidechain-driven linked stereo processing, timed typed controls, independently checked composed output, state isolation and off-callback teardown;
+- `crates/chassis-runtime/tests/latency.rs`: activation-scoped latency snapshot/stability/removal/recomputation;
+- `crates/chassis-runtime/tests/native_notes.rs` and `tail_bypass.rs`: failure-atomic base/modulation/tail completion, including DSP/tail panics after output/history mutation, output attempt bounds and abandoning damaged processors;
+- `crates/chassis-runtime/src/telemetry.rs` unit tests and `tests/telemetry_runtime.rs` / `telemetry_alloc.rs`: coherent accepted snapshots, deterministic busy/exhausted/contended outcomes, last-accepted display policy, processor-independent observation lifetime, and callback allocation/deallocation.
 
 Together these fixtures now exercise conventional effects, event-only processors, instruments, multi-output processors, multiple legal layouts/sidechains, dynamic/hosted schema metadata, direct non-plugin runtime use, and CLAP deployment through the same component/runtime ownership model. None required a second lifecycle, richer I/O-policy language, or mandatory helper family.
 

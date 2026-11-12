@@ -157,6 +157,8 @@ impl F32Telemetry {
     /// Attempt to copy one coherent latest snapshot into `output`.
     ///
     /// The read performs a fixed number of retries and never waits for a writer.
+    /// On error, `output` may contain an unaccepted or mixed snapshot. Read into
+    /// scratch storage and replace the last accepted display only on success.
     ///
     /// # Errors
     ///
@@ -260,6 +262,59 @@ mod tests {
             telemetry.completed_generation(),
             Some(TelemetryGeneration(0))
         );
+    }
+
+    #[test]
+    fn busy_and_exhausted_publications_leave_payload_and_sequence_untouched() {
+        for (sequence, error) in [
+            (1, TelemetryPublishError::Busy),
+            (
+                LAST_STABLE_SEQUENCE,
+                TelemetryPublishError::GenerationExhausted,
+            ),
+        ] {
+            let telemetry = F32Telemetry::new(&[0.25, -0.75]);
+            telemetry.sequence.store(sequence, Ordering::Release);
+            assert_eq!(telemetry.try_publish(&[1.0, 2.0]), Err(error));
+            assert_eq!(telemetry.sequence.load(Ordering::Acquire), sequence);
+            assert_same_bits(
+                &[
+                    f32::from_bits(telemetry.values[0].load(Ordering::Acquire)),
+                    f32::from_bits(telemetry.values[1].load(Ordering::Acquire)),
+                ],
+                &[0.25, -0.75],
+            );
+        }
+    }
+
+    #[test]
+    fn stalled_publication_preserves_the_last_accepted_display() {
+        let telemetry = F32Telemetry::new(&[0.25, 0.75]);
+        let mut candidate = [0.0; 2];
+        let mut displayed_generation = telemetry.try_snapshot_into(&mut candidate).unwrap();
+        let mut displayed = candidate;
+
+        // A writer owns the odd generation and has replaced only one slot.
+        // Model that state directly, without hooks or scheduler-dependent races.
+        telemetry.sequence.store(1, Ordering::Release);
+        telemetry.values[0].store(1.0_f32.to_bits(), Ordering::Release);
+        candidate = [f32::NAN; 2];
+        let result = telemetry.try_snapshot_into(&mut candidate);
+        if let Ok(generation) = result {
+            displayed = candidate;
+            displayed_generation = generation;
+        }
+        assert_eq!(result, Err(TelemetryReadError::Contended));
+        assert_eq!(telemetry.completed_generation(), None);
+        assert_same_bits(&displayed, &[0.25, 0.75]);
+        assert_eq!(displayed_generation, TelemetryGeneration(0));
+
+        telemetry.values[1].store(2.0_f32.to_bits(), Ordering::Release);
+        telemetry.sequence.store(2, Ordering::Release);
+        displayed_generation = telemetry.try_snapshot_into(&mut candidate).unwrap();
+        displayed = candidate;
+        assert_same_bits(&displayed, &[1.0, 2.0]);
+        assert_eq!(displayed_generation, TelemetryGeneration(1));
     }
 
     #[test]

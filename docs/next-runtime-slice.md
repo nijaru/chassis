@@ -19,7 +19,7 @@ Current custom-state replacement uses deferred reactivation and withholds contro
 | M3 — resource-backed DSP | Step 3, preserving M1/M2 guarantees and applying step 4 to replacement workloads |
 | M4 — qualified core baseline | Step 5 and the integrated consolidation from step 4 |
 
-The current target is M1, continuing with lifecycle/failure and capacity qualification below. Do not wait for M4 to make earlier subsets runnable, testable and documented. Milestone completion does not freeze the pre-alpha API or authorize a version/release.
+The current target is M1, continuing with the authoring-cost proof below. Do not wait for M4 to make earlier subsets runnable, testable and documented. Milestone completion does not freeze the pre-alpha API or authorize a version/release.
 
 Implementation planning selects concrete API proposals, test structure, module/file organization and task order within these slices. Resolve consequential semantic choices against the owning contracts and evidence before coding; do not redefine milestone scope, exclusions or acceptance criteria as an implementation convenience. No per-file task catalog or speculative API shape is prescribed here.
 
@@ -31,13 +31,14 @@ The state-validity slice is implemented: parameter descriptors define independen
 
 CLAP now admits defaults and post-migration custom candidates against the fixed save budget for every descriptor-valid parameter combination. Supported output SysEx attempts consume byte capacity even when oversized. A contained CLAP reset panic disables that activation until deactivation rather than allowing damaged DSP to resume. Their contracts live with [state admission](design/state-format.md#adapter-behavior), [output events](design/events-transport.md#output-events), and [runtime failures](design/runtime.md#failure-rules).
 
+Activation factory/latency/tail panics and failed DSP/tail completion now have explicit preserved-state, metadata and teardown checks. The public-runtime linked-channel/sidechain workload composes independent instances through caller-owned buffers with typed timed controls and callback heap instrumentation. Deterministic telemetry tests protect busy/exhausted publication, bounded contended reads and the last-accepted-display policy. The [fixed-resource subset boundary](design/validation.md#fixed-resource-subset-boundary) consolidates the existing frame/layout, targeting, failure, capacity and public-API proofs; it does not turn allocation checks into timing evidence.
+
 Remaining M1 work:
 
-- Qualify activation latency/tail hook panics and DSP panics with pending base/modulation events. Protect no-partial-child/metadata publication, no failed-block endpoint completion, durable desired state, and teardown without resuming damaged DSP.
-- Consolidate supported event-targeting, frame/layout, failure and capacity outcomes in the fixed-resource subset proof. Include essential events, controls and observations; keep rejection bounded and observable without realtime logging or hidden allocation.
-- Complete the fixed-resource public-API subset proof and relevant authoring/cost checks from step 4. Preserve state failure atomicity, frozen generations, held external modulation, and off-callback ownership/reclamation.
+- Complete step 4's cost proof with equivalent useful DSP through bare kernels, direct runtime and CLAP. Consume multiple parameter trajectories and mixed base/modulation; compare sparse and declared-bound events, relevant channel/topology and raw-alias cases, and independent channel cursors versus shared linked evaluation. Check equivalent output before comparing costs; report batch-average percentiles as such, not individual callback-tail latency.
+- Resolve only ergonomic or execution-cost problems demonstrated by those workloads, then qualify any resulting changes and review M1's exit against its documented limits. Preserve state failure atomicity, frozen generations, held external modulation and off-callback ownership/reclamation.
 
-Do not mark M1 complete from state closure alone or advance to broader control/resource work while these supported lifecycle and capacity outcomes remain unqualified.
+Do not mark M1 complete from state closure, allocation checks or old no-op benchmarks alone. Broader control/resource work remains sequenced after the fixed-resource proof.
 
 ## 2. Finish portable control and processing semantics
 

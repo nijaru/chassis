@@ -11,7 +11,7 @@ use chassis_runtime::{
         NoteEventKind, NoteEvents, NoteExpression, NoteExpressionKind, OutputEvent,
     },
     midi::{MidiEvent, MidiEventLimits, MidiEventPortError, MidiEvents, MidiMessage},
-    parameters::{ParameterDescriptor, ParameterIndex, ParameterStore},
+    parameters::{ParameterDescriptor, ParameterIndex, ParameterStore, ParameterValue},
     process::{
         ActivationConfig, ChannelBufferSlice, InputEventIndex, InputEventOrderError, InputEventRef,
         ProcessBlock, ProcessConfig, ProcessContext, ProcessMode,
@@ -93,12 +93,21 @@ struct Observed {
     parameters: AtomicU32,
     tail_queries: AtomicU32,
 }
+#[derive(Clone, Copy, Default)]
+enum Failure {
+    #[default]
+    None,
+    Error,
+    DspPanic,
+    TailPanic,
+}
+
 #[derive(Default)]
 struct Probe {
     observed: Arc<Observed>,
     script: Vec<(OutputEvent<'static>, Result<(), EventOutputError>)>,
     fail_fast: bool,
-    product_error: bool,
+    failure: Failure,
     input_only: bool,
 }
 impl Component for Probe {
@@ -169,7 +178,7 @@ impl Component for Probe {
                 observed: Arc::clone(&self.observed),
                 script: self.script.clone(),
                 fail_fast: self.fail_fast,
-                product_error: self.product_error,
+                failure: self.failure,
                 input_only: self.input_only,
             },
             processed: false,
@@ -186,6 +195,10 @@ impl Processor for ProbeProcessor {
             .observed
             .tail_queries
             .fetch_add(1, Ordering::Relaxed);
+        assert!(
+            !self.processed || !matches!(self.probe.failure, Failure::TailPanic),
+            "injected post-process tail panic"
+        );
         TailLength::FiniteSamples(if self.processed { 2 } else { 1 })
     }
 }
@@ -243,10 +256,11 @@ impl Process<f32> for ProbeProcessor {
                 assert_eq!(result, expected);
             }
         }
-        if self.probe.product_error {
-            return Err(ProcessError::Message("injected DSP failure"));
+        match self.probe.failure {
+            Failure::Error => Err(ProcessError::Message("injected DSP failure")),
+            Failure::DspPanic => panic!("injected DSP panic after history/output mutation"),
+            Failure::None | Failure::TailPanic => Ok(()),
         }
-        Ok(())
     }
 }
 fn active(probe: &Probe, attempts: u32) -> InstanceRuntime<ProbeProcessor> {
@@ -942,6 +956,57 @@ fn midi_attempts_include_invalid_and_byte_rejections_backpressure_does_not_refun
 }
 
 #[test]
+fn panicking_dsp_or_tail_commits_neither_base_modulation_nor_metadata() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    for failure in [Failure::DspPanic, Failure::TailPanic] {
+        let probe = Probe {
+            failure,
+            script: note_script(vec![(on(Some(OUTPUT), 0), Ok(()))]),
+            ..Probe::default()
+        };
+        let mut runtime = active(&probe, 1);
+        runtime
+            .parameters_mut()
+            .set("gain", ParameterValue::Float(0.25))
+            .unwrap();
+        runtime.set_modulation(GAIN, 0.125).unwrap();
+        let before = runtime.state_document().unwrap();
+        let events = [
+            ParameterEvent::set(5, GAIN, ParameterEventValue::Float(0.75)),
+            ParameterEvent::modulation(7, GAIN, 0.5),
+        ];
+        let mut sink = MixedSink::default();
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| render(
+                &mut runtime,
+                context(&events, &[]),
+                Some(&mut sink)
+            )))
+            .is_err()
+        );
+        assert_eq!(probe.observed.calls.load(Ordering::Relaxed), 1);
+        assert_eq!(probe.observed.parameters.load(Ordering::Relaxed), 2);
+        assert_eq!(sink.count, 1, "already-delivered output is not rolled back");
+        assert_eq!(runtime.state_document().unwrap(), before);
+        assert_eq!(runtime.modulation(GAIN), Some(0.125));
+        assert_eq!(runtime.active_tail(), Some(TailLength::FiniteSamples(1)));
+        assert_eq!(
+            probe.observed.tail_queries.load(Ordering::Relaxed),
+            if matches!(failure, Failure::TailPanic) {
+                2
+            } else {
+                1
+            }
+        );
+        // History/output may already be mutated; never resume this processor.
+        runtime.deactivate().unwrap();
+        assert_eq!(runtime.active_tail(), None);
+        assert_eq!(runtime.state_document().unwrap(), before);
+        assert_eq!(runtime.modulation(GAIN), Some(0.125));
+    }
+}
+
+#[test]
 fn product_error_retains_neither_tail_nor_base_or_modulation_endpoints() {
     for failure in 0..4 {
         let essential_output = failure != 0;
@@ -959,7 +1024,11 @@ fn product_error_retains_neither_tail_nor_base_or_modulation_endpoints() {
                 _ => vec![],
             },
             fail_fast: essential_output,
-            product_error: !essential_output,
+            failure: if essential_output {
+                Failure::None
+            } else {
+                Failure::Error
+            },
             ..Probe::default()
         };
         let mut runtime = active(&probe, 1);

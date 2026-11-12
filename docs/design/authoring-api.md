@@ -254,6 +254,8 @@ The core must remain usable without a stereo-plugin assumption. Its explicit pat
 
 Applications may compose these processors with their own devices, graphs, editors, or offline jobs. That does not promise a Chassis subsystem for every surrounding need. Random-access/multipass work need not adopt the block processor's history/lifecycle; editor and backend capabilities belong outside semantic runtime APIs.
 
+[The linked/composed workload](../../crates/chassis-runtime/tests/support/linked_composition.rs), run by the core allocation fixture, exercises the public runtime with simultaneous stereo and sidechain views, typed sample-positioned width/trim/modulation, and two independent instances connected through caller-owned intermediate buffers. It checks hand-derived audio, state isolation, untouched inputs, and zero callback allocations/deallocations over 1,000 chained blocks, with teardown outside the counted callbacks. This proof covers separate-buffer `f64` embedding; it is not a graph implementation, a CLAP deployment of that DSP, or a timing comparison.
+
 Embedding does not relax memory safety, realtime bounds, schema/state authority, or compatibility identity.
 
 ## Convenience API rule
