@@ -37,6 +37,8 @@ use chassis_runtime::{
 mod linked_composition;
 #[path = "support/resource_state.rs"]
 mod resource_state;
+#[path = "support/trajectory_portability.rs"]
+mod trajectory_portability;
 
 const MAIN_INPUT_INDEX: AudioPortIndex = AudioPortIndex::new(0);
 const MAIN_OUTPUT_INDEX: AudioPortIndex = AudioPortIndex::new(1);
@@ -196,6 +198,16 @@ fn process_context(events: &[ParameterEvent]) -> ProcessContext<'_> {
 
 #[test]
 fn repeated_post_activation_process_calls_do_not_allocate_or_deallocate() {
+    typed_automation_callbacks_do_not_allocate_or_reclaim();
+    separate_callbacks_do_not_allocate_or_reclaim::<f32>();
+    separate_callbacks_do_not_allocate_or_reclaim::<f64>();
+    pending_resource_callbacks_do_not_allocate_or_reclaim();
+    mixed_event_callbacks_do_not_allocate_or_reclaim();
+    linked_composition::qualify();
+    trajectory_portability::qualify();
+}
+
+fn typed_automation_callbacks_do_not_allocate_or_reclaim() {
     let component = Effect;
     let mut runtime = InstanceRuntime::for_component(&component).expect("runtime schema is valid");
     runtime
@@ -305,11 +317,6 @@ fn repeated_post_activation_process_calls_do_not_allocate_or_deallocate() {
     assert_eq!(DEALLOCATIONS.load(Ordering::Relaxed), 0);
 
     runtime.deactivate().expect("deactivation succeeds");
-    separate_callbacks_do_not_allocate_or_reclaim::<f32>();
-    separate_callbacks_do_not_allocate_or_reclaim::<f64>();
-    pending_resource_callbacks_do_not_allocate_or_reclaim();
-    mixed_event_callbacks_do_not_allocate_or_reclaim();
-    linked_composition::qualify();
 }
 
 fn separate_callbacks_do_not_allocate_or_reclaim<S>()

@@ -19,7 +19,7 @@ Current custom-state replacement uses deferred reactivation and withholds contro
 | M3 — resource-backed DSP | Step 3, preserving M1/M2 guarantees and applying step 4 to replacement workloads |
 | M4 — qualified core baseline | Step 5 and the integrated consolidation from step 4 |
 
-The current target is M2, starting with the trajectory-fidelity reference proof in step 2. Do not wait for M4 to make earlier subsets runnable, testable and documented. Milestone completion does not freeze the pre-alpha API or authorize a version/release.
+The current target is M2. The bounded trajectory-fidelity reference proof establishes the direction; production mapping admission and consumed-coordinate ownership are next in step 2. Do not wait for M4 to make earlier subsets runnable, testable and documented. Milestone completion does not freeze the pre-alpha API or authorize a version/release.
 
 Implementation planning selects concrete API proposals, test structure, module/file organization and task order within these slices. Resolve consequential semantic choices against the owning contracts and evidence before coding; do not redefine milestone scope, exclusions or acceptance criteria as an implementation convenience. No per-file task catalog or speculative API shape is prescribed here.
 
@@ -39,7 +39,7 @@ Step 4's useful-DSP comparisons now cover bare kernels, direct runtime and CLAP,
 
 Owners: [parameters/state](design/parameters-state.md#trajectory-portability-before-stabilization), [events/transport](design/events-transport.md), and [authoring](design/authoring-api.md).
 
-- Specify trajectory interpolation domains and block-boundary anchors. VST3's normalized linear queues and implicit sample -1 anchor cannot generally be projected as the current sample-zero plain-unit ramps under nonlinear mapping. Use a bounded reference fixture; choose faithful prepared evaluation or bounded expansion before freezing the representation. A VST3 adapter is not required for this proof.
+- Implement faithful source-domain trajectory evaluation from the [reference-backed direction](design/parameters-state.md#trajectory-portability-before-stabilization). First close prepared realtime mapping admission and consumed-coordinate ownership across direct plain edits, state loads and resource generations; then select the public representation and migrate callers. Preserve source-domain boundary clipping, plain base-state authority and explicit input/output budgets. Do not promote dense reference expansion or non-realtime presentation hooks into an implicit general callback path. A VST3 adapter is not required.
 - Add typed begin/change/end gestures, origin-aware control publication, observation and echo suppression through a headless control fixture. Include stopped processing, host-originated edits, and state/resource transitions. A GUI toolkit or native window is not required.
 - Extend M1's failure/capacity policies to control publication, including contention, stopped processing and concurrent state changes. Preserve explicit precedence and observable outcomes without callback waits or hidden allocation.
 - Keep unsupported per-note parameter modulation and timestamped transport explicit instead of expanding all event families as a closure requirement.
