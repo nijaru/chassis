@@ -55,6 +55,21 @@ These gates do not establish production DAW behavior or representative performan
 
 Hosted workflows and local results are separate evidence. Before publication, hosted jobs were rejected and local checks supplied the interim record. Consult the actual workflow run for the revision under review before claiming Linux/macOS/Windows coverage. The dated validator, host, and benchmark results below are baselines, not automatic qualification of later commits.
 
+### Fixed-resource capacity and reset failures — 2026-11-12
+
+At code revision `f5841f64866fe41633de25bdea90db5eaa2cf3b1` on macOS 26.7.2 arm64:
+
+- 278 workspace tests, including doctests, passed on stable Rust 1.99.1 and CI-baseline Rust 1.98.0. Formatting, strict all-feature/all-target Clippy on both compilers, warning-denied rustdoc, release workspace build, first-party local Markdown paths, and diff checks passed. Local `cargo-deny` 0.19.0 passed with unused-license-allowance warnings; `cargo-machete` 0.9.1 found no unused dependencies. Package versions, dependencies, audited Clack source, and the corrected validator pin are unchanged.
+- Three actual-entry state regressions failed before the fix: unselected oversized choice IDs, custom loads that fit selected values but leave insufficient room for later choices, and migrations expanding beyond the fixed save budget. Admission now reserves the longest UTF-8 ID of every independent choice with each custom candidate before publication. Tests cover per-payload and combined limits, unchanged state on rejection, an exact-limit save after both controls change, and byte-identical reopen. Migration/custom semantic admission is checked independently from deployment capacity rejection.
+- Allocation-free codec size preflight shares encoding admission and matches actual written byte lengths for empty, all-value, and multibyte documents. Existing golden bytes remain unchanged. The new admission work runs off-thread; scalar callbacks do not inspect or own custom payloads, and save serializes accepted state unchanged.
+- An oversized SysEx attempt reproduced leaving byte capacity available for another payload. It now exhausts the remaining byte budget before returning rejection, never reaches the sink, and does not prevent a short MIDI event while count capacity remains.
+- A reset panic reproduced subsequent product DSP entry through the actual process ABI. Both precision wrappers now retain a failure latch through reset or post-reset tail-query unwinds, reject further start/process calls, and skip repeated product reset calls. All four wrapper/panic-stage cases preserve the prior tail, retain processor ownership until deactivation, destroy exactly once, and allow fresh activation and successful reset. This protects failure containment, not realtime-safe panic unwinding or safe continuation of damaged DSP.
+- All four rebuilt packaged artifacts passed the unchanged corrected pinned validator and separate five-second, two-worker fuzz runs: conformance **35 passed / 0 failed / 9 skipped**, delayed probe **21 / 0 / 23**, note probe **37 / 0 / 7**, MIDI probe **34 / 0 / 10**. A fresh installer build passed all three validator binary regressions.
+
+Hosted [Rust CI](https://github.com/nijaru/chassis/actions/runs/43178602504) and [CLAP Conformance](https://github.com/nijaru/chassis/actions/runs/43178602515) succeeded at this exact code revision. All seven Rust jobs and all three Linux/macOS/Windows CLAP jobs were checked individually; each CLAP job packaged, validated, and fuzzed all four exports.
+
+M1 remains open for the failure cases and fixed-resource public-API/authoring-cost proof in [the execution plan](../next-runtime-slice.md#1-close-statecontrol-validity-first). No production DAW scenario, representative performance run, or Miri qualification was repeated. This evidence-only follow-up records the code revision above; API and CHSS compatibility remain provisional.
+
 ### Independent parameter-domain state validity — 2026-11-12
 
 At code revision `5d15cc5d3386475a6b198d32dd4f2451e6796d03` on macOS 26.7.2 arm64:
