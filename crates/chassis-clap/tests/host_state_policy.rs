@@ -2,14 +2,16 @@
 
 use chassis_clap::{ClapComponent, SingleComponentEntry};
 use chassis_runtime::{
-    parameters::{ParameterDescriptor, ParameterStore, ParameterValue},
+    parameters::{ParameterDescriptor, ParameterStore},
     process::{ActivationConfig, ProcessBlock},
     runtime::{Component, ComponentStateError, Process, Processor},
     schema::{ComponentId, ComponentSchema, ComponentSchemaError, StateSchemaVersion},
     state::{StateDocument, StateEntry, StateLimits, StateMigration, StateValue},
 };
-use clack_extensions::state::PluginState;
-use clack_host::{factory::plugin::PluginFactory, prelude::*};
+use clack_extensions::{params::PluginParams, state::PluginState};
+use clack_host::{
+    events::event_types::ParamValueEvent, factory::plugin::PluginFactory, prelude::*,
+};
 use std::{
     io::Cursor,
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -85,14 +87,7 @@ impl<const KIND: u8> Component for PolicyProbe<KIND> {
             vec![]
         }
     }
-    fn validate_state(
-        &self,
-        params: &ParameterStore,
-        custom: &[StateEntry],
-    ) -> Result<(), ComponentStateError> {
-        let Some(ParameterValue::Float(gate)) = params.get("gate") else {
-            unreachable!("float schema");
-        };
+    fn validate_custom_state(&self, custom: &[StateEntry]) -> Result<(), ComponentStateError> {
         let valid_custom = if KIND == 4 {
             matches!(custom, [entry] if entry.key().starts_with("oversized/") && entry.value() == &StateValue::Boolean(true))
         } else if self.custom {
@@ -100,7 +95,7 @@ impl<const KIND: u8> Component for PolicyProbe<KIND> {
         } else {
             custom.is_empty()
         };
-        if *gate > 0.5 || !valid_custom {
+        if !valid_custom {
             return Err(ComponentStateError::new(std::io::Error::other(
                 "policy rejected candidate",
             )));
@@ -185,7 +180,58 @@ fn save(plugin: &mut PluginInstance<Handlers>, extension: PluginState) -> Vec<u8
 }
 
 #[test]
-fn load_uses_component_migrations_and_rejects_policy_failures_atomically() {
+fn accepted_flush_values_save_reopen_and_activate() {
+    let entry = entry::<0>();
+    let mut plugin = instance(&entry).unwrap();
+    let params = plugin
+        .plugin_handle()
+        .get_extension::<PluginParams>()
+        .unwrap();
+    let state = plugin
+        .plugin_handle()
+        .get_extension::<PluginState>()
+        .unwrap();
+    let events = [ParamValueEvent::new(
+        0,
+        ClapId::new(11),
+        Pckn::match_all(),
+        0.75,
+    )];
+    params.flush(
+        &mut plugin.inactive_plugin_handle().unwrap(),
+        &InputEvents::from_buffer(&events),
+        &mut OutputEvents::void(),
+    );
+    assert_eq!(
+        params.get_value(&plugin.plugin_handle(), ClapId::new(11)),
+        Some(0.75)
+    );
+    let saved = save(&mut plugin, state);
+    assert_eq!(saved, document(2, "parameter/gate", 0.75));
+    let mut reopened = instance(&entry).unwrap();
+    let reopened_state = reopened
+        .plugin_handle()
+        .get_extension::<PluginState>()
+        .unwrap();
+    reopened_state
+        .load(&reopened.plugin_handle(), &mut Cursor::new(&saved))
+        .expect("a host-accepted parameter value must remain reloadable");
+    assert_eq!(save(&mut reopened, reopened_state), saved);
+    let processor = reopened
+        .activate(
+            |_, _| Audio,
+            PluginAudioConfiguration {
+                sample_rate: 48_000.0,
+                min_frames_count: 1,
+                max_frames_count: 64,
+            },
+        )
+        .expect("a valid saved control must not invalidate activation");
+    reopened.deactivate(processor);
+}
+
+#[test]
+fn load_uses_component_migrations_and_rejects_invalid_parameters_atomically() {
     let entry = entry::<0>();
     let mut plugin = instance(&entry).unwrap();
     let state = plugin
@@ -214,12 +260,48 @@ fn load_uses_component_migrations_and_rejects_policy_failures_atomically() {
         state
             .load(
                 &plugin.plugin_handle(),
-                &mut Cursor::new(document(2, "parameter/gate", 0.75))
+                &mut Cursor::new(document(2, "parameter/gate", 1.25))
             )
             .is_err()
     );
     assert_eq!(save(&mut plugin, state), accepted);
     plugin.deactivate(processor);
+}
+
+#[test]
+fn custom_policy_rejection_leaves_both_state_domains_unchanged() {
+    let mut plugin = instance(&entry::<1>()).unwrap();
+    let state = plugin
+        .plugin_handle()
+        .get_extension::<PluginState>()
+        .unwrap();
+    let before = save(&mut plugin, state);
+    for custom in [
+        None,
+        Some(("state/flag", false)),
+        Some(("state/unknown", true)),
+    ] {
+        let mut candidate = StateDocument::decode(&document(2, "parameter/gate", 0.75)).unwrap();
+        if let Some((key, value)) = custom {
+            if key != "state/flag" {
+                candidate
+                    .insert(StateEntry::new("state/flag", StateValue::Boolean(true)))
+                    .unwrap();
+            }
+            candidate
+                .insert(StateEntry::new(key, StateValue::Boolean(value)))
+                .unwrap();
+        }
+        assert!(
+            state
+                .load(
+                    &plugin.plugin_handle(),
+                    &mut Cursor::new(candidate.encode().unwrap())
+                )
+                .is_err()
+        );
+        assert_eq!(save(&mut plugin, state), before);
+    }
 }
 
 #[test]

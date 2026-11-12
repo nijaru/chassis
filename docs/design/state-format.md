@@ -142,13 +142,13 @@ bytes
  -> construct complete current parameter candidate
  -> construct canonical custom-state candidate
  -> validate framework parameter domain
- -> validate product invariants over both candidates
+ -> validate component custom-state invariants
  -> publish parameter + custom state together
 ```
 
-No live state is touched until all steps succeed. Product validation can inspect both temporary candidates, so cross-field constraints do not require partial mutation. Product rejection, migration failure, malformed input, and framework validation failure all leave both live domains unchanged.
+No live state is touched until all steps succeed. The framework admits parameter values against independent descriptor domains; `Component::validate_custom_state` admits the custom candidate, including relationships among its fields. Every admitted parameter combination must be meaningful with every admitted custom state; [state validity](parameters-state.md#state-validity-closure) owns that contract. Component rejection, migration failure, malformed input, and framework validation failure all leave both live domains unchanged.
 
-`Component` owns custom defaults, complete validation, and adjacent migration registration; construction and loads cannot substitute per-call policy. The single `Component::activate(config, parameters, custom_state)` hook prepares accepted state off-thread. An accepted active custom-state change freezes the pre-load DSP parameter projection and requests restart. Until deactivation, incoming parameter events are checked but discarded without endpoint completion; desired parameter/custom state remains saveable. Reset and state reversion do not release the gate. Parameter-only loads remain live before this transition. Failed loads change neither desired state nor the gate. Persistence authority remains in `InstanceRuntime`, not in the active processor.
+`Component` owns custom defaults, custom-state validation, and adjacent migration registration; construction and loads cannot substitute per-call policy. The single `Component::activate(config, parameters, custom_state)` hook prepares accepted state off-thread. An accepted active custom-state change freezes the pre-load DSP parameter projection and requests restart. Until deactivation, incoming parameter events are checked but discarded without endpoint completion; desired parameter/custom state remains saveable. Reset and state reversion do not release the gate. Parameter-only loads remain live before this transition. Failed loads change neither desired state nor the gate. Persistence authority remains in `InstanceRuntime`, not in the active processor.
 
 `InstanceRuntime` is the only public complete persistence path; `ParameterStore` has no document export, encoding, or state-application methods. Parameter conversion/admission belongs to the runtime's non-realtime semantic-state owner. Validation reports direct `StateValidationError` variants for identity/version, unknown or missing parameters, and invalid parameter values. Byte loads add only the `StateLoadError` phase boundary; export uses `StateExportError`. Underlying codec, domain, migration, and component failures remain available through `Error::source`.
 

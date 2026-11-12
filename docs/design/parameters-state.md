@@ -140,23 +140,29 @@ bytes
  -> adjacent schema migrations
  -> complete current parameter/custom candidate
  -> framework validation
- -> product validation
+ -> component custom-state validation
  -> publish accepted state together
 ```
 
 Invalid decode, migration, framework values, unknown parameters, incomplete snapshots, or product validation leave live state and restart status unchanged. Typed insertion and decode enforce semantic-value validity before a document can be published.
 
-`Component` supplies custom defaults, complete validation, and registered adjacent migrations. Construction validates descriptor/custom defaults together, even for identity-free components. Complete loads borrow that component, reject schema drift, and cannot substitute a caller-provided validator or migration list. Current-schema missing fields are errors, not requests to merge defaults or live state.
+`Component` supplies custom defaults, `validate_custom_state`, and registered adjacent migrations. The framework validates descriptor domains; the component validates required/unknown custom fields and relationships among those fields. Construction admits both defaults before publishing an instance, even for identity-free components. Complete loads borrow that component, reject schema drift, and cannot substitute a caller-provided validator or migration list. Current-schema missing fields are errors, not requests to merge defaults or live state.
 
 The first accepted active custom-state change freezes the pre-load DSP base/modulation projection and requests reactivation. While the host/environment defers it, DSP keeps old resources and frozen controls; all parameter events are validated but withheld from DSP. Base endpoints are discarded; modulation endpoints update only the desired external signal. Desired parameter/custom state remains saveable. Later loads/control edits update desired state only; reset or state reversion cannot unfreeze DSP. Parameter-only changes remain live before this gate, and processor-originated restart requests do not impose it.
 
-Direct `parameters_mut()` edits and realtime automation validate descriptor domains, not arbitrary product cross-field invariants. Use complete state replacement for coupled control edits; activation checks complete component policy again. Processors must safely handle every admitted automation value with their current resources, requesting restart/retaining valid resources when necessary.
+Direct `parameters_mut()` edits and realtime automation validate descriptor domains. Those domains define independently valid controls, not candidates for later semantic rejection. Use complete state replacement for coupled custom-state edits. Processors must safely handle every admitted effective control with their current resources, requesting restart and retaining a defined consumed configuration when necessary.
 
 ### State validity closure
 
-**Known gap; accepted stabilization invariant, enforcement design pending.** Descriptor-valid control edits and automation can violate component cross-field policy. In the resource-backed table fixture, an accepted index value can exceed the current table's semantic range: processing handles that mismatch and requests restart, but save still succeeds and the same component then rejects the document on load and reactivation. Complete-load validation alone does not make all reachable durable states valid.
+**Implemented:** accepted control edits and successful automation preserve reloadable semantic state under the same schema and component policy. For descriptor domains `D₁ … Dₙ` and admitted custom states `C`, the semantic state space is `D₁ × … × Dₙ × C`. Every parameter combination must remain meaningful with every admitted custom state.
 
-Before stability, framework-generated state must reload under the same schema and component policy. Distinguish semantic validity from active-resource compatibility, and define which independent controls are automation-safe versus which coupled edits require a validated transaction. Preserve explicit desired/consumed state and failure atomicity; save-time repair or running arbitrary product validation on the callback is not a solution. The [execution plan](../next-runtime-slice.md#1-close-statecontrol-validity-first) requires committed direct-edit and automation regressions before selecting the enforcement/API change. Current behavior above remains implemented until that work lands.
+`Component::validate_custom_state(custom)` has no parameter candidate. Its policy must depend only on the custom candidate and immutable component definition, not current controls, processor history, or external resource availability. It runs off-thread at construction, complete load, and activation; the framework independently validates parameter domains. Complete replacement still publishes neither domain until both pass. Save serializes desired state unchanged, without repair or an additional semantic rejection path.
+
+A variable-length table with an absolute independently writable selector must support every declared address in every admitted table. Otherwise change the control's meaning to a defined mapping valid for every table, or keep the dependent reference and table together in custom state. Similarly, independent low/high controls cannot require `low <= high` unless their DSP semantics define both orders. Disabling host automation does not turn an independently writable parameter into an atomic coupled transaction.
+
+Semantic validity is not current-resource compatibility or guaranteed resource acquisition. Preparation may fail for operational reasons, but must not impose hidden semantic parameter constraints. Specialized old resources need defined, bounded behavior until replacement, including for held external modulation; an activation error or an out-of-range fallback must not conceal invalid admitted state. Compatible adoption remains separate [resource-lifecycle work](runtime-services.md#control---realtime-publication).
+
+Direct active/inactive edits, successful automation, and actual-entry CLAP flush/save/reopen regressions protect this boundary. Frozen-generation fixtures use two valid addressable slots and distinguish old/new outputs, rather than relying on an invalid address to detect leaked controls.
 
 `StateExportError` distinguishes missing identity, document construction, and encoding. `StateValidationError` directly identifies identity/version, parameter completeness/domain, component-schema, defaults, and component-policy failures; parameter failures do not require nested wrapper matching. `StateLoadError` distinguishes decode, migration, and validation. Wrapped failures retain their specific evidence through `Error::source`.
 
@@ -196,7 +202,7 @@ Realtime-originated host notifications require a narrow bounded capability; prod
 
 ## Remaining freeze gates
 
-The [roadmap](../roadmap.md#core-stability-gates) owns the full core-stability gate. This contract still needs state-validity closure, source-domain/boundary trajectory proof, product-originated gesture/echo semantics, and refreshed automated-render/active-save evidence. Prepared adoption must preserve this state/control authority; its ownership belongs to [runtime services](runtime-services.md), not a generalized copy of the CLAP scalar bridge.
+The [roadmap](../roadmap.md#core-stability-gates) owns the full core-stability gate. This contract still needs source-domain/boundary trajectory proof, product-originated gesture/echo semantics, and refreshed automated-render/active-save evidence. Prepared adoption must preserve this state/control authority; its ownership belongs to [runtime services](runtime-services.md), not a generalized copy of the CLAP scalar bridge.
 
 API and CHSS compatibility are separate explicit decisions, supported by versioned fixtures and a migration policy. A second format is not required to stabilize the declared core subset; if another adapter is later selected, its state/automation round trips become that adapter's qualification gate. Do not defer initial compatibility policy until there are already released products.
 

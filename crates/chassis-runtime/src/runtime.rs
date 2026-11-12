@@ -72,20 +72,23 @@ pub trait Component {
         Vec::new()
     }
 
-    /// Validate one complete parameter/custom candidate off the realtime thread.
+    /// Validate custom state off the realtime thread.
     ///
-    /// The default policy supports parameters only and rejects all custom fields.
-    /// Products with custom state must check required fields, unknown fields, and
-    /// cross-field invariants here. Defaults and reactivation are checked too.
+    /// Check required/unknown fields and relationships among custom fields.
+    /// The policy must depend only on this candidate and the immutable component
+    /// definition. Defaults, complete loads, and reactivation are checked.
+    /// The default rejects all nonempty custom state.
+    ///
+    /// Parameters are independently editable: every combination of descriptor-
+    /// valid values and admitted custom state must be semantically valid.
+    /// Coupled values that cannot satisfy this belong together in custom state,
+    /// not in independently writable parameters. Resource availability belongs
+    /// to activation, not semantic validation.
     ///
     /// # Errors
     ///
     /// Returns a component policy error without publishing any candidate.
-    fn validate_state(
-        &self,
-        _parameters: &ParameterStore,
-        custom: &[StateEntry],
-    ) -> Result<(), ComponentStateError> {
+    fn validate_custom_state(&self, custom: &[StateEntry]) -> Result<(), ComponentStateError> {
         if custom.is_empty() {
             Ok(())
         } else {
@@ -101,6 +104,10 @@ pub trait Component {
     /// Prepare one processor from the current complete validated state.
     ///
     /// Allocation and resource preparation belong here, before processing.
+    /// Every descriptor-valid parameter combination with admitted custom state
+    /// is semantically valid; preparation may fail for operational reasons,
+    /// not to impose additional parameter constraints. Processing must handle
+    /// admitted effective controls safely until any requested reactivation.
     ///
     /// # Errors
     ///
@@ -178,9 +185,11 @@ pub trait Processor {
     /// Stateless processors may use the default no-op implementation.
     fn reset(&mut self) {}
 
-    /// Request a new activation after processing observes an incompatible control change.
+    /// Request a new activation when a valid control change needs different resources.
     ///
-    /// Keep the current activation's resources and latency intact until deactivation.
+    /// Resource compatibility is not semantic validity: every admitted control
+    /// combination remains valid state. Keep processing defined and bounded with
+    /// the current activation's resources and latency intact until deactivation.
     /// Deployment adapters inspect this after a completed block and publish its
     /// parameter endpoints before requesting a host restart. Control or state changes
     /// received between blocks are observed on the next process call. This request
@@ -626,9 +635,10 @@ where
     ///
     /// Cross-thread adapters must synchronize before entering this single-owner
     /// semantic store; this method itself does not make the runtime `Sync`.
-    /// This view checks descriptor domains, not component cross-field policy.
-    /// Use complete state replacement for coupled non-realtime edits. During a
-    /// pending custom-state restart, edits affect desired state, not frozen DSP.
+    /// Descriptor domains define independently valid parameter values. Coupled
+    /// structural values belong together in custom state and change through
+    /// complete state replacement. During a pending custom-state restart, edits
+    /// affect desired state, not frozen DSP.
     /// The returned view cannot replace the immutable schema:
     ///
     /// ```compile_fail
@@ -726,8 +736,8 @@ where
     /// mismatch/error if the supplied component no longer describes this instance
     /// generation, [`ActivateError::InvalidAudioIo`] for malformed configuration,
     /// [`ActivateError::AudioChannelCapacity`] if topology validation scratch
-    /// cannot be prepared, [`ActivateError::InvalidState`] when complete component
-    /// policy fails, or [`ActivateError::Product`] when product activation fails.
+    /// cannot be prepared, [`ActivateError::InvalidState`] when component custom
+    /// policy fails, or [`ActivateError::Product`] when product preparation fails.
     pub fn activate<C>(
         &mut self,
         component: &C,
@@ -761,7 +771,7 @@ where
         }
 
         component
-            .validate_state(&self.parameters, &self.custom_state)
+            .validate_custom_state(&self.custom_state)
             .map_err(ActivateError::InvalidState)?;
 
         let resolved_audio = audio_io

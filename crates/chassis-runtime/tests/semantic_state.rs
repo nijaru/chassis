@@ -19,7 +19,7 @@ use chassis_runtime::{
     state::{StateDocument, StateEntry, StateLimits, StateValue},
 };
 use resource_state::{TableComponent, TableProcessor, document};
-use std::{num::NonZeroU32, sync::atomic::Ordering};
+use std::num::NonZeroU32;
 
 fn config() -> ProcessConfig {
     ProcessConfig::new(
@@ -71,6 +71,87 @@ fn activate(runtime: &mut InstanceRuntime<TableProcessor>, component: &TableComp
 }
 
 #[test]
+fn direct_control_state_roundtrips_and_reactivates() {
+    for active_before_edit in [false, true] {
+        let component = TableComponent::default();
+        let mut runtime = InstanceRuntime::for_component(&component).unwrap();
+        if active_before_edit {
+            activate(&mut runtime, &component);
+        }
+        runtime
+            .parameters_mut()
+            .set("index", ParameterValue::Float(1.0))
+            .unwrap();
+        let expected = runtime.state_document().unwrap();
+        let encoded = runtime.encode_state(StateLimits::default()).unwrap();
+        let mut reopened = InstanceRuntime::for_component(&component).unwrap();
+        reopened
+            .apply_state_bytes(&component, &encoded, StateLimits::default())
+            .expect("an accepted control value must remain reloadable");
+        assert_eq!(reopened.state_document().unwrap(), expected);
+        activate(&mut reopened, &component);
+        assert!(!runtime.restart_requested());
+        assert_eq!(
+            render(&mut reopened, &[]).unwrap().map(f64::to_bits),
+            [4.0_f64.to_bits(); 4]
+        );
+        if active_before_edit {
+            runtime.deactivate().unwrap();
+        }
+        activate(&mut runtime, &component);
+        assert_eq!(runtime.state_document().unwrap(), expected);
+        assert_eq!(
+            render(&mut runtime, &[]).unwrap().map(f64::to_bits),
+            [4.0_f64.to_bits(); 4]
+        );
+    }
+}
+
+#[test]
+fn automated_control_state_roundtrips_and_reactivates() {
+    let component = TableComponent::default();
+    let mut runtime = InstanceRuntime::for_component(&component).unwrap();
+    activate(&mut runtime, &component);
+    assert_eq!(
+        render(
+            &mut runtime,
+            &[ParameterEvent::set(
+                0,
+                ParameterIndex::new(0),
+                ParameterEventValue::Float(1.0),
+            )],
+        )
+        .unwrap()
+        .map(f64::to_bits),
+        [4.0_f64.to_bits(); 4]
+    );
+    assert_eq!(
+        runtime.parameters().get("index"),
+        Some(&ParameterValue::Float(1.0))
+    );
+    assert!(!runtime.restart_requested());
+    let expected = runtime.state_document().unwrap();
+    let encoded = runtime.encode_state(StateLimits::default()).unwrap();
+    let mut reopened = InstanceRuntime::for_component(&component).unwrap();
+    reopened
+        .apply_state_bytes(&component, &encoded, StateLimits::default())
+        .expect("successful automation must preserve reloadable state");
+    assert_eq!(reopened.state_document().unwrap(), expected);
+    activate(&mut reopened, &component);
+    runtime.deactivate().unwrap();
+    activate(&mut runtime, &component);
+    assert_eq!(runtime.state_document().unwrap(), expected);
+    assert_eq!(
+        render(&mut runtime, &[]).unwrap().map(f64::to_bits),
+        [4.0_f64.to_bits(); 4]
+    );
+    assert_eq!(
+        render(&mut reopened, &[]).unwrap().map(f64::to_bits),
+        [4.0_f64.to_bits(); 4]
+    );
+}
+
+#[test]
 fn pending_resources_freeze_consumed_modulation_but_keep_desired_signal() {
     let component = TableComponent::default();
     let index = ParameterIndex::new(0);
@@ -98,7 +179,7 @@ fn pending_resources_freeze_consumed_modulation_but_keep_desired_signal() {
         [2.0; 4].map(f64::to_bits)
     );
     runtime
-        .apply_state(&component, &document(0.0, &[2]))
+        .apply_state(&component, &document(0.0, &[2, 4]))
         .unwrap();
     assert_eq!(
         render(&mut runtime, &[]).unwrap().map(f64::to_bits),
@@ -108,7 +189,6 @@ fn pending_resources_freeze_consumed_modulation_but_keep_desired_signal() {
         .apply_state(&component, &document(0.0, &[3, 5]))
         .unwrap();
     let saved = runtime.encode_state(StateLimits::default()).unwrap();
-    assert_eq!(component.incompatible_controls.load(Ordering::Relaxed), 0);
     runtime.deactivate().unwrap();
     activate(&mut runtime, &component);
     assert_eq!(
@@ -172,7 +252,12 @@ fn complete_replacement_and_component_rejection_are_failure_atomic() {
     partial
         .insert(StateEntry::new("parameter/index", StateValue::Float(0.0)))
         .unwrap();
-    for invalid in [partial, document(1.0, &[3]), document(0.0, &[])] {
+    for invalid in [
+        partial,
+        document(1.0, &[3]),
+        document(0.0, &[]),
+        document(1.25, &[3, 7]),
+    ] {
         assert!(runtime.apply_state(&component, &invalid).is_err());
         assert_eq!(runtime.state_document().unwrap(), before);
         assert!(!runtime.restart_requested());
@@ -189,7 +274,7 @@ fn pending_complete_generation_never_retargets_old_resources_or_accepts_old_endp
     let mut runtime = InstanceRuntime::for_component(&component).unwrap();
     activate(&mut runtime, &component);
     runtime
-        .apply_state(&component, &document(0.25, &[2]))
+        .apply_state(&component, &document(0.25, &[2, 4]))
         .unwrap();
     assert!(
         !runtime.restart_requested(),
@@ -199,7 +284,7 @@ fn pending_complete_generation_never_retargets_old_resources_or_accepts_old_endp
     runtime.apply_state(&component, &replacement).unwrap();
     assert!(runtime.restart_requested());
     assert_eq!(runtime.state_document().unwrap(), replacement);
-    // Index 1 is valid for the replacement but not for the still-active table.
+    // Mixing the replacement's index with the old table would yield 4, not 2.
     assert_eq!(
         render(&mut runtime, &[]).unwrap().map(f64::to_bits),
         [2.0_f64.to_bits(); 4]
@@ -233,7 +318,7 @@ fn pending_complete_generation_never_retargets_old_resources_or_accepts_old_endp
     );
     assert_eq!(runtime.state_document().unwrap(), edited);
     for next in [
-        document(0.0, &[2]),
+        document(0.0, &[2, 4]),
         replacement.clone(),
         replacement.clone(),
     ] {
@@ -254,11 +339,6 @@ fn pending_complete_generation_never_retargets_old_resources_or_accepts_old_endp
             .is_err()
     );
     assert_eq!(runtime.state_document().unwrap(), replacement);
-    assert_eq!(
-        component.incompatible_controls.load(Ordering::Relaxed),
-        0,
-        "old DSP never saw replacement controls"
-    );
 
     let saved = runtime.encode_state(StateLimits::default()).unwrap();
     let mut reopened = InstanceRuntime::for_component(&component).unwrap();
@@ -351,23 +431,23 @@ fn component_migrations_and_schema_admission_are_not_loader_policies() {
 }
 
 #[test]
-fn reactivation_validates_coupled_control_edits_without_publishing_resources() {
+fn activation_rechecks_custom_policy_without_publishing_resources() {
     let component = TableComponent::default();
     let mut runtime = InstanceRuntime::for_component(&component).unwrap();
-    runtime
-        .parameters_mut()
-        .set("index", ParameterValue::Float(1.0))
-        .unwrap();
+    let before = runtime.state_document().unwrap();
     assert!(matches!(
-        runtime.activate(&component, config(), DEFAULT_EFFECT_CONFIGURATION),
-        Err(ActivateError::InvalidState(_))
+        runtime.activate(&ScalarOnly, config(), DEFAULT_EFFECT_CONFIGURATION),
+        Err(ActivateError::InvalidState(
+            ComponentStateError::UnsupportedCustomState
+        ))
     ));
     assert!(!runtime.is_active());
-    runtime
-        .parameters_mut()
-        .set("index", ParameterValue::Float(0.0))
-        .unwrap();
+    assert_eq!(runtime.state_document().unwrap(), before);
     activate(&mut runtime, &component);
+    assert_eq!(
+        render(&mut runtime, &[]).unwrap().map(f64::to_bits),
+        [2.0_f64.to_bits(); 4]
+    );
 }
 
 struct ScalarOnly;
@@ -386,14 +466,23 @@ impl Component for ScalarOnly {
         &self,
         config: &ActivationConfig<'_>,
         parameters: &ParameterStore,
-        custom: &[StateEntry],
+        _: &[StateEntry],
     ) -> Result<TableProcessor, Self::ActivationError> {
-        TableComponent::default().activate(config, parameters, custom)
+        // This parameter-only definition has fixed resources, not custom data.
+        let fixed = TableComponent::default();
+        fixed.activate(config, parameters, &fixed.default_custom_state())
     }
 }
 #[test]
 fn parameter_only_policy_rejects_custom_state_instead_of_silently_ignoring_it() {
     let mut runtime = InstanceRuntime::for_component(&ScalarOnly).unwrap();
+    runtime
+        .activate(&ScalarOnly, config(), DEFAULT_EFFECT_CONFIGURATION)
+        .unwrap();
+    assert_eq!(
+        render(&mut runtime, &[]).unwrap().map(f64::to_bits),
+        [2.0_f64.to_bits(); 4]
+    );
     let before = runtime.state_document().unwrap();
     assert!(matches!(
         runtime.apply_state(&ScalarOnly, &document(0.0, &[2])),

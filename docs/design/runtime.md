@@ -70,22 +70,23 @@ let mut runtime = InstanceRuntime::for_component(&component)?;
 runtime.activate(&component, process_config, requested_audio_io)?;
 ```
 
-`InstanceRuntime::for_component()` is the only public constructor. It obtains one coherent schema, derives parameter defaults from its descriptors, validates/canonicalizes `Component::default_custom_state()`, and calls `Component::validate_state()` over both halves. Identity-free components follow the same admission without a fabricated persistence ID. The default component policy rejects custom fields; products supporting them validate required/unknown fields and cross-field relationships explicitly.
+`InstanceRuntime::for_component()` is the only public constructor. It obtains one coherent schema, derives parameter defaults from its descriptors, validates/canonicalizes `Component::default_custom_state()`, and calls `Component::validate_custom_state()` on those entries. Identity-free components follow the same admission without a fabricated persistence ID. The default component policy rejects custom fields; products supporting them validate required/unknown fields and relationships among custom fields. Descriptor-valid parameter combinations remain independently valid with every admitted custom state; [state validity](parameters-state.md#state-validity-closure) owns that contract.
 
 Activation then:
 
 1. obtains the component generation's schema;
 2. rejects semantic state identity/version drift;
 3. rejects audio/event/parameter schema or audio-I/O-policy drift;
-4. validates the proposed structural audio configuration against the runtime-owned audio schema;
-5. rejects structurally valid configurations not accepted by the schema-owned `AudioIoPolicy`;
-6. resolves accepted stable audio keys to activation-owned dense metadata and owns the configured ports while non-realtime;
-7. constructs `ActivationConfig` from runtime-owned data;
-8. revalidates complete state through `Component::validate_state()` and calls the single `Component::activate(config, parameters, custom_state)` preparation hook;
-9. reads `Processor::latency()` and `Processor::tail()` from the successfully constructed processor;
-10. publishes the processor, accepted configuration, resolved endpoint metadata, latency, and initial tail snapshot together as the active child.
+4. revalidates custom state through `Component::validate_custom_state()`;
+5. validates the proposed structural audio configuration against the runtime-owned audio schema;
+6. rejects structurally valid configurations not accepted by the schema-owned `AudioIoPolicy`;
+7. resolves accepted stable audio keys to activation-owned dense metadata and owns the configured ports while non-realtime;
+8. constructs `ActivationConfig` from runtime-owned data;
+9. calls the single `Component::activate(config, parameters, custom_state)` preparation hook;
+10. reads `Processor::latency()` and `Processor::tail()` from the successfully constructed processor;
+11. publishes the processor, accepted configuration, resolved endpoint metadata, latency, and initial tail snapshot together as the active child.
 
-A failed activation never publishes a partial active child. Executable negative-space coverage verifies failure leaves the runtime inactive, preserves durable state, and permits later successful activation.
+Preparation may fail for operational resource/configuration reasons, not to reject an otherwise admitted semantic parameter/custom combination. A failed activation never publishes a partial active child. Executable negative-space coverage verifies failure leaves the runtime inactive, preserves durable state, and permits later successful activation.
 
 The component definition is intentionally not stored inside `InstanceRuntime`; construction, complete loads, and activation borrow it. A deployment may transfer the active runtime/processor without forcing `Component: Send` in core. Component validation/migrations and their boxed `ComponentStateError` payloads stay strictly off callbacks.
 
@@ -110,7 +111,7 @@ Runtime-level complete-state operations have one identity authority and do not a
 - `apply_state(...)`;
 - `apply_state_bytes(...)`.
 
-The old runtime `*_for_product`, parameter-only state export/load, and duplicate load-error surfaces are removed. `ParameterStore` may still accept explicit identity internally as a serialization primitive; it is not a competing component identity authority.
+The old runtime `*_for_product`, parameter-only state export/load, and duplicate load-error surfaces are removed. `ParameterStore` exposes typed controls, not a competing persistence API or component identity authority.
 
 State identity is semantic persistence identity. CLAP IDs, VST3 class IDs, Audio Unit identifiers, executable/bundle IDs, display names, and vendor strings are deployment metadata and must map explicitly rather than being silently reused as semantic state identity.
 
@@ -125,7 +126,7 @@ bytes
  -> temporary complete parameter candidate
  -> temporary canonical custom-state candidate
  -> framework validation
- -> product validation over both candidates
+ -> component validation of custom-state invariants
  -> publish both together
 ```
 
@@ -135,7 +136,7 @@ Complete loads borrow the component and reject schema drift; `state_migrations()
 
 An accepted active custom-state change moves the first pre-load parameter store and snapshots its consumed modulation off-thread into one activation-owned frozen control projection, then requests reactivation. Until deactivation, `ProcessBlock` receives that projection and no parameter trajectories. Original event bounds/domains are still checked; notes, MIDI, transport, and audio continue. Base events are discarded without durable endpoint completion; accepted modulation endpoints update only the desired held signal for reactivation. Later loads and direct control edits affect saveable desired state only. Reset, repeated loads, and state reversion cannot refresh or release the frozen projection. Deactivation reclaims it with the old resources off-callback; reactivation validates/prepares the latest desired state.
 
-This intentionally ignores base automation for as long as the environment defers restart, while retaining desired modulation independently. Merely freezing base values while forwarding automation is unsafe for coupled resource bounds. Parameter-only loads before this gate remain block-visible without an automatic runtime restart. Processor-originated restart requests retain their existing parameter/automation behavior; they do not activate the custom-state gate.
+This intentionally ignores base automation for as long as the environment defers restart, while retaining desired modulation independently. Freezing base values while forwarding automation would mix old resources with newly consumed controls. Parameter-only loads before this gate remain block-visible without an automatic runtime restart. Processor-originated restart requests retain their existing parameter/automation behavior; they do not activate the custom-state gate.
 
 Persistent state is semantic versioned data, not Rust object layout or transient DSP history.
 
@@ -230,6 +231,6 @@ Future background tasks, callbacks, editors, deferred reclamation, devices, grap
 
 ## Remaining runtime/core freeze gates
 
-The [roadmap](../roadmap.md#core-stability-gates) owns the declared initial boundary and its stability gates; [the execution plan](../next-runtime-slice.md) orders remaining work. In particular, the current state/control policy has a [validity gap](parameters-state.md#state-validity-closure), and prepared resource adoption/reclamation remains unimplemented. The ownership migration is complete; the core is not yet stable.
+The [roadmap](../roadmap.md#core-stability-gates) owns the declared initial boundary and its stability gates; [the execution plan](../next-runtime-slice.md) orders remaining work. The [state-validity contract](parameters-state.md#state-validity-closure) now separates independent parameter domains from custom-state validation. Lifecycle/failure and capacity qualification remain M1 work; prepared resource adoption/reclamation remains unimplemented. The ownership migration is complete; the core is not yet stable.
 
 Retain `ComponentSchema` / `InstanceRuntime` ownership unless a concrete correctness or authoring mismatch calls for change. Established source contracts and focused in-repository workloads are enough to establish that mismatch; a named product is not required. Per-note parameter modulation, richer I/O policies, graphs, devices, and editor rendering need not be implemented to stabilize the explicitly supported core subset. Pre-alpha interfaces remain replaceable, with callers and contracts migrated together.

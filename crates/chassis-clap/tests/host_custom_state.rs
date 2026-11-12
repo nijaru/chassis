@@ -62,7 +62,6 @@ unsafe impl GlobalAlloc for Allocator {
 #[global_allocator]
 static GLOBAL: Allocator = Allocator;
 
-static INCOMPATIBLE: [AtomicUsize; 2] = [const { AtomicUsize::new(0) }; 2];
 static DROPS: [AtomicUsize; 2] = [const { AtomicUsize::new(0) }; 2];
 static BLOCK_ONCE: AtomicBool = AtomicBool::new(false);
 static DSP_GATE: OnceLock<(SyncSender<()>, Mutex<Receiver<()>>)> = OnceLock::new();
@@ -72,11 +71,7 @@ struct Table<const RACE: bool>;
 fn table(custom: &[StateEntry]) -> Option<&[u8]> {
     let [entry] = custom else { return None };
     match entry.value() {
-        StateValue::Bytes(bytes)
-            if entry.key() == "state/table" && (1..=2).contains(&bytes.len()) =>
-        {
-            Some(bytes)
-        }
+        StateValue::Bytes(bytes) if entry.key() == "state/table" && bytes.len() == 2 => Some(bytes),
         _ => None,
     }
 }
@@ -122,24 +117,15 @@ impl<const RACE: bool> Component for Table<RACE> {
     fn default_custom_state(&self) -> Vec<StateEntry> {
         vec![StateEntry::new(
             "state/table",
-            StateValue::Bytes(if RACE { vec![2, 3] } else { vec![2] }),
+            StateValue::Bytes(if RACE { vec![2, 3] } else { vec![2, 4] }),
         )]
     }
-    fn validate_state(
-        &self,
-        params: &ParameterStore,
-        custom: &[StateEntry],
-    ) -> Result<(), ComponentStateError> {
-        let Some(ParameterEventValue::Float(index)) =
-            params.get_event_value(ParameterIndex::new(0))
-        else {
-            unreachable!()
-        };
-        if table(custom).is_some_and(|bytes| usize::from(index >= 0.5) < bytes.len()) {
+    fn validate_custom_state(&self, custom: &[StateEntry]) -> Result<(), ComponentStateError> {
+        if table(custom).is_some() {
             Ok(())
         } else {
             Err(ComponentStateError::new(std::io::Error::other(
-                "invalid table address",
+                "table must contain exactly two slots",
             )))
         }
     }
@@ -199,12 +185,7 @@ impl<const RACE: bool> Process<f32> for TableDsp<RACE> {
             for (offset, sample) in output.iter_mut().enumerate() {
                 let index =
                     usize::from(cursor.value_at(u32::try_from(offset).unwrap()).unwrap() >= 0.5);
-                if let Some(value) = self.0.get(index) {
-                    *sample = f32::from(*value);
-                } else {
-                    INCOMPATIBLE[usize::from(RACE)].fetch_add(1, Ordering::Relaxed);
-                    *sample = f32::from(self.0[0]);
-                }
+                *sample = f32::from(self.0[index]);
             }
         });
         Ok(())
@@ -374,7 +355,7 @@ fn custom_defaults_migration_deferred_restart_and_reopen_are_complete() {
         .plugin_handle()
         .get_extension::<PluginState>()
         .unwrap();
-    let initial = document(2, 0.0, Some(&[2]));
+    let initial = document(2, 0.0, Some(&[2, 4]));
     assert_eq!(save(&mut plugin, state), initial);
     let mut processor = activate(&mut plugin);
     (processor, _) = run(processor, &EventBuffer::new(), 1, false);
@@ -400,8 +381,8 @@ fn custom_defaults_migration_deferred_restart_and_reopen_are_complete() {
     load(&mut plugin, state, &initial);
     let output;
     (processor, output) = run(processor, &event(0, 1.0), 1, false);
+    // Forwarding index 1 into the frozen old table would produce 4 instead.
     assert_eq!(output.to_bits(), 2.0_f32.to_bits());
-    assert_eq!(INCOMPATIBLE[0].load(Ordering::Relaxed), 0);
     load(&mut plugin, state, &accepted);
     ALLOC.store(0, Ordering::Relaxed);
     DEALLOC.store(0, Ordering::Relaxed);
@@ -430,7 +411,6 @@ fn custom_defaults_migration_deferred_restart_and_reopen_are_complete() {
     load(&mut plugin, state, &desired);
     (processor, output) = run(processor, &event(0, 1.0), 1, false);
     assert_eq!(output.to_bits(), 2.0_f32.to_bits());
-    assert_eq!(INCOMPATIBLE[0].load(Ordering::Relaxed), 0);
     assert_eq!(save(&mut plugin, state), desired);
     plugin.deactivate(processor);
     assert_eq!(DROPS[0].load(Ordering::Relaxed), 1);
@@ -487,7 +467,6 @@ fn load_during_dsp_defeats_old_completion_and_freezes_last_old_block() {
         "the in-flight old-generation block may establish the frozen DSP baseline"
     );
     assert_eq!(save(&mut plugin, state), desired);
-    assert_eq!(INCOMPATIBLE[1].load(Ordering::Relaxed), 0);
     plugin.deactivate(processor);
     let processor = activate(&mut plugin);
     let (processor, output) = run(processor, &EventBuffer::new(), 1, false);

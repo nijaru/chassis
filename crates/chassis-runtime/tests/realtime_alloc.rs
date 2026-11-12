@@ -463,7 +463,6 @@ fn pending_resource_callbacks_do_not_allocate_or_reclaim() {
             .chain(right)
             .all(|value| value.to_bits() == 2.0_f64.to_bits())
     );
-    assert_eq!(component.incompatible_controls.load(Ordering::Relaxed), 0);
     assert_eq!(runtime.state_document().unwrap(), replacement);
     runtime.deactivate().unwrap();
 }

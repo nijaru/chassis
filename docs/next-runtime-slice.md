@@ -4,7 +4,7 @@ Finish and qualify the initial DSP core before building higher layers. [Architec
 
 ## Baseline
 
-Retain the `ComponentSchema` / `InstanceRuntime<P>` / `Processor` ownership split and the runtime-versus-CLAP package boundary. Typed handles, scoped channel views, coherent complete-state publication, native notes/expression, opaque MIDI transport, block-start transport, and activation-scoped latency are implemented. State-validity closure remains open in step 1 below. Their current limitations remain in the matching [design contracts](design/runtime.md); completed qualification belongs to the validation guide rather than a historical completion log here.
+Retain the `ComponentSchema` / `InstanceRuntime<P>` / `Processor` ownership split and the runtime-versus-CLAP package boundary. Typed handles, scoped channel views, coherent complete-state publication, native notes/expression, opaque MIDI transport, block-start transport, and activation-scoped latency are implemented. State-validity closure uses independent descriptor domains and custom-only validation; the remaining M1 work is in step 1 below. Their current limitations remain in the matching [design contracts](design/runtime.md); completed qualification belongs to the validation guide rather than a historical completion log here.
 
 Current custom-state replacement uses deferred reactivation and withholds controls from old resources. Compatible prepared adoption and a general background-work lifecycle are not implemented. The [pinned Clack audit](research/clack-pinned-adapter-audit.md) remains authoritative; this plan does not authorize a dependency refresh.
 
@@ -19,7 +19,7 @@ Current custom-state replacement uses deferred reactivation and withholds contro
 | M3 — resource-backed DSP | Step 3, preserving M1/M2 guarantees and applying step 4 to replacement workloads |
 | M4 — qualified core baseline | Step 5 and the integrated consolidation from step 4 |
 
-The current target is M1, starting with the state-validity regressions below. Do not wait for M4 to make earlier subsets runnable, testable and documented. Milestone completion does not freeze the pre-alpha API or authorize a version/release.
+The current target is M1, continuing with lifecycle/failure and capacity qualification below. Do not wait for M4 to make earlier subsets runnable, testable and documented. Milestone completion does not freeze the pre-alpha API or authorize a version/release.
 
 Implementation planning selects concrete API proposals, test structure, module/file organization and task order within these slices. Resolve consequential semantic choices against the owning contracts and evidence before coding; do not redefine milestone scope, exclusions or acceptance criteria as an implementation convenience. No per-file task catalog or speculative API shape is prescribed here.
 
@@ -27,16 +27,16 @@ Implementation planning selects concrete API proposals, test structure, module/f
 
 Owners: [parameters and state](design/parameters-state.md#state-validity-closure), [runtime lifecycle](design/runtime.md), and [events/transport](design/events-transport.md).
 
-The resource-backed table fixture exposes a reproducible contract gap: an in-domain direct parameter edit or successful automated block can produce an encoded state that the same component rejects on reload and requested reactivation. Descriptor-domain validation and component cross-field validation do not currently preserve the same set of reachable states.
+The state-validity slice is implemented: parameter descriptors define independent domains, while `Component::validate_custom_state` checks custom fields and their relationships. Coupled values that cannot be independently valid belong together in custom state. Direct-edit, successful-automation, and actual-entry CLAP flush/save/reopen regressions reproduced the former rejection before the API migration. [The contract](design/parameters-state.md#state-validity-closure) owns the enforced boundary and remaining resource distinction; [validation](design/validation.md) owns qualification.
 
-- Add committed regressions for both ordinary edits and automation followed by save/reopen and reactivation; confirm the current failure before changing behavior.
-- Separate semantic validity from current-resource compatibility. Define which values may be independently automated and which coupled changes require complete validated replacement.
-- Make accepted durable state reloadable under the same schema/policy. Keep desired state, consumed controls and applied resources explicit; do not hide the problem with save-time repair, callback validation of arbitrary product code, or silent clamping.
-- Migrate core and CLAP callers together. Preserve failure atomicity, held external modulation, and off-callback ownership/reclamation.
-- Review M1's supported event-targeting, frame/layout, reset and process-failure contracts, including when continuation is invalid and which endpoints/metadata can complete.
-- Declare and qualify capacity outcomes for the supported essential events, controls and observations. Keep rejection bounded and observable without realtime logging or hidden allocation.
+Remaining M1 work:
 
-The invariant is accepted; its API/enforcement design must be resolved against the regressions before implementation. Do not mark the existing complete-state surface closed merely because loads themselves validate.
+- Review supported event-targeting, frame/layout, reset and process-failure contracts, including when continuation is invalid and which endpoints/metadata can complete.
+- Declare and qualify capacity outcomes for supported essential events, controls and observations. Keep rejection bounded and observable without realtime logging or hidden allocation.
+- Check CLAP state capacity across every admitted choice ID and custom payload, not only encoded defaults. Choice IDs can vary in length; accepting a short default does not establish that later selections or larger custom payloads leave room for every control value in the fixed save budget.
+- Complete the fixed-resource public-API subset proof and relevant authoring/cost checks from step 4. Preserve state failure atomicity, frozen generations, held external modulation, and off-callback ownership/reclamation.
+
+Do not mark M1 complete from state closure alone or advance to broader control/resource work while these supported lifecycle and capacity outcomes remain unqualified.
 
 ## 2. Finish portable control and processing semantics
 

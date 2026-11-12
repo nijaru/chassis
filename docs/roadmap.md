@@ -38,9 +38,9 @@ Required slices:
 - **Lifecycle and failure closure:** validate the supported activation/reset/deactivation and process-failure rules, endpoint completion, and input/output capacity outcomes before calling the subset dependable.
 - **End-to-end subset proof:** exercise supported audio/event/control behavior and authoring through existing public-API fixtures, with bounded callback work and no allocation/reclamation regression.
 
-**Exit:** the known state-validity gap is closed, supported lifecycle/failure cases are protected, and the fixed-resource examples run with documented limits and revision-scoped qualification. Current CLAP plain-step control and existing declared capabilities remain usable; broader trajectory portability is completed in M2.
+**Exit:** state/control closure holds, supported lifecycle/failure cases are protected, and the fixed-resource examples run with documented limits and revision-scoped qualification. Current CLAP plain-step control and existing declared capabilities remain usable; broader trajectory portability is completed in M2.
 
-**Not required:** compatible resource hot-swapping, new gesture APIs, a GUI, a device backend, or another format. The state-enforcement design remains unresolved and must be settled against the regressions before implementation; see [state validity](design/parameters-state.md#state-validity-closure).
+**Not required:** compatible resource hot-swapping, new gesture APIs, a GUI, a device backend, or another format. [State validity](design/parameters-state.md#state-validity-closure) defines independent parameter domains and custom-state transactions; completing that slice alone does not finish the milestone.
 
 ### M2 — complete control handling
 

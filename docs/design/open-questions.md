@@ -2,10 +2,6 @@
 
 This file owns unresolved decisions, not implemented inventories or a second roadmap. [The execution plan](../next-runtime-slice.md) orders work; [validation](validation.md) owns evidence; [the roadmap](../roadmap.md) owns the initial core boundary, stability gates, and possible later extensions. All APIs and CHSS bytes remain pre-alpha.
 
-## State validity and resource compatibility
-
-How do descriptor-valid independent edits and automation preserve reloadable complete semantic state when a component has cross-field constraints? Which values are automation-safe, which changes require a validated coupled transaction, and which mismatches mean only that current resources are stale? Resolve the [known validity gap](parameters-state.md#state-validity-closure) before treating complete persistence as stable.
-
 ## Control trajectories and origins
 
 Which representation preserves source interpolation domains and boundary anchors without callback use of non-realtime presentation policy? [Trajectory portability](parameters-state.md#trajectory-portability-before-stabilization) records the VST3 normalized-ramp counterexample that the initial core proof must address.

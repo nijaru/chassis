@@ -1,34 +1,26 @@
 //! Resource-backed complete-state client shared by semantic and realtime probes.
 
 use chassis_runtime::{
-    automation::ParameterEventValue,
-    parameters::{
-        ChoiceOption, FloatParameter, ParameterDescriptor, ParameterIndex, ParameterStore,
-    },
+    parameters::{ChoiceOption, FloatParameter, ParameterDescriptor, ParameterStore},
     process::{ActivationConfig, ProcessBlock},
     runtime::{Component, ComponentStateError, Process, Processor},
     schema::{ComponentId, ComponentSchema, ComponentSchemaError, StateSchemaVersion},
     state::{StateDocument, StateEntry, StateMigration, StateValue},
 };
-use std::{
-    convert::Infallible,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
-};
+use std::convert::Infallible;
 
 pub struct TableComponent {
     pub defaults: Vec<StateEntry>,
     pub identified: bool,
-    pub incompatible_controls: Arc<AtomicUsize>,
 }
 impl Default for TableComponent {
     fn default() -> Self {
         Self {
-            defaults: vec![StateEntry::new("state/table", StateValue::Bytes(vec![2]))],
+            defaults: vec![StateEntry::new(
+                "state/table",
+                StateValue::Bytes(vec![2, 4]),
+            )],
             identified: true,
-            incompatible_controls: Arc::new(AtomicUsize::new(0)),
         }
     }
 }
@@ -41,7 +33,8 @@ fn table(custom: &[StateEntry]) -> Option<&[u8]> {
         return None;
     }
     match entry.value() {
-        StateValue::Bytes(bytes) if (1..=2).contains(&bytes.len()) => Some(bytes),
+        // The independently writable selector can address either slot.
+        StateValue::Bytes(bytes) if bytes.len() == 2 => Some(bytes),
         _ => None,
     }
 }
@@ -50,7 +43,7 @@ fn table(custom: &[StateEntry]) -> Option<&[u8]> {
 struct InvalidTable;
 impl std::fmt::Display for InvalidTable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("index must address the complete table")
+        f.write_str("table must contain exactly two slots")
     }
 }
 impl std::error::Error for InvalidTable {}
@@ -116,22 +109,8 @@ impl Component for TableComponent {
     fn default_custom_state(&self) -> Vec<StateEntry> {
         self.defaults.clone()
     }
-    fn validate_state(
-        &self,
-        params: &ParameterStore,
-        custom: &[StateEntry],
-    ) -> Result<(), ComponentStateError> {
-        let Some(table) = table(custom) else {
-            return Err(ComponentStateError::new(InvalidTable));
-        };
-        let Some(ParameterEventValue::Float(index)) =
-            params.get_event_value(ParameterIndex::new(0))
-        else {
-            unreachable!("validated float");
-        };
-        if usize::from(index >= 0.5) >= table.len() {
-            return Err(ComponentStateError::new(InvalidTable));
-        }
+    fn validate_custom_state(&self, custom: &[StateEntry]) -> Result<(), ComponentStateError> {
+        table(custom).ok_or_else(|| ComponentStateError::new(InvalidTable))?;
         Ok(())
     }
     fn state_migrations(&self) -> &[&dyn StateMigration<Error = ComponentStateError>] {
@@ -146,8 +125,6 @@ impl Component for TableComponent {
         Ok(TableProcessor {
             index: parameters.float_parameter("index").unwrap(),
             table: table(custom).unwrap().to_vec(),
-            incompatible: Arc::clone(&self.incompatible_controls),
-            restart: false,
         })
     }
 }
@@ -155,14 +132,8 @@ impl Component for TableComponent {
 pub struct TableProcessor {
     index: FloatParameter,
     table: Vec<u8>,
-    incompatible: Arc<AtomicUsize>,
-    restart: bool,
 }
-impl Processor for TableProcessor {
-    fn restart_requested(&self) -> bool {
-        self.restart
-    }
-}
+impl Processor for TableProcessor {}
 impl Process<f64> for TableProcessor {
     fn process(
         &mut self,
@@ -174,15 +145,7 @@ impl Process<f64> for TableProcessor {
             for (offset, output) in channel.output_mut().unwrap().iter_mut().enumerate() {
                 let index =
                     usize::from(cursor.value_at(u32::try_from(offset).unwrap()).unwrap() >= 0.5);
-                if index >= self.table.len() {
-                    // An ordinary incompatible parameter edit requests restart,
-                    // but processing remains valid with the old table meanwhile.
-                    self.incompatible.fetch_add(1, Ordering::Relaxed);
-                    self.restart = true;
-                    *output = f64::from(self.table[0]);
-                } else {
-                    *output = f64::from(self.table[index]);
-                }
+                *output = f64::from(self.table[index]);
             }
         });
         Ok(())

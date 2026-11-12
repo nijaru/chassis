@@ -147,11 +147,7 @@ impl Component for Probe {
             StateValue::Boolean(false),
         )]
     }
-    fn validate_state(
-        &self,
-        _: &ParameterStore,
-        custom: &[StateEntry],
-    ) -> Result<(), ComponentStateError> {
+    fn validate_custom_state(&self, custom: &[StateEntry]) -> Result<(), ComponentStateError> {
         match custom {
             [entry]
                 if entry.key() == "state/resource"

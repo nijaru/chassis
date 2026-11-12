@@ -21,7 +21,7 @@ use core::fmt;
 pub enum ComponentStateError {
     /// A parameter-only component received nonempty custom state.
     UnsupportedCustomState,
-    /// The component rejected its complete candidate.
+    /// The component rejected custom state or a migration.
     Product(Box<dyn std::error::Error + Send + Sync>),
 }
 
@@ -332,7 +332,7 @@ impl<P: Processor> InstanceRuntime<P> {
         candidate_custom
             .sort_unstable_by(|left, right| left.key().as_bytes().cmp(right.key().as_bytes()));
         component
-            .validate_state(&candidate_parameters, &candidate_custom)
+            .validate_custom_state(&candidate_custom)
             .map_err(StateValidationError::Product)?;
 
         if let Some(active) = &mut self.active {
@@ -428,7 +428,7 @@ impl<P: Processor> InstanceRuntime<P> {
             }
         }
         component
-            .validate_state(&self.parameters, &custom)
+            .validate_custom_state(&custom)
             .map_err(StateValidationError::Product)?;
         self.custom_state = custom;
         Ok(())

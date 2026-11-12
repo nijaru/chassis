@@ -140,7 +140,7 @@ pub trait Component {
 
     fn schema(&self) -> Result<ComponentSchema, ComponentSchemaError>;
     fn activate(config, parameters, custom_state) -> Result<Self::Processor, Self::ActivationError>;
-    // Optional custom defaults, complete validation, and migration registration.
+    // Optional custom defaults/validation and state migration registration.
 }
 ```
 
