@@ -55,6 +55,18 @@ These gates do not establish production DAW behavior or representative performan
 
 Hosted workflows and local results are separate evidence. Before publication, hosted jobs were rejected and local checks supplied the interim record. Consult the actual workflow run for the revision under review before claiming Linux/macOS/Windows coverage. The dated validator, host, and benchmark results below are baselines, not automatic qualification of later commits.
 
+### Independent parameter-domain state validity — 2026-11-12
+
+At code revision `5d15cc5d3386475a6b198d32dd4f2451e6796d03` on macOS 26.7.2 arm64:
+
+- 272 workspace tests, including doctests, passed on stable Rust 1.99.1 and CI-baseline Rust 1.98.0. Formatting, strict all-feature/all-target Clippy on both compilers, warning-denied rustdoc, release workspace build, first-party local Markdown paths, and diff checks passed. Local `cargo-deny` 0.19.0 passed with unused-license-allowance warnings; `cargo-machete` 0.9.1 found no unused dependencies. Dependencies, package versions, audited Clack source, and the validator pin and its three patches are unchanged.
+- Direct-control and successful-automation regressions reproduced save succeeding followed by same-policy reload rejection before the fix. An actual CLAP-entry regression independently reproduced inactive flush accepting `0.75` in a declared `0..=1` domain, saving it, then rejecting it on reopen. All now preserve exact desired state through reopen and activation. Direct embedding also checks the selected DSP output after activation.
+- `Component::validate_custom_state` replaces complete parameter/custom validation without a shim. Descriptor domains define independently valid parameters; custom policy still rejects missing, unknown, and invalid custom fields before either candidate is published. Borrowed-definition admission, schema drift, adjacent migrations, and failure-atomic rejection remain covered.
+- The absolute-selector fixtures now require both addressable table slots. Old and new outputs distinguish leaked controls without invalid addressing or a fallback counter. Reversion, reset, desired-only edits, held modulation, in-flight completion races, and 1,000-block pending-resource allocation/deallocation checks remain protected. The parameter-only fixture also now activates its own valid defaults; that assertion reproduced its former fixture-only panic before correction.
+- All four rebuilt packaged artifacts passed the unchanged corrected pinned validator and separate five-second, two-worker fuzz runs: conformance **35 passed / 0 failed / 9 skipped**, delayed probe **21 / 0 / 23**, note probe **37 / 0 / 7**, MIDI probe **34 / 0 / 10**. A fresh installer build passed all three validator binary regressions.
+
+This closes the semantic state-validity slice, not M1 or the core-stability gates. Lifecycle/failure and capacity qualification remain, including checking fixed deployment state budgets across all admitted choice IDs and custom payloads rather than defaults alone. No production DAW scenario, representative performance run, or Miri qualification was repeated. These are local results, not evidence of a hosted platform matrix. This evidence-only follow-up records the code revision above, not its own later documentation commit; API and CHSS compatibility remain provisional.
+
 ### DSP authoring API redesign — 2026-10-30
 
 At code revision `99fc0c664d3f8b9b3df253a3aa0b399cc8b005cc` on macOS 26.6.2 arm64:
