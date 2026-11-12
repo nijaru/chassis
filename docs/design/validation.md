@@ -55,6 +55,28 @@ These gates do not establish production DAW behavior or representative performan
 
 Hosted workflows and local results are separate evidence. Before publication, hosted jobs were rejected and local checks supplied the interim record. Consult the actual workflow run for the revision under review before claiming Linux/macOS/Windows coverage. The dated validator, host, and benchmark results below are baselines, not automatic qualification of later commits.
 
+### Fixed-resource execution costs and M1 exit — 2026-11-12
+
+At code revision `8c683fe87b06d0d6e19e0e69c06dbd07e502e1ca` on macOS 26.7.2 arm64:
+
+- 286 workspace tests, including doctests, passed on stable Rust 1.99.1 and CI-baseline Rust 1.98.0, without failures or ignored tests. Formatting, strict all-feature/all-target Clippy on both compilers, warning-denied rustdoc and diff checks passed. Local `cargo-deny` 0.19.0 passed with unused-license-allowance warnings; `cargo-machete` 0.9.1 found no unused dependencies. This revision changes benchmark/test code only; production code, package versions and dependency pins are unchanged.
+- The replacement benchmark consumes gain, wet/dry and linked-duck depth, each with base steps and global modulation, through bare ordinary slices, the public runtime and the actual CLAP process ABI. An independent per-frame rescan oracle checks exact native `f32`/`f64` audio, completed base values and event-free held modulation before timing. The full release matrix passed all 228 path/strategy/precision/workload preflights.
+- A preflight regression reproduced the original six-event sparse stream becoming constant after steady-state carryover. The corrected twelve-event stream changes every effective parameter within repeated callbacks; both native regression tests and the benchmark enforce that invariant. The declared bound remains 64 combined base/modulation events.
+- Strict-provenance, default-Stacked-Borrows Miri `0.1.0 (9c5648833 2026-11-10)` passed both new precision-specific workload tests, including tiny-block equal-offset events, exact in-place audio and the focused topology cases. They use owned raw CLAP pointer tables, not the pinned host helper's multiport builder. This extends focused boundary evidence, not whole-Clack qualification.
+- Two full release timing runs established the workload-specific [cost evidence below](#realtime-allocation-and-performance). Shared frame-major control evaluation avoids the demonstrated repeated per-channel scans using existing APIs; no new helper, event index or scheduler was needed. The preceding lifecycle, state, allocation and capacity proofs remain applicable to unchanged production code.
+
+Hosted [Rust CI](https://github.com/nijaru/chassis/actions/runs/43211194925) and [CLAP Conformance](https://github.com/nijaru/chassis/actions/runs/43211194947) succeeded at this exact revision. All seven Rust jobs and all three CLAP jobs were inspected, including build, packaging, pinned-validator, validation and fuzz steps. Every platform validated and separately fuzzed all four exports for five seconds with two workers. Validator results below are **passed / warnings / skipped**, with **zero failures** throughout:
+
+| Runner | Conformance | Delayed | Notes | MIDI |
+| --- | --- | --- | --- | --- |
+| macOS | 35 / 0 / 9 | 21 / 0 / 23 | 37 / 0 / 7 | 34 / 0 / 10 |
+| Linux | 34 / 1 / 9 | 20 / 1 / 23 | 37 / 0 / 7 | 34 / 0 / 10 |
+| Windows | 34 / 0 / 10 | 20 / 0 / 24 | 36 / 0 / 8 | 33 / 0 / 11 |
+
+Linux's warnings report denormal-input processing taking 4.22× and 4.47× the normal-input time in the conformance and delayed fixtures. These shared-VM timing observations do not establish their cause or representative cost; denormal performance is not qualified by a green job. The existing [floating-point environment policy](runtime-services.md#denormals--floating-point-environment) remains unchanged: no automatic process guard is supplied. Recheck this limitation during cross-platform M4 cost qualification before making broader performance claims. Windows additionally skips the platform-inapplicable `scan-rtld-now` test.
+
+**M1's documented fixed-resource subset is usable at this revision**, within the [boundary below](#fixed-resource-subset-boundary). State/control recall, supported lifecycle/failure and capacity behavior, public authoring/composition, and useful-DSP costs have matching evidence. This is not core stability, an API/CHSS compatibility promise, or a release. M2's portable trajectories and headless control origins/gestures are next; compatible resource adoption remains M3, and current real-host, integrated performance and compatibility qualification remain M4. No production DAW scenario or individual callback-tail measurement was repeated. This record qualifies the source revision above, not its later documentation commit.
+
 ### Fixed-resource public proof and state-stream ownership — 2026-11-12
 
 At code revision `ac00a47ece851ec4b73fc3e63519d670d0c5b01d` on macOS 26.7.2 arm64, including the fixed-resource proof introduced by `3624d8a311df847a90703aca9e8b108364cb3eeb`:
@@ -69,7 +91,7 @@ At code revision `ac00a47ece851ec4b73fc3e63519d670d0c5b01d` on macOS 26.7.2 arm6
 
 Hosted [Rust CI](https://github.com/nijaru/chassis/actions/runs/43192625279) and [CLAP Conformance](https://github.com/nijaru/chassis/actions/runs/43192624334) succeeded at this exact code revision. All seven Rust jobs and all three Linux/macOS/Windows CLAP jobs were checked individually, including their build, packaging, pinned-validator, validation and fuzz steps. Each CLAP job validated and fuzzed all four exports.
 
-M1 remains open for equivalent useful-DSP cost comparisons through bare kernels, direct runtime and CLAP, including consumed multi-parameter trajectories, event density and topology/alias costs. No production DAW scenario or representative performance run was repeated. This evidence-only follow-up records the code revisions above, not its own later documentation commit; API and CHSS compatibility remain provisional.
+At this baseline, M1 remained open for the useful-DSP cost comparisons subsequently recorded above. No production DAW scenario or representative performance run was repeated at this revision. This evidence-only follow-up records the code revisions above, not its own later documentation commit; API and CHSS compatibility remain provisional.
 
 ### Fixed-resource capacity and reset failures — 2026-11-12
 
@@ -378,7 +400,7 @@ The full adapter allocation test covers 1,000 f32 and 1,000 f64 callbacks for ea
 
 ## Fixed-resource subset boundary
 
-M1's current proof combines the fixtures below; it does not require each fixture to implement every capability. The dated checks above own revision/platform qualification. [The execution plan](../next-runtime-slice.md#4-consolidate-authoring-and-bounded-costs) owns remaining authoring-cost work.
+M1's current proof combines the fixtures below; it does not require each fixture to implement every capability. The dated checks above own revision/platform qualification. [The execution plan](../next-runtime-slice.md#4-consolidate-authoring-and-bounded-costs) carries authoring/cost checks forward into M2–M4.
 
 | Boundary | Qualified behavior and limits | Proof entrypoints |
 | --- | --- | --- |
@@ -388,7 +410,7 @@ M1's current proof combines the fixtures below; it does not require each fixture
 | Events/controls | Declared global controls, native note/expression addressing, opaque MIDI/SysEx/UMP, source-defined mixed order, explicit essential-output rejection retaining prior output. Per-note parameter modulation remains unsupported | `host_conformance.rs`, `exported_notes.rs`, `exported_midi.rs`, `native_notes.rs` |
 | Capacity/observations | Independent event/count/byte attempt limits; rejected SysEx charges byte capacity. Telemetry rejects busy/exhausted publication without writes and bounds contended reads; only accepted snapshots replace display state | `exported_midi.rs`, `native_notes.rs`, `telemetry.rs` unit tests, `telemetry_alloc.rs` |
 | Public authoring/composition | Effects, instruments, event-only processors and direct embedding. Linked stereo/real-sidechain processing composes two instances through caller-owned audio with timed typed controls and zero measured heap traffic; that workload is separate-buffer `f64`, not a new graph or CLAP fixture | `instrument_runtime.rs`, `exported_notes.rs`, `exported_midi.rs`, `realtime_alloc.rs` and its `support/linked_composition.rs` workload |
-| Execution costs | **Open:** equivalent useful DSP through bare kernels, direct runtime and CLAP; consumed multi-parameter base/modulation, event-density and topology/alias comparisons. Allocation checks and older no-op timings do not close this gate | `benches/adapter_overhead.rs`; execution plan step 4 |
+| Execution costs | Equivalent useful DSP through bare ordinary slices, direct runtime and actual CLAP; three consumed base/modulation trajectories, event-density and focused topology/exact-alias comparisons. Shared frame-major evaluation avoids repeated channel cursor work. Local batch-average measurements, not callback-tail or arbitrary-scale guarantees | `benches/adapter_overhead.rs`, `tests/benchmark_workloads.rs`; [conditions and results](#realtime-allocation-and-performance) |
 
 This boundary does not qualify portable source-domain ramps/anchors, gestures/control origins, compatible prepared-resource adoption, a DAW, or representative callback-tail latency. M2/M3 and the broader M4 host/compatibility gates remain separate.
 
@@ -450,22 +472,39 @@ Current mechanical evidence:
 - full CLAP adapter: zero measured allocation/deallocation under the representative mapped topology/event-bound test;
 - frame-count minimum/maximum callbacks succeed and over-bound processing is rejected.
 
-A manual adapter-overhead harness exists at `crates/chassis-clap/benches/adapter_overhead.rs` and runs with:
+The manual [useful-DSP benchmark](../../crates/chassis-clap/benches/adapter_overhead.rs) shares its [workload](../../crates/chassis-clap/benches/support/workload.rs) with [committed equivalence tests](../../crates/chassis-clap/tests/benchmark_workloads.rs):
 
-```text
-cargo bench -p chassis-clap --bench adapter_overhead
+```sh
+cargo bench -p chassis-clap --bench adapter_overhead --locked -- --verify-only
+cargo bench -p chassis-clap --bench adapter_overhead --locked
 ```
 
-It exercises 32/64/128/512-frame blocks, f32/f64, zero/max event load, and stereo main + sidechain. Run it on stable representative hardware and record CPU/architecture, OS, Rust version, release profile, sample rate, topology, and event load. Shared CI VM timing is not production performance evidence.
+It compares bare trusted kernels, direct runtime and actual CLAP process calls, each with shared frame-major control evaluation or independent per-channel cursor bundles. Useful DSP applies gain, wet/dry and linked ducking with three globally modulated floats. Bare kernels evaluate and retain the same stepped controls inside timing but omit framework admission/publication services; they are not a pre-expanded-curve floor. Every path includes identical main-input refill and rendered-output consumption. Setup and independent audio/state equivalence checks are outside timing.
 
-Representative measurement (first recording, 2026-09-03, Mac15,9 / Apple M3 Max / arm64, macOS 26.6.2, rustc 1.98.0 (88d9e12ae 2026-08-18), cargo bench release profile, 48 kHz, stereo main + stereo sidechain, trivial no-op DSP):
+The primary matrix is stereo main plus stereo sidechain, separate buffers, 32/128/512 frames, `f32`/`f64`, and 0/12/64 combined base/modulation events. Focused 128-frame, zero/bound-event cases add mono, mono sidechain, no sidechain, eight discrete main channels and exact reciprocal in-place pairs. Without a sidechain, the detector uses linked main input. Different detector/topology cases are not isolated adapter-only comparisons. Invalid raw aliases remain rejection tests, not useful-DSP timing workloads.
 
-- no-event load: median 49–53 ns/callback across every block size and precision, ~19–20 M callbacks/s;
-- configured 64-event load: median 477–499 ns/callback, ~2.0 M callbacks/s;
-- overhead is flat in frame count and f32/f64; event normalization dominates at ~7 ns/event;
-- two consecutive runs agreed within ~4% on medians; p99 stayed within ~6% of median except single-cell OS noise.
+**Measurement — 2026-11-12, source `8c683fe87b06d0d6e19e0e69c06dbd07e502e1ca`:** Mac15,9 / Apple M3 Max / arm64, 16 logical CPUs, macOS 26.7.2 (25G332), rustc 1.99.1 (58cf8f9c3 2026-10-13), LLVM 23.1.1, default optimized Cargo bench profile, no custom Rust flags, 48 kHz, AC power. This was an interactive desktop with background activity, not isolated or frequency-pinned hardware. Shared CI VM timing is not production performance evidence.
 
-Interpretation: adapter-only overhead is well under a single sample period at 48 kHz (20.8 µs); there is no material adapter cost to optimize before real-client work. This is a distribution measurement on one machine, not a universal constant.
+Each of two serial full runs produced 228 rows. Each row reports p50/p95/p99 of **24 batch-average callback times**, after 64 warmup callbacks. Iterations per batch are `(262144 / (main_channels * frames)).clamp(64, 2048)`; six path/strategy combinations rotate through every order position four times. With 24 batches, nearest-rank p99 is the maximum batch average, **not individual callback-tail latency**. Across the 228 cells, absolute cross-run p50 differences had median 0.48%, p95 4.12% and maximum 8.94%; these describe repeat variation, not callback percentiles.
+
+Representative 128-frame stereo + stereo-sidechain results, in **µs/callback**. Ranges span both precisions and both runs' batch-average p50s:
+
+| Events | Evaluation | Bare trusted | Direct runtime | CLAP |
+| --- | --- | --- | --- | --- |
+| 0 | Shared | 0.426–0.428 | 1.511–1.612 | 1.592–1.699 |
+| 0 | Independent | 0.544–0.584 | 2.728–2.843 | 2.811–2.942 |
+| 12 | Shared | 0.475–0.482 | 2.178–2.190 | 2.383–2.411 |
+| 12 | Independent | 0.627–0.653 | 3.995–4.013 | 4.211–4.222 |
+| 64 | Shared | 0.553–0.580 | 2.510–2.596 | 3.197–3.309 |
+| 64 | Independent | 0.782–0.821 | 4.809–5.030 | 5.498–5.734 |
+
+At 64 events with shared evaluation, the focused 128-frame CLAP p50 ranges were 3.026–3.126 µs for mono + mono sidechain, 3.194–3.238 µs for stereo + mono sidechain, 3.239–3.280 µs without a sidechain, 3.149–3.228 µs for stereo exact in-place, and 3.713–3.773 µs for eight discrete main channels + stereo sidechain. The primary 32- and 512-frame shared CLAP cases spanned 0.535–1.688 µs and 5.828–9.930 µs respectively across event loads, precisions and both runs.
+
+The actionable result is to share effective controls when linked channels use the same trajectories. At 128 frames/64 events, this reduced full `f32` CLAP time by about 1.7× for stereo and 5.3× for eight channels versus independent bundles. Cloning a cursor does not share its mixed-event scan or value evaluation. Independent traversals still need independent cursors; these measurements do not select a universal DSP traversal order or justify a new indexing/span API.
+
+CLAP-minus-runtime time includes raw pointer/alias mapping, event normalization and publication, not an isolated alias-classifier cost. Classification remains bounded O(writable channels × descriptors), quadratic for growing matched I/O; the eight-channel case is not an arbitrary-scale guarantee. These local results establish neither cross-framework superiority, a callback deadline, denormal performance, nor production-host behavior.
+
+**Superseded no-op baseline:** on 2026-09-03, Mac15,9 / M3 Max / arm64, macOS 26.6.2, rustc 1.98.0 (88d9e12ae 2026-08-18), the former stereo + sidechain no-op harness reported 49–53 ns without events and 477–499 ns with 64 events; two runs' medians agreed within roughly 4%. That workload and raw-alias boundary differ from the current implementation. Those numbers cannot establish current control/DSP costs or support the former conclusion that there was no material cost to optimize.
 
 ## Lifecycle / negative space
 

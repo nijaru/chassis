@@ -4,7 +4,7 @@ Finish and qualify the initial DSP core before building higher layers. [Architec
 
 ## Baseline
 
-Retain the `ComponentSchema` / `InstanceRuntime<P>` / `Processor` ownership split and the runtime-versus-CLAP package boundary. Typed handles, scoped channel views, coherent complete-state publication, native notes/expression, opaque MIDI transport, block-start transport, and activation-scoped latency are implemented. State-validity closure uses independent descriptor domains and custom-only validation; the remaining M1 work is in step 1 below. Their current limitations remain in the matching [design contracts](design/runtime.md); completed qualification belongs to the validation guide rather than a historical completion log here.
+Retain the `ComponentSchema` / `InstanceRuntime<P>` / `Processor` ownership split and the runtime-versus-CLAP package boundary. Typed handles, scoped channel views, coherent complete-state publication, native notes/expression, opaque MIDI transport, block-start transport, and activation-scoped latency are implemented. The [fixed-resource subset boundary](design/validation.md#fixed-resource-subset-boundary) and [M1 exit evidence](design/validation.md#fixed-resource-execution-costs-and-m1-exit--2026-11-12) define the qualified baseline and its limits. Their current limitations remain in the matching [design contracts](design/runtime.md); completed qualification belongs to the validation guide rather than a historical completion log here.
 
 Current custom-state replacement uses deferred reactivation and withholds controls from old resources. Compatible prepared adoption and a general background-work lifecycle are not implemented. The [pinned Clack audit](research/clack-pinned-adapter-audit.md) remains authoritative; this plan does not authorize a dependency refresh.
 
@@ -19,7 +19,7 @@ Current custom-state replacement uses deferred reactivation and withholds contro
 | M3 — resource-backed DSP | Step 3, preserving M1/M2 guarantees and applying step 4 to replacement workloads |
 | M4 — qualified core baseline | Step 5 and the integrated consolidation from step 4 |
 
-The current target is M1, continuing with the authoring-cost proof below. Do not wait for M4 to make earlier subsets runnable, testable and documented. Milestone completion does not freeze the pre-alpha API or authorize a version/release.
+The current target is M2, starting with the trajectory-fidelity reference proof in step 2. Do not wait for M4 to make earlier subsets runnable, testable and documented. Milestone completion does not freeze the pre-alpha API or authorize a version/release.
 
 Implementation planning selects concrete API proposals, test structure, module/file organization and task order within these slices. Resolve consequential semantic choices against the owning contracts and evidence before coding; do not redefine milestone scope, exclusions or acceptance criteria as an implementation convenience. No per-file task catalog or speculative API shape is prescribed here.
 
@@ -27,18 +27,13 @@ Implementation planning selects concrete API proposals, test structure, module/f
 
 Owners: [parameters and state](design/parameters-state.md#state-validity-closure), [runtime lifecycle](design/runtime.md), and [events/transport](design/events-transport.md).
 
-The state-validity slice is implemented: parameter descriptors define independent domains, while `Component::validate_custom_state` checks custom fields and their relationships. Coupled values that cannot be independently valid belong together in custom state. Direct-edit, successful-automation, and actual-entry CLAP flush/save/reopen regressions reproduced the former rejection before the API migration. [The contract](design/parameters-state.md#state-validity-closure) owns the enforced boundary and remaining resource distinction; [validation](design/validation.md) owns qualification.
+Preserve the qualified M1 foundation while extending controls and resources:
 
-CLAP now admits defaults and post-migration custom candidates against the fixed save budget for every descriptor-valid parameter combination. Supported output SysEx attempts consume byte capacity even when oversized. A contained CLAP reset panic disables that activation until deactivation rather than allowing damaged DSP to resume. Their contracts live with [state admission](design/state-format.md#adapter-behavior), [output events](design/events-transport.md#output-events), and [runtime failures](design/runtime.md#failure-rules).
+- Parameter descriptors define independently valid domains; `Component::validate_custom_state` checks custom fields and their relationships. Coupled values belong together in custom state. Preserve complete save/reopen, failure-atomic rejection, frozen consumed generations and desired-versus-applied modulation across replacement; [state validity](design/parameters-state.md#state-validity-closure) owns these rules.
+- Keep fixed deployment state-budget admission valid for every admitted parameter combination, not defaults alone. Preserve event/count/byte attempt limits, activation/reset/process failure transitions and off-callback reclamation under the [subset boundary](design/validation.md#fixed-resource-subset-boundary).
+- Retain the [Clack stream-ownership correction](research/clack-pinned-adapter-audit.md#state-stream-ownership--reviewed-2026-11-12) and its regressions; mutable I/O must not claim ownership of const host descriptors.
 
-Activation factory/latency/tail panics and failed DSP/tail completion now have explicit preserved-state, metadata and teardown checks. The public-runtime linked-channel/sidechain workload composes independent instances through caller-owned buffers with typed timed controls and callback heap instrumentation. Deterministic telemetry tests protect busy/exhausted publication, bounded contended reads and the last-accepted-display policy. The [state-stream audit](research/clack-pinned-adapter-audit.md#state-stream-ownership--reviewed-2026-11-12) records the same-pin correction discovered during focused Miri qualification: mutable I/O no longer claims ownership of const host descriptors. The [fixed-resource subset boundary](design/validation.md#fixed-resource-subset-boundary) consolidates the existing frame/layout, targeting, failure, capacity and public-API proofs; it does not turn allocation checks into timing evidence.
-
-Remaining M1 work:
-
-- Complete step 4's cost proof with equivalent useful DSP through bare kernels, direct runtime and CLAP. Consume multiple parameter trajectories and mixed base/modulation; compare sparse and declared-bound events, relevant channel/topology and raw-alias cases, and independent channel cursors versus shared linked evaluation. Check equivalent output before comparing costs; report batch-average percentiles as such, not individual callback-tail latency.
-- Resolve only ergonomic or execution-cost problems demonstrated by those workloads, then qualify any resulting changes and review M1's exit against its documented limits. Preserve state failure atomicity, frozen generations, held external modulation and off-callback ownership/reclamation.
-
-Do not mark M1 complete from state closure, allocation checks or old no-op benchmarks alone. Broader control/resource work remains sequenced after the fixed-resource proof.
+Step 4's useful-DSP comparisons now cover bare kernels, direct runtime and CLAP, including changing multi-parameter base/modulation, event density, focused topology/exact-alias cases and independent versus shared evaluation. Keep their output-equivalence and steady-state-variation preflights when extending the workloads. The [cost evidence](design/validation.md#realtime-allocation-and-performance) supports shared evaluation for common linked-channel controls, not a new helper/indexing requirement or a callback-tail guarantee.
 
 ## 2. Finish portable control and processing semantics
 
