@@ -57,7 +57,54 @@ impl<'a> InputStream<'a> {
         )
     }
 
-    /// Crates a new input stream for a C FFI-compatible pointer.
+    /// Invokes a callback with a locally owned view of a read-only CLAP stream.
+    ///
+    /// Reads preserve the original descriptor address, context and return value.
+    /// Replacing the mutable view cannot overwrite the host's descriptor, and
+    /// its borrowed context cannot escape this scope through safe Rust.
+    ///
+    /// ```compile_fail
+    /// use clack_common::stream::InputStream;
+    /// fn escape(reader: &mut impl std::io::Read) {
+    ///     let mut owner = InputStream::from_reader(reader);
+    ///     let _escaped = unsafe { InputStream::with_raw(owner.as_raw_mut(), |stream| {
+    ///         std::mem::replace(stream, InputStream::from_reader(Box::leak(Box::new(std::io::empty()))))
+    ///     }) };
+    /// }
+    /// ```
+    ///
+    /// # Safety
+    /// The original descriptor and its callback/context must remain valid for
+    /// serialized reads throughout the callback, as required by CLAP.
+    pub unsafe fn with_raw<R>(
+        raw: &clap_istream,
+        callback: impl for<'scope> FnOnce(&'scope mut InputStream<'scope>) -> R,
+    ) -> R {
+        unsafe extern "C" fn forward(
+            stream: *const clap_istream,
+            buffer: *mut c_void,
+            size: u64,
+        ) -> i64 {
+            // SAFETY: with_raw owns this forwarding descriptor; its context is
+            // the original live, read-only table guaranteed by the outer caller.
+            let original = unsafe { &*((*stream).ctx.cast::<clap_istream>()) };
+            match original.read {
+                // SAFETY: preserve the original stream and caller's buffer loan.
+                Some(read) => unsafe { read(original, buffer, size) },
+                None => 0,
+            }
+        }
+        let mut input = InputStream(
+            clap_istream {
+                ctx: (raw as *const clap_istream).cast_mut().cast(),
+                read: Some(forward),
+            },
+            PhantomData,
+        );
+        callback(&mut input)
+    }
+
+    /// Creates a new input stream for a C FFI-compatible pointer.
     ///
     /// # Safety
     ///
@@ -67,9 +114,20 @@ impl<'a> InputStream<'a> {
         &mut *(raw as *mut _ as *mut _)
     }
 
-    /// Returns this input stream as a C FFI-compatible pointer.
+    /// Returns this input stream as a C FFI-compatible mutable descriptor.
+    ///
+    /// # Safety
+    /// Any changes must preserve callback/context validity and lifetime. Invalid
+    /// fields can make subsequent safe reads undefined behavior.
+    ///
+    /// ```compile_fail,E0133
+    /// use clack_common::stream::InputStream;
+    /// fn invalidate(stream: &mut InputStream<'_>) {
+    ///     stream.as_raw_mut().ctx = std::ptr::null_mut();
+    /// }
+    /// ```
     #[inline]
-    pub fn as_raw_mut(&mut self) -> &mut clap_istream {
+    pub unsafe fn as_raw_mut(&mut self) -> &mut clap_istream {
         &mut self.0
     }
 }
@@ -107,7 +165,54 @@ impl<'a> OutputStream<'a> {
         )
     }
 
-    /// Crates a new output stream for a C FFI-compatible pointer.
+    /// Invokes a callback with a locally owned view of a read-only CLAP stream.
+    ///
+    /// Writes preserve the original descriptor address, context and return value.
+    /// Replacing the mutable view cannot overwrite the host's descriptor, and
+    /// its borrowed context cannot escape this scope through safe Rust.
+    ///
+    /// ```compile_fail
+    /// use clack_common::stream::OutputStream;
+    /// fn escape(writer: &mut impl std::io::Write) {
+    ///     let mut owner = OutputStream::from_writer(writer);
+    ///     let _escaped = unsafe { OutputStream::with_raw(owner.as_raw_mut(), |stream| {
+    ///         std::mem::replace(stream, OutputStream::from_writer(Box::leak(Box::new(std::io::sink()))))
+    ///     }) };
+    /// }
+    /// ```
+    ///
+    /// # Safety
+    /// The original descriptor and its callback/context must remain valid for
+    /// serialized writes throughout the callback, as required by CLAP.
+    pub unsafe fn with_raw<R>(
+        raw: &clap_ostream,
+        callback: impl for<'scope> FnOnce(&'scope mut OutputStream<'scope>) -> R,
+    ) -> R {
+        unsafe extern "C" fn forward(
+            stream: *const clap_ostream,
+            buffer: *const c_void,
+            size: u64,
+        ) -> i64 {
+            // SAFETY: with_raw owns this forwarding descriptor; its context is
+            // the original live, read-only table guaranteed by the outer caller.
+            let original = unsafe { &*((*stream).ctx.cast::<clap_ostream>()) };
+            match original.write {
+                // SAFETY: preserve the original stream and caller's buffer loan.
+                Some(write) => unsafe { write(original, buffer, size) },
+                None => 0,
+            }
+        }
+        let mut output = OutputStream(
+            clap_ostream {
+                ctx: (raw as *const clap_ostream).cast_mut().cast(),
+                write: Some(forward),
+            },
+            PhantomData,
+        );
+        callback(&mut output)
+    }
+
+    /// Creates a new output stream for a C FFI-compatible pointer.
     ///
     /// # Safety
     ///
@@ -117,9 +222,20 @@ impl<'a> OutputStream<'a> {
         &mut *(raw as *mut _ as *mut _)
     }
 
-    /// Returns this output stream as a C FFI-compatible pointer.
+    /// Returns this output stream as a C FFI-compatible mutable descriptor.
+    ///
+    /// # Safety
+    /// Any changes must preserve callback/context validity and lifetime. Invalid
+    /// fields can make subsequent safe writes undefined behavior.
+    ///
+    /// ```compile_fail,E0133
+    /// use clack_common::stream::OutputStream;
+    /// fn invalidate(stream: &mut OutputStream<'_>) {
+    ///     stream.as_raw_mut().ctx = std::ptr::null_mut();
+    /// }
+    /// ```
     #[inline]
-    pub fn as_raw_mut(&mut self) -> &mut clap_ostream {
+    pub unsafe fn as_raw_mut(&mut self) -> &mut clap_ostream {
         &mut self.0
     }
 }

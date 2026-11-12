@@ -50,8 +50,9 @@ where
     for<'a> P: Plugin<MainThread<'a>: PluginStateImpl>,
 {
     PluginWrapper::<P>::handle(plugin, |p| {
-        let input = InputStream::from_raw_mut(&mut *(stream as *mut _));
-        p.main_thread().load(input)?;
+        // CLAP lends a const descriptor, not exclusive ownership of its fields.
+        // SAFETY: the host loans a live stream/callback for this invocation.
+        InputStream::with_raw(&*stream, |input| p.main_thread().load(input))?;
         Ok(())
     })
     .is_some()
@@ -63,8 +64,9 @@ where
     for<'a> P: Plugin<MainThread<'a>: PluginStateImpl>,
 {
     PluginWrapper::<P>::handle(plugin, |p| {
-        let output = OutputStream::from_raw_mut(&mut *(stream as *mut _));
-        p.main_thread().save(output)?;
+        // CLAP lends a const descriptor, not exclusive ownership of its fields.
+        // SAFETY: the host loans a live stream/callback for this invocation.
+        OutputStream::with_raw(&*stream, |output| p.main_thread().save(output))?;
         Ok(())
     })
     .is_some()

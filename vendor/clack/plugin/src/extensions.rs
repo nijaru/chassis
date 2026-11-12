@@ -72,9 +72,8 @@
 //!     for<'a> P::MainThread<'a>: PluginStateImplementation,
 //! {
 //!     PluginWrapper::<P>::handle(plugin, |p| {
-//!         let input = InputStream::from_raw_mut(&mut *(stream as *mut _));
-//!         // Retrieve the plugin's main thread struct, and call load() on it
-//!         p.main_thread().load(input)?;
+//!         // Loan a mutable I/O view without claiming ownership of the const table.
+//!         InputStream::with_raw(&*stream, |input| p.main_thread().load(input))?;
 //!         Ok(())
 //!     })
 //!     .is_some()

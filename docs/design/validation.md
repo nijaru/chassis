@@ -338,7 +338,7 @@ The REAPER and performance baselines below were not rerun for this revision.
 
 ## Current in-process CLAP evidence
 
-Tests under `crates/chassis-clap/tests/` exercise the actual exported Chassis CLAP entry through pinned Clack host APIs rather than a synthetic adapter-only seam.
+Tests under `crates/chassis-clap/tests/` exercise the actual exported Chassis CLAP entry through pinned Clack host APIs. Narrow raw-descriptor regressions supplement those actual-entry checks at unsafe boundaries.
 
 Current cases include:
 
@@ -351,6 +351,7 @@ Current cases include:
 - `host_restart.rs`: one processor restart request per activation, immediate successful-state-load restart notification before processing, rejected state without restart, unchanged active latency, and reactivation using published state;
 - `host_active_state_save.rs`: coherent CLAP state save while processing is active;
 - `host_state_policy.rs`: component-owned scalar migrations/validation, atomic load rejection, schema drift, original custom-default preservation, retained-definition policy admission, and deployment wire-budget rejection;
+- `stream_descriptor.rs`: read-only input/output stream tables, original descriptor/context forwarding, partial transfers, EOF/errors, absent callbacks, safe wrapper replacement and preserved original callbacks;
 - `host_custom_state.rs`: resource-backed complete state through default save, migration/rejection, deferred restart/reset/reversion, active flush, save/reopen, zero-allocation pending callbacks, and a load racing old DSP completion whose accepted modulation survives rejected base completion;
 - `host_reentrancy.rs`: plugin -> host -> plugin main-thread re-entry through parameter-rescan and latency-change callbacks;
 - `host_panic_containment.rs`: factory/activation-metadata panic containment with preserved controls, byte-identical desired state, exact processor destruction and same-instance retry; reset-failure latching in both precision wrappers; process panic containment and teardown.
@@ -365,7 +366,7 @@ M1's current proof combines the fixtures below; it does not require each fixture
 
 | Boundary | Qualified behavior and limits | Proof entrypoints |
 | --- | --- | --- |
-| State/control | Independent parameter domains, custom-state transactions, save/reopen, frozen resource epochs, held external modulation, and fixed CLAP save admission | `semantic_state.rs`, `host_state_policy.rs`, `host_custom_state.rs` |
+| State/control | Independent parameter domains, custom-state transactions, save/reopen, frozen resource epochs, held external modulation, fixed CLAP save admission and read-only stream-descriptor ownership | `semantic_state.rs`, `host_state_policy.rs`, `host_custom_state.rs`, `stream_descriptor.rs` |
 | Lifecycle/failure | Failed activation publishes no child/metadata; contained reset failure disables the activation; failed processing completes no base/modulation/tail endpoints. Already-written audio/history/output is not transactional; abandon damaged DSP | `lifecycle_negative.rs`, `host_panic_containment.rs`, `native_notes.rs`, `tail_bypass.rs` |
 | Frames/layouts/buffers | Activation-selected frame and topology bounds, dense endpoint legality, separate/in-place access, accepted exact aliases and rejected partial aliases at the raw boundary | `host_frame_bounds.rs`, `audio_endpoint_runtime.rs`, `layout_sidechain_runtime.rs`, `host_conformance.rs` |
 | Events/controls | Declared global controls, native note/expression addressing, opaque MIDI/SysEx/UMP, source-defined mixed order, explicit essential-output rejection retaining prior output. Per-note parameter modulation remains unsupported | `host_conformance.rs`, `exported_notes.rs`, `exported_midi.rs`, `native_notes.rs` |

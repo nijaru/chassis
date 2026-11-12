@@ -90,7 +90,6 @@ mod plugin {
         for<'a> P: Plugin<MainThread<'a>: PluginStateContextImpl>,
     {
         PluginWrapper::<P>::handle(plugin, |p| {
-            let input = InputStream::from_raw_mut(&mut *(stream as *mut _));
             let Some(context) = StateContextType::from_raw(context) else {
                 return Err(PluginWrapperError::Message(
                     CLAP_LOG_HOST_MISBEHAVING,
@@ -98,7 +97,8 @@ mod plugin {
                 ));
             };
 
-            p.main_thread().load(input, context)?;
+            // SAFETY: CLAP loans a live read-only descriptor and serialized stream.
+            InputStream::with_raw(&*stream, |input| p.main_thread().load(input, context))?;
             Ok(())
         })
         .is_some()
@@ -121,8 +121,8 @@ mod plugin {
                 ));
             };
 
-            let output = OutputStream::from_raw_mut(&mut *(stream as *mut _));
-            p.main_thread().save(output, context)?;
+            // SAFETY: CLAP loans a live read-only descriptor and serialized stream.
+            OutputStream::with_raw(&*stream, |output| p.main_thread().save(output, context))?;
             Ok(())
         })
         .is_some()
