@@ -765,12 +765,14 @@ impl<'a, S> ProcessBlock<'a, S> {
         }
         self.remaining_midi_attempts -= 1;
         if let MidiMessage::SysEx(bytes) = event.message() {
-            let length =
-                u32::try_from(bytes.len()).map_err(|_| EventOutputError::SysExBytesExceeded)?;
-            self.remaining_sysex_bytes = self
-                .remaining_sysex_bytes
-                .checked_sub(length)
-                .ok_or(EventOutputError::SysExBytesExceeded)?;
+            let Some(remaining) = u32::try_from(bytes.len())
+                .ok()
+                .and_then(|length| self.remaining_sysex_bytes.checked_sub(length))
+            else {
+                self.remaining_sysex_bytes = 0;
+                return Err(EventOutputError::SysExBytesExceeded);
+            };
+            self.remaining_sysex_bytes = remaining;
         }
         self.push_output(OutputEvent::Midi(event))
     }

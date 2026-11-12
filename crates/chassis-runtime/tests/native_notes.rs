@@ -849,6 +849,32 @@ fn midi_output_checks_the_messages_dialect_without_conversion() {
 }
 
 #[test]
+fn oversized_sysex_attempt_exhausts_bytes_without_exhausting_short_midi() {
+    let short = MidiEvent::new(0, OUTPUT, MidiMessage::Short([0x90, 60, 127]));
+    let probe = Probe {
+        script: vec![
+            (
+                OutputEvent::Midi(MidiEvent::new(0, OUTPUT, MidiMessage::SysEx(&[1; 5]))),
+                Err(EventOutputError::SysExBytesExceeded),
+            ),
+            (
+                OutputEvent::Midi(MidiEvent::new(0, OUTPUT, MidiMessage::SysEx(&[1]))),
+                Err(EventOutputError::SysExBytesExceeded),
+            ),
+            (OutputEvent::Midi(short), Ok(())),
+        ],
+        ..Probe::default()
+    };
+    let mut sink = MixedSink {
+        expected_midi: Some(short),
+        ..MixedSink::default()
+    };
+    render(&mut active(&probe, 3), context(&[], &[]), Some(&mut sink)).unwrap();
+    assert_eq!(sink.attempts, 1);
+    assert_eq!(sink.count, 1);
+}
+
+#[test]
 fn midi_attempts_include_invalid_and_byte_rejections_backpressure_does_not_refund_bytes() {
     use EventOutputError::*;
     let short = MidiMessage::Short([0x01, 0xff, 0x90]);

@@ -227,6 +227,7 @@ where
     runtime: InstanceRuntime<P>,
     host: HostAudioProcessorHandle<'a>,
     restart_sent: bool,
+    reset_failed: bool,
     host_tail: Option<HostTail>,
     shared: &'a ChassisShared,
     input: InputScratch,
@@ -426,13 +427,6 @@ where
         .map_err(PluginError::from)?
         .with_input_event_bound(C::CLAP_MAX_INPUT_EVENTS);
     let defaults = runtime.state_document().map_err(PluginError::from)?;
-    // Reject definitions whose defaults cannot round-trip through this
-    // deployment's bounded state stream, not only oversized incoming loads.
-    drop(
-        defaults
-            .encode_with_limits(StateLimits::default())
-            .map_err(PluginError::from)?,
-    );
     parameters
         .apply_state(&defaults, identity)
         .map_err(|error| state_error(&error))?;
@@ -530,6 +524,7 @@ where
         host_tail: host.get_extension::<HostTail>(),
         host,
         restart_sent: false,
+        reset_failed: false,
         shared,
         input,
         control_values,
@@ -776,13 +771,11 @@ where
     }
 
     fn reset(&mut self) {
-        self.runtime
-            .reset()
-            .expect("CLAP reset has an active runtime");
-        self.publish_tail();
+        self.reset_runtime();
     }
 
     fn start_processing(&mut self) -> Result<(), PluginError> {
+        self.ensure_reset_succeeded()?;
         self.notify_tail();
         Ok(())
     }
@@ -821,13 +814,11 @@ where
     }
 
     fn reset(&mut self) {
-        self.runtime
-            .reset()
-            .expect("CLAP reset has an active runtime");
-        self.publish_tail();
+        self.reset_runtime();
     }
 
     fn start_processing(&mut self) -> Result<(), PluginError> {
+        self.ensure_reset_succeeded()?;
         self.notify_tail();
         Ok(())
     }
@@ -855,6 +846,29 @@ impl<P, M> ChassisAudioProcessor<'_, P, M>
 where
     P: Processor,
 {
+    fn reset_runtime(&mut self) {
+        if self.reset_failed {
+            return;
+        }
+        // CLAP reset is void. If Clack contains an unwind after partial history
+        // mutation, leave this activation unusable rather than resume damaged DSP.
+        self.reset_failed = true;
+        self.runtime
+            .reset()
+            .expect("CLAP reset has an active runtime");
+        self.publish_tail();
+        self.reset_failed = false;
+    }
+
+    fn ensure_reset_succeeded(&self) -> Result<(), PluginError> {
+        if self.reset_failed {
+            return Err(PluginError::Message(
+                "Chassis reset failed; deactivate before reuse",
+            ));
+        }
+        Ok(())
+    }
+
     fn publish_tail(&mut self) {
         self.shared
             .publish_tail_snapshot(self.runtime.active_tail().expect("runtime is active"));
@@ -882,6 +896,7 @@ where
         P: ChassisProcess<S>,
         S: ClapSample,
     {
+        self.ensure_reset_succeeded()?;
         self.sync_parameters()?;
         let generation = self.parameter_generation;
         if generation.is_some() {

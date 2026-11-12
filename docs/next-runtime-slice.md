@@ -29,11 +29,12 @@ Owners: [parameters and state](design/parameters-state.md#state-validity-closure
 
 The state-validity slice is implemented: parameter descriptors define independent domains, while `Component::validate_custom_state` checks custom fields and their relationships. Coupled values that cannot be independently valid belong together in custom state. Direct-edit, successful-automation, and actual-entry CLAP flush/save/reopen regressions reproduced the former rejection before the API migration. [The contract](design/parameters-state.md#state-validity-closure) owns the enforced boundary and remaining resource distinction; [validation](design/validation.md) owns qualification.
 
+CLAP now admits defaults and post-migration custom candidates against the fixed save budget for every descriptor-valid parameter combination. Supported output SysEx attempts consume byte capacity even when oversized. A contained CLAP reset panic disables that activation until deactivation rather than allowing damaged DSP to resume. Their contracts live with [state admission](design/state-format.md#adapter-behavior), [output events](design/events-transport.md#output-events), and [runtime failures](design/runtime.md#failure-rules).
+
 Remaining M1 work:
 
-- Review supported event-targeting, frame/layout, reset and process-failure contracts, including when continuation is invalid and which endpoints/metadata can complete.
-- Declare and qualify capacity outcomes for supported essential events, controls and observations. Keep rejection bounded and observable without realtime logging or hidden allocation.
-- Check CLAP state capacity across every admitted choice ID and custom payload, not only encoded defaults. Choice IDs can vary in length; accepting a short default does not establish that later selections or larger custom payloads leave room for every control value in the fixed save budget.
+- Qualify activation latency/tail hook panics and DSP panics with pending base/modulation events. Protect no-partial-child/metadata publication, no failed-block endpoint completion, durable desired state, and teardown without resuming damaged DSP.
+- Consolidate supported event-targeting, frame/layout, failure and capacity outcomes in the fixed-resource subset proof. Include essential events, controls and observations; keep rejection bounded and observable without realtime logging or hidden allocation.
 - Complete the fixed-resource public-API subset proof and relevant authoring/cost checks from step 4. Preserve state failure atomicity, frozen generations, held external modulation, and off-callback ownership/reclamation.
 
 Do not mark M1 complete from state closure alone or advance to broader control/resource work while these supported lifecycle and capacity outcomes remain unqualified.

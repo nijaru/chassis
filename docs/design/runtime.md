@@ -210,7 +210,7 @@ A separate bounded scalar projection retains global modulation across CLAP runti
 
 CLAP projects the runtime's completed store rather than replaying automation. Publication uses the generation actually synchronized before processing, so newer control/state publication defeats stale completion. A changed custom epoch gates parameter synchronization and automation until deactivation; desired replacements remain saveable while old resources continue. An already-running old-generation block may finish and establish the frozen local baseline, but cannot overwrite the replacement. Snapshot contention withholds trajectories for that block without permanently latching the gate. [Parameters/state](parameters-state.md#complete-clap-state-publication) owns the full concurrency contract.
 
-CLAP load runs component-owned migrations/complete validation before publishing a candidate. Shared creation validates original defaults against deployment wire bounds; the separately retained definition must admit those defaults rather than substitute its own. Activation and load reject component schema drift. Unsupported event dialects or unrepresentable port mappings still fail explicitly.
+CLAP load runs component-owned migrations/complete validation before publishing a candidate. Shared creation and complete loads enforce the deployment's [save-capacity admission](state-format.md#adapter-behavior). The separately retained definition must admit the original defaults rather than substitute its own. Activation and load reject component schema drift. Unsupported event dialects or unrepresentable port mappings still fail explicitly.
 
 ## Deactivation and teardown
 
@@ -228,6 +228,10 @@ Future background tasks, callbacks, editors, deferred reclamation, devices, grap
 - callback dimensions, parameter/note/MIDI events and payload bounds, and dense audio endpoint legality are validated before product DSP;
 - complete state replacement is failure-atomic;
 - no panic may unwind through a format FFI boundary.
+
+Core callers that catch a panic from active DSP, reset, or its tail hook must abandon that active processor; containment does not restore its history.
+
+CLAP's void reset callback cannot report failure directly. Its adapter marks the activation unusable before entering reset, clearing that mark only after reset and completed-tail publication succeed. A contained unwind leaves subsequent reset calls inert and start/process calls failing without product DSP entry. No processor is reclaimed on the callback; deactivation and fresh activation provide recovery. A reset or its tail hook panicking before completion retains the last published tail snapshot.
 
 ## Remaining runtime/core freeze gates
 

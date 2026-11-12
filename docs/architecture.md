@@ -78,7 +78,7 @@ Unused editor, worker, telemetry, graph, or device facilities impose no hidden p
 
 `chassis-runtime` forbids unsafe code. Necessary adapter unsafe code must have narrow explicit validity/alias/lifetime/threading invariants and matching verification. Untrusted bytes, host/device metadata, and FFI inputs are validated at boundaries; impossible internal states are bugs, not occasions for silent success-shaped fallback.
 
-Panics never unwind through foreign ABI callbacks. Pinned Clack contains activation/process panics; failed activation permits reuse, but process failure terminates the run. Arbitrary DSP state is not promised reusable after a process panic.
+Panics never unwind through foreign ABI callbacks. Pinned Clack contains activation/process/reset panics; failed activation permits reuse, but process failure terminates the run. A CLAP reset panic disables further DSP, reset, and processing starts until deactivation and fresh activation. Arbitrary DSP state is not promised reusable after a process or reset panic.
 
 Prepared-resource publication, reclamation, tasks, and telemetry are specified in [runtime services](design/runtime-services.md).
 

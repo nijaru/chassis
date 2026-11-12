@@ -3,8 +3,11 @@
 use std::{fmt, mem};
 
 use chassis_runtime::{
+    parameters::ParameterKind,
     schema::StateIdentity,
-    state::{StateDocument, StateDocumentError, StateEncodeError, StateEntry, StateLimits},
+    state::{
+        StateDocument, StateDocumentError, StateEncodeError, StateEntry, StateLimits, StateValue,
+    },
 };
 
 use super::{ClapStateProjection, publication::PublicationError};
@@ -73,6 +76,10 @@ impl ClapStateProjection {
         if document.schema_version() != identity.schema_version().get() {
             return Err(StateProjectionError::SchemaVersionMismatch);
         }
+        let limits = StateLimits::default();
+        let mut maximum_encoded_len = document
+            .encoded_len_with_limits(limits)
+            .map_err(StateProjectionError::Encode)?;
         let mut candidate: Vec<_> = self
             .bindings
             .iter()
@@ -91,6 +98,30 @@ impl ClapStateProjection {
             let Some(value) = self.bindings[index].state_plain_value(entry.value()) else {
                 return Err(StateProjectionError::InvalidValue);
             };
+            // CHSS choice payloads are UTF-8 IDs. Reserve the longest declared
+            // ID, not just the selected one; every independent control value must
+            // remain saveable with this custom payload. Other scalar widths are fixed.
+            if let (ParameterKind::Choice { options, .. }, StateValue::Choice(selected)) =
+                (self.bindings[index].descriptor.kind(), entry.value())
+            {
+                let maximum_payload = options
+                    .iter()
+                    .map(|option| option.id().as_str().len())
+                    .max()
+                    .expect("validated choice domain is nonempty");
+                if maximum_payload > limits.max_payload_bytes {
+                    return Err(StateProjectionError::Encode(
+                        StateEncodeError::PayloadTooLarge {
+                            actual: maximum_payload,
+                            maximum: limits.max_payload_bytes,
+                        },
+                    ));
+                }
+                // state_plain_value admitted this exact ID from the domain above.
+                maximum_encoded_len = maximum_encoded_len
+                    .checked_add(maximum_payload - selected.len())
+                    .ok_or(StateProjectionError::Encode(StateEncodeError::SizeOverflow))?;
+            }
             candidate[index] = value;
             parameter_entries += 1;
         }
@@ -99,6 +130,14 @@ impl ClapStateProjection {
                 expected: self.bindings.len(),
                 actual: parameter_entries,
             });
+        }
+        if maximum_encoded_len > limits.max_total_bytes {
+            return Err(StateProjectionError::Encode(
+                StateEncodeError::TotalSizeTooLarge {
+                    actual: maximum_encoded_len,
+                    maximum: limits.max_total_bytes,
+                },
+            ));
         }
         let mut custom = self
             .custom

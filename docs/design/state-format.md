@@ -1,6 +1,6 @@
 # Chassis State Format
 
-Status: preferred bounded semantic-state prototype implemented and qualified through `62b96cc`; **not yet a stable wire-format promise**. The runtime now owns complete parameter + custom semantic state transactionally. CHSS envelope v1 remains provisional pending an explicit compatibility policy and qualification of the selected supported boundaries; unselected formats are not promotion prerequisites.
+Status: bounded semantic-state prototype implemented; **not yet a stable wire-format promise**. Exact qualification belongs to [validation](validation.md). The runtime now owns complete parameter + custom semantic state transactionally. CHSS envelope v1 remains provisional pending an explicit compatibility policy and qualification of the selected supported boundaries; unselected formats are not promotion prerequisites.
 
 ## Goal
 
@@ -100,7 +100,7 @@ Host/project/preset bytes are untrusted.
 - key length;
 - individual payload length.
 
-Limits are checked before associated allocation/copy. Length arithmetic uses checked operations. Parsing work is bounded by validated bytes/entries.
+Limits are checked before associated allocation/copy. Length arithmetic uses checked operations. Parsing work is bounded by validated bytes/entries. `StateDocument::encoded_len_with_limits` performs the encoder's complete size admission without allocating an encoded buffer; successful encoding writes exactly that many bytes.
 
 The qualified adversarial suite additionally checks:
 
@@ -177,7 +177,11 @@ CLAP/VST3 stream boundaries can carry canonical Chassis bytes directly through b
 
 Adapters must not create a second persistence authority for the same component semantics.
 
-The CLAP adapter persists complete parameter/custom state. Loads run component-owned adjacent migrations and validation in a temporary runtime before atomic projection; component schema drift is rejected. Original defaults must fit the deployment's bounded wire format and pass the separately retained definition's policy. Activation admits one complete projected snapshot, while active save captures one completed desired generation even during deferred resource restart. [Parameters/state](parameters-state.md#complete-clap-state-publication) owns epoch gating, in-flight block behavior, and off-callback custom ownership/reclamation. This support does not establish a stable CHSS compatibility promise or background resource adoption.
+The CLAP adapter persists complete parameter/custom state. Loads run component-owned adjacent migrations and validation in a temporary runtime before atomic projection; component schema drift is rejected. Original defaults must pass the separately retained definition's policy.
+
+At shared construction and after migration/validation of every load, CLAP also admits the complete candidate against its fixed save budget for **every parameter combination**, not just the selected values. It reserves each choice's longest UTF-8 stable ID alongside the candidate's custom payload, checks per-payload and aggregate wire bounds, and rejects before projection/publication or host notifications. Accepted scalar edits and automation therefore cannot outgrow that budget. A larger custom candidate may be semantically valid yet fail this deployment admission; save neither repairs nor truncates it.
+
+Activation admits one complete projected snapshot, while active save captures one completed desired generation even during deferred resource restart. [Parameters/state](parameters-state.md#complete-clap-state-publication) owns epoch gating, in-flight block behavior, and off-callback custom ownership/reclamation. This support does not establish a stable CHSS compatibility promise or background resource adoption.
 
 Short/partial stream reads/writes and backend errors are real boundary cases and require adapter tests rather than an assumption that state arrives in one complete call.
 

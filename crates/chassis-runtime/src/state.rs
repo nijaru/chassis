@@ -237,13 +237,16 @@ impl StateDocument {
         self.encode_with_limits(StateLimits::default())
     }
 
-    /// Encode deterministically under explicit bounds.
+    /// Validate encoding bounds and return the exact byte length without allocation.
+    ///
+    /// This shares the encoder's admission checks, allowing deployments to
+    /// establish state capacity before constructing a byte buffer.
     ///
     /// # Errors
     ///
     /// Returns an error when limits or wire lengths are not representable,
     /// or checked size calculations exceed a configured bound.
-    pub fn encode_with_limits(&self, limits: StateLimits) -> Result<Vec<u8>, StateEncodeError> {
+    pub fn encoded_len_with_limits(&self, limits: StateLimits) -> Result<usize, StateEncodeError> {
         validate_limits(limits)?;
         validate_component_id(&self.component_id, limits)?;
         if self.entries.len() > limits.max_entries as usize {
@@ -253,13 +256,10 @@ impl StateDocument {
             });
         }
 
-        let mut entries: Vec<&StateEntry> = self.entries.iter().collect();
-        entries.sort_unstable_by(|left, right| left.key.as_bytes().cmp(right.key.as_bytes()));
-
         let mut total = HEADER_LEN
             .checked_add(self.component_id.len())
             .ok_or(StateEncodeError::SizeOverflow)?;
-        for entry in &entries {
+        for entry in &self.entries {
             if entry.key.len() > limits.max_key_bytes {
                 return Err(StateEncodeError::KeyTooLarge {
                     actual: entry.key.len(),
@@ -292,6 +292,18 @@ impl StateDocument {
             });
         }
 
+        Ok(total)
+    }
+
+    /// Encode deterministically under explicit bounds.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same admission errors as [`Self::encoded_len_with_limits`].
+    pub fn encode_with_limits(&self, limits: StateLimits) -> Result<Vec<u8>, StateEncodeError> {
+        let total = self.encoded_len_with_limits(limits)?;
+        let mut entries: Vec<&StateEntry> = self.entries.iter().collect();
+        entries.sort_unstable_by(|left, right| left.key.as_bytes().cmp(right.key.as_bytes()));
         let component_id_len = u16::try_from(self.component_id.len()).map_err(|_| {
             StateEncodeError::ComponentIdLengthUnrepresentable(self.component_id.len())
         })?;
@@ -1274,6 +1286,59 @@ mod tests {
         let encoded = document.encode().expect("document encodes");
         let decoded = StateDocument::decode(&encoded).expect("document decodes");
         assert_eq!(decoded, document_with_all_values_sorted());
+    }
+
+    #[test]
+    fn encoding_size_preflight_matches_wire_bytes_and_bounds() {
+        let mut unicode = StateDocument::new("試験", 1).unwrap();
+        unicode
+            .insert(StateEntry::new("λ", StateValue::Choice("é".into())))
+            .unwrap();
+        unicode
+            .insert(StateEntry::new("テキスト", StateValue::Text("🎵".into())))
+            .unwrap();
+        for document in [
+            StateDocument::new("empty", 0).unwrap(),
+            document_with_all_values(),
+            unicode,
+        ] {
+            let encoded = document.encode().unwrap();
+            assert_eq!(
+                document.encoded_len_with_limits(StateLimits::default()),
+                Ok(encoded.len())
+            );
+            for limits in [
+                StateLimits {
+                    max_total_bytes: encoded.len(),
+                    ..StateLimits::default()
+                },
+                StateLimits {
+                    max_total_bytes: encoded.len() - 1,
+                    ..StateLimits::default()
+                },
+                StateLimits {
+                    max_payload_bytes: 0,
+                    ..StateLimits::default()
+                },
+                StateLimits {
+                    max_key_bytes: 0,
+                    ..StateLimits::default()
+                },
+                StateLimits {
+                    max_entries: 0,
+                    ..StateLimits::default()
+                },
+                StateLimits {
+                    max_component_id_bytes: 0,
+                    ..StateLimits::default()
+                },
+            ] {
+                assert_eq!(
+                    document.encoded_len_with_limits(limits),
+                    document.encode_with_limits(limits).map(|bytes| bytes.len())
+                );
+            }
+        }
     }
 
     #[test]

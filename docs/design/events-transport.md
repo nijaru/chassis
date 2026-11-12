@@ -200,7 +200,7 @@ Instruments/MIDI processors need a realtime-safe output sink that:
 
 `ProcessBlock::try_push_note_event` and `try_push_midi_event` share one caller-owned `EventSink` accepting `OutputEvent`. One successful-output offset orders both families; neither can bypass the other. Both validate block offsets and port direction/dialect. MIDI targets a concrete output port supporting the message's `Midi1` or `Midi2` dialect.
 
-`ProcessConfig::with_max_output_note_events` and `with_midi_output_limits` bound each family's attempts, including invalid or rejected attempts; defaults are zero. Attempted SysEx bytes are charged before target validation/dispatch and are not refunded on failure. There is no hidden retry or payload copy. With a positive budget, processing without a sink reports `NoSink` rather than dropping events.
+`ProcessConfig::with_max_output_note_events` and `with_midi_output_limits` bound each family's attempts, including invalid or rejected attempts; defaults are zero. Attempted SysEx bytes are charged before target validation/dispatch and are not refunded on failure. An oversized attempt exhausts the remaining byte budget without dispatch; short MIDI remains eligible while its event-attempt budget remains. There is no hidden retry or payload copy. With a positive budget, processing without a sink reports `NoSink` rather than dropping events.
 
 Ordinary output notes/expression address output ports. Voice-end feedback instead addresses the original input port and note tuple. CLAP `NOTE_END` is plugin-to-host only and does not require a fabricated output port. Products must not end a matching voice that remains alive after a same-block retrigger.
 

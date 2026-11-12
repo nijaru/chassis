@@ -2,7 +2,7 @@
 
 use chassis_clap::{ClapComponent, SingleComponentEntry};
 use chassis_runtime::{
-    parameters::{ParameterDescriptor, ParameterStore},
+    parameters::{ChoiceOption, ParameterDescriptor, ParameterStore},
     process::{ActivationConfig, ProcessBlock},
     runtime::{Component, ComponentStateError, Process, Processor},
     schema::{ComponentId, ComponentSchema, ComponentSchemaError, StateSchemaVersion},
@@ -132,6 +132,243 @@ impl<const KIND: u8> ClapComponent for PolicyProbe<KIND> {
     };
     const CLAP_PARAMETER_IDS: &'static [(&'static str, u32)] = &[("gate", 11)];
     const CLAP_MAX_PARAMETER_EVENTS: u32 = 8;
+}
+
+struct BudgetProbe<const PAIR: bool, const ID_BYTES: usize>;
+impl<const PAIR: bool, const ID_BYTES: usize> Default for BudgetProbe<PAIR, ID_BYTES> {
+    fn default() -> Self {
+        Self
+    }
+}
+impl<const PAIR: bool, const ID_BYTES: usize> Component for BudgetProbe<PAIR, ID_BYTES> {
+    type Processor = PolicyProcessor;
+    type ActivationError = std::convert::Infallible;
+    fn schema(&self) -> Result<ComponentSchema, ComponentSchemaError> {
+        ComponentSchema::stereo_effect_with_state(
+            ComponentId::new("test.budget").unwrap(),
+            StateSchemaVersion::new(2),
+            ["left", "right"]
+                .into_iter()
+                .take(usize::from(PAIR) + 1)
+                .map(|key| {
+                    ParameterDescriptor::choice(
+                        key,
+                        key,
+                        vec![
+                            ChoiceOption::new("short", "Short").unwrap(),
+                            ChoiceOption::new(format!("é{}", "x".repeat(ID_BYTES - 2)), "Long")
+                                .unwrap(),
+                        ],
+                        "short",
+                    )
+                    .unwrap()
+                })
+                .collect(),
+        )
+    }
+    fn default_custom_state(&self) -> Vec<StateEntry> {
+        vec![StateEntry::new("state/blob", StateValue::Bytes(vec![]))]
+    }
+    fn validate_custom_state(&self, custom: &[StateEntry]) -> Result<(), ComponentStateError> {
+        if matches!(custom, [entry] if entry.key() == "state/blob" && matches!(entry.value(), StateValue::Bytes(_)))
+        {
+            Ok(())
+        } else {
+            Err(ComponentStateError::UnsupportedCustomState)
+        }
+    }
+    fn state_migrations(&self) -> &[&dyn StateMigration<Error = ComponentStateError>] {
+        &[&InflateBlob]
+    }
+    fn activate(
+        &self,
+        _: &ActivationConfig<'_>,
+        _: &ParameterStore,
+        _: &[StateEntry],
+    ) -> Result<PolicyProcessor, Self::ActivationError> {
+        Ok(PolicyProcessor)
+    }
+}
+impl<const PAIR: bool, const ID_BYTES: usize> ClapComponent for BudgetProbe<PAIR, ID_BYTES> {
+    const CLAP_DESCRIPTOR: chassis_clap::ClapDescriptor = chassis_clap::ClapDescriptor {
+        features: &[c"audio-effect", c"stereo"],
+        ..chassis_clap::ClapDescriptor::new("test.budget-export", "State Budget")
+    };
+    const CLAP_PARAMETER_IDS: &'static [(&'static str, u32)] = if PAIR {
+        &[("left", 11), ("right", 12)]
+    } else {
+        &[("left", 11)]
+    };
+    const CLAP_MAX_PARAMETER_EVENTS: u32 = 8;
+}
+struct InflateBlob;
+impl StateMigration for InflateBlob {
+    type Error = ComponentStateError;
+    fn source_schema(&self) -> u32 {
+        1
+    }
+    fn to_schema(&self) -> u32 {
+        2
+    }
+    fn migrate(&self, doc: StateDocument) -> Result<StateDocument, Self::Error> {
+        let mut result = StateDocument::new(doc.component_id(), 2).unwrap();
+        for entry in doc.entries() {
+            let value = if entry.key() == "state/blob" {
+                StateValue::Bytes(vec![0; StateLimits::default().max_total_bytes])
+            } else {
+                entry.value().clone()
+            };
+            result.insert(StateEntry::new(entry.key(), value)).unwrap();
+        }
+        Ok(result)
+    }
+}
+fn budget_entry<const PAIR: bool, const ID_BYTES: usize>() -> PluginEntry {
+    PluginEntry::load_from_clack::<SingleComponentEntry<BudgetProbe<PAIR, ID_BYTES>>>(c"").unwrap()
+}
+fn budget_document(
+    schema: u32,
+    left: &str,
+    right: Option<&str>,
+    payload_bytes: usize,
+) -> StateDocument {
+    let mut doc = StateDocument::new("test.budget", schema).unwrap();
+    doc.insert(StateEntry::parameter(
+        "left",
+        StateValue::Choice(left.into()),
+    ))
+    .unwrap();
+    if let Some(right) = right {
+        doc.insert(StateEntry::parameter(
+            "right",
+            StateValue::Choice(right.into()),
+        ))
+        .unwrap();
+    }
+    doc.insert(StateEntry::new(
+        "state/blob",
+        StateValue::Bytes(vec![0; payload_bytes]),
+    ))
+    .unwrap();
+    doc
+}
+
+#[test]
+fn unselected_choice_ids_must_fit_the_complete_save_budget() {
+    const LIMIT: usize = 1024 * 1024;
+    assert_eq!(StateLimits::default().max_total_bytes, LIMIT);
+    assert_eq!(StateLimits::default().max_payload_bytes, LIMIT);
+    let core = chassis_runtime::runtime::InstanceRuntime::for_component(
+        &BudgetProbe::<false, { LIMIT + 1 }>,
+    )
+    .unwrap();
+    assert!(
+        core.encode_state(StateLimits::default()).is_ok(),
+        "the short default fits"
+    );
+    assert!(
+        instance(&budget_entry::<false, { LIMIT + 1 }>()).is_err(),
+        "a non-default payload exceeds its bound"
+    );
+    assert!(
+        instance(&budget_entry::<false, LIMIT>()).is_err(),
+        "payload fits but the envelope does not"
+    );
+    assert!(
+        instance(&budget_entry::<true, { LIMIT / 2 }>()).is_err(),
+        "independent choices must fit simultaneously"
+    );
+}
+
+#[test]
+fn custom_load_reserves_room_for_all_parameter_choices() {
+    let entry = budget_entry::<true, 32>();
+    let mut plugin = instance(&entry).unwrap();
+    let state = plugin
+        .plugin_handle()
+        .get_extension::<PluginState>()
+        .unwrap();
+    let before = save(&mut plugin, state);
+    let long = format!("é{}", "x".repeat(30));
+    let parameter_bytes = budget_document(2, &long, Some(&long), 0)
+        .encode()
+        .unwrap()
+        .len();
+    let payload_bytes = StateLimits::default().max_total_bytes - parameter_bytes;
+    let rejected = budget_document(2, "short", Some("short"), payload_bytes + 1)
+        .encode()
+        .unwrap();
+    assert!(
+        state
+            .load(&plugin.plugin_handle(), &mut Cursor::new(rejected))
+            .is_err(),
+        "a fitting candidate must also leave room for future choices"
+    );
+    assert_eq!(save(&mut plugin, state), before);
+    let accepted = budget_document(2, "short", Some("short"), payload_bytes)
+        .encode()
+        .unwrap();
+    state
+        .load(&plugin.plugin_handle(), &mut Cursor::new(&accepted))
+        .unwrap();
+    assert_eq!(save(&mut plugin, state), accepted);
+    let params = plugin
+        .plugin_handle()
+        .get_extension::<PluginParams>()
+        .unwrap();
+    let events =
+        [11, 12].map(|id| ParamValueEvent::new(0, ClapId::new(id), Pckn::match_all(), 1.0));
+    params.flush(
+        &mut plugin.inactive_plugin_handle().unwrap(),
+        &InputEvents::from_buffer(&events),
+        &mut OutputEvents::void(),
+    );
+    let saved = save(&mut plugin, state);
+    assert_eq!(saved.len(), StateLimits::default().max_total_bytes);
+    assert_eq!(
+        saved,
+        budget_document(2, &long, Some(&long), payload_bytes)
+            .encode()
+            .unwrap()
+    );
+    let mut reopened = instance(&entry).unwrap();
+    let reopened_state = reopened
+        .plugin_handle()
+        .get_extension::<PluginState>()
+        .unwrap();
+    reopened_state
+        .load(&reopened.plugin_handle(), &mut Cursor::new(&saved))
+        .unwrap();
+    assert_eq!(save(&mut reopened, reopened_state), saved);
+}
+
+#[test]
+fn migrated_custom_state_must_fit_the_save_budget() {
+    let mut plugin = instance(&budget_entry::<false, 32>()).unwrap();
+    let state = plugin
+        .plugin_handle()
+        .get_extension::<PluginState>()
+        .unwrap();
+    let before = save(&mut plugin, state);
+    let legacy = budget_document(1, "short", None, 0).encode().unwrap();
+    // Decode, migration, and custom policy admit the semantic candidate; only
+    // its deployment save capacity is invalid.
+    let component = BudgetProbe::<false, 32>;
+    let mut core = chassis_runtime::runtime::InstanceRuntime::for_component(&component).unwrap();
+    core.apply_state_bytes(&component, &legacy, StateLimits::default())
+        .unwrap();
+    assert!(matches!(
+        core.state_document()
+            .unwrap()
+            .encoded_len_with_limits(StateLimits::default()),
+        Err(chassis_runtime::state::StateEncodeError::TotalSizeTooLarge { .. })
+    ));
+    assert!(
+        state
+            .load(&plugin.plugin_handle(), &mut Cursor::new(legacy))
+            .is_err()
+    );
+    assert_eq!(save(&mut plugin, state), before);
 }
 
 struct Handlers;
