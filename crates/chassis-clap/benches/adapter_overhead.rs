@@ -1,327 +1,112 @@
-//! Manual adapter-only CLAP overhead benchmark.
-//!
-//! Run on stable representative hardware with:
-//! `cargo bench -p chassis-clap --bench adapter_overhead`
+//! Useful-DSP cost comparisons. Run with `cargo bench -p chassis-clap --bench
+//! adapter_overhead`; append `-- --verify-only` to check equivalence without timing.
 
-use std::{
-    convert::Infallible,
-    hint::black_box,
-    time::{Duration, Instant},
-};
+#[path = "support/workload.rs"]
+mod workload;
 
-use chassis_clap::{ClapComponent, F32AndF64, SingleComponentEntry};
-use chassis_runtime::{
-    parameters::ParameterDescriptor,
-    process::{ActivationConfig, ProcessBlock},
-    runtime::{Component, Process, ProcessError, Processor},
-};
-use clack_host::{
-    events::event_types::ParamValueEvent, factory::plugin::PluginFactory, prelude::*,
-};
+use std::{hint::black_box, time::Instant};
+use workload::{MAX_EVENTS, SPARSE_EVENTS, Sample, runners};
 
-const PARAMETER_ID: u32 = 23;
-const MAX_EVENTS: u32 = 64;
-const BATCHES: usize = 25;
-const ITERATIONS_PER_BATCH: u32 = 5_000;
-const WARMUP_ITERATIONS: u32 = 1_000;
-const FRAME_COUNTS: [u32; 4] = [32, 64, 128, 512];
-const EVENT_COUNTS: [u32; 2] = [0, MAX_EVENTS];
+const BATCHES: usize = 24;
+const WARMUP: usize = 64;
 
-struct BenchComponent {
-    parameters: Vec<ParameterDescriptor>,
+fn percentile(sorted: &[f64], numerator: usize) -> f64 {
+    sorted[(sorted.len() * numerator).div_ceil(100).saturating_sub(1)]
 }
 
-impl Default for BenchComponent {
-    fn default() -> Self {
-        Self {
-            parameters: vec![
-                ParameterDescriptor::float("value", "Value", 0.0, 1.0, 0.5)
-                    .expect("benchmark parameter is valid"),
-            ],
+fn run<S: Sample, const N: usize, const SC: usize>(
+    frames: u32,
+    events: u32,
+    inplace: bool,
+    verify_only: bool,
+) {
+    let mut paths = runners::<S, N, SC>(frames, events, inplace);
+    if verify_only {
+        return;
+    }
+    let iterations = (262_144 / (N * usize::try_from(frames).unwrap())).clamp(64, 2_048);
+    for runner in &mut paths {
+        for _ in 0..WARMUP {
+            runner.render(black_box(true));
         }
     }
-}
-
-impl Component for BenchComponent {
-    type Processor = BenchProcessor;
-    type ActivationError = Infallible;
-
-    fn schema(
-        &self,
-    ) -> Result<
-        chassis_runtime::schema::ComponentSchema,
-        chassis_runtime::schema::ComponentSchemaError,
-    > {
-        chassis_runtime::schema::ComponentSchema::stereo_effect_with_state(
-            chassis_runtime::schema::ComponentId::new("org.nijaru.chassis.semantic.crates.chassis-clap.benches.adapter-overhead.benchcomponent")
-                .expect("semantic component identity is valid"),
-            chassis_runtime::schema::StateSchemaVersion::new(1),
-            self.parameters.clone(),
-        )
-    }
-
-    fn activate(
-        &self,
-        _config: &ActivationConfig<'_>,
-        _parameters: &chassis_runtime::parameters::ParameterStore,
-        _custom_state: &[chassis_runtime::state::StateEntry],
-    ) -> Result<Self::Processor, Self::ActivationError> {
-        Ok(BenchProcessor)
-    }
-}
-
-struct BenchProcessor;
-
-impl Processor for BenchProcessor {}
-
-impl Process<f32> for BenchProcessor {
-    fn process(&mut self, _block: &mut ProcessBlock<'_, f32>) -> Result<(), ProcessError> {
-        Ok(())
-    }
-}
-
-impl Process<f64> for BenchProcessor {
-    fn process(&mut self, _block: &mut ProcessBlock<'_, f64>) -> Result<(), ProcessError> {
-        Ok(())
-    }
-}
-
-impl ClapComponent for BenchComponent {
-    const CLAP_DESCRIPTOR: chassis_clap::ClapDescriptor = chassis_clap::ClapDescriptor {
-        features: &[c"audio-effect", c"stereo"],
-        version: env!("CARGO_PKG_VERSION"),
-        ..chassis_clap::ClapDescriptor::new(
-            "org.nijaru.chassis.adapter-bench",
-            "Chassis Adapter Benchmark",
-        )
-    };
-    const CLAP_PARAMETER_IDS: &'static [(&'static str, u32)] = &[("value", PARAMETER_ID)];
-    const CLAP_MAX_PARAMETER_EVENTS: u32 = MAX_EVENTS;
-}
-
-struct BenchHostShared;
-struct BenchHostMainThread;
-struct BenchHostAudioProcessor;
-struct BenchHostHandlers;
-
-impl SharedHandler<'_> for BenchHostShared {
-    fn request_restart(&self) {}
-    fn request_process(&self) {}
-    fn request_callback(&self) {}
-}
-
-impl MainThreadHandler<'_> for BenchHostMainThread {}
-impl AudioProcessorHandler<'_> for BenchHostAudioProcessor {}
-
-impl HostHandlers for BenchHostHandlers {
-    type Shared<'a> = BenchHostShared;
-    type MainThread<'a> = BenchHostMainThread;
-    type AudioProcessor<'a> = BenchHostAudioProcessor;
-}
-
-fn parameter_events(frame_count: u32, event_count: u32) -> EventBuffer {
-    let mut events = EventBuffer::with_capacity(
-        usize::try_from(event_count).expect("benchmark event count fits usize"),
-    );
-    if event_count == 0 {
-        return events;
-    }
-
-    for index in 0..event_count {
-        let offset =
-            u32::try_from(u64::from(index) * u64::from(frame_count) / u64::from(event_count))
-                .expect("benchmark event offset fits u32");
-        let value = if index % 2 == 0 { 0.25 } else { 0.75 };
-        events.push(&ParamValueEvent::new(
-            offset,
-            ClapId::new(PARAMETER_ID),
-            Pckn::match_all(),
-            value,
-        ));
-    }
-    events
-}
-
-fn measure_batches(mut callback: impl FnMut()) -> Vec<Duration> {
-    for _ in 0..WARMUP_ITERATIONS {
-        callback();
-    }
-
-    let mut samples = Vec::with_capacity(BATCHES);
-    for _ in 0..BATCHES {
-        let started = Instant::now();
-        for _ in 0..ITERATIONS_PER_BATCH {
-            callback();
+    let mut samples: Vec<Vec<f64>> = vec![Vec::with_capacity(BATCHES); paths.len()];
+    for batch in 0..BATCHES {
+        // Every path/strategy occupies each order position four times. Do not
+        // time all bare batches first and all CLAP batches on a warmer CPU.
+        for offset in 0..paths.len() {
+            let index = (batch + offset) % paths.len();
+            let runner = &mut paths[index];
+            let started = Instant::now();
+            for _ in 0..iterations {
+                runner.render(black_box(true));
+            }
+            let ns = started.elapsed().as_secs_f64() * 1e9
+                / f64::from(u32::try_from(iterations).unwrap());
+            samples[index].push(ns);
         }
-        samples.push(started.elapsed());
     }
-    samples
+    for (runner, mut samples) in paths.into_iter().zip(samples) {
+        samples.sort_by(f64::total_cmp);
+        println!(
+            "{},{frames},{N},{SC},{},{events},{},{},{BATCHES},{iterations},{:.2},{:.2},{:.2}",
+            S::NAME,
+            if inplace { "in-place" } else { "separate" },
+            runner.path().name(),
+            runner.strategy(),
+            percentile(&samples, 50),
+            percentile(&samples, 95),
+            percentile(&samples, 99)
+        );
+    }
 }
 
-fn nanoseconds_per_call(duration: Duration) -> f64 {
-    duration.as_secs_f64() * 1_000_000_000.0 / f64::from(ITERATIONS_PER_BATCH)
-}
-
-fn percentile(sorted: &[f64], numerator: usize, denominator: usize) -> f64 {
-    let rank = (sorted.len() * numerator).div_ceil(denominator);
-    sorted[rank.saturating_sub(1).min(sorted.len() - 1)]
-}
-
-fn report(precision: &str, frames: u32, events: u32, samples: Vec<Duration>) {
-    let mut per_call: Vec<f64> = samples.into_iter().map(nanoseconds_per_call).collect();
-    per_call.sort_by(f64::total_cmp);
-    let median = percentile(&per_call, 50, 100);
-    let p95 = percentile(&per_call, 95, 100);
-    let p99 = percentile(&per_call, 99, 100);
-    let callbacks_per_second = 1_000_000_000.0 / median;
-    println!(
-        "{precision},{frames},{events},{median:.2},{p95:.2},{p99:.2},{callbacks_per_second:.0}"
-    );
-}
-
-fn bench_f32(
-    processor: &mut StartedPluginAudioProcessor<BenchHostHandlers>,
-    frame_count: u32,
-    event_count: u32,
-) {
-    let frames = usize::try_from(frame_count).expect("benchmark frame count fits usize");
-    let mut main_inputs = [vec![0.0_f32; frames], vec![0.0_f32; frames]];
-    let mut sidechain_inputs = [vec![0.0_f32; frames], vec![0.0_f32; frames]];
-    let mut outputs = [vec![0.0_f32; frames], vec![0.0_f32; frames]];
-    let mut input_ports = AudioPorts::with_capacity(4, 2);
-    let mut output_ports = AudioPorts::with_capacity(2, 1);
-    let input_audio = input_ports.with_input_buffers([
-        AudioPortBuffer {
-            channels: AudioPortBufferType::f32_input_only(
-                main_inputs.iter_mut().map(InputChannel::variable),
-            ),
-            latency: 0,
-        },
-        AudioPortBuffer {
-            channels: AudioPortBufferType::f32_input_only(
-                sidechain_inputs.iter_mut().map(InputChannel::variable),
-            ),
-            latency: 0,
-        },
-    ]);
-    let mut output_audio = output_ports.with_output_buffers([AudioPortBuffer {
-        channels: AudioPortBufferType::f32_output_only(outputs.iter_mut().map(Vec::as_mut_slice)),
-        latency: 0,
-    }]);
-    let events = parameter_events(frame_count, event_count);
-    let mut output_events = EventBuffer::with_capacity(0);
-
-    let samples = measure_batches(|| {
-        let status = processor
-            .process(
-                &input_audio,
-                &mut output_audio,
-                &events.as_input(),
-                &mut output_events.as_output(),
-                None,
-                None,
-            )
-            .expect("f32 benchmark callback succeeds");
-        black_box(status);
-    });
-    report("f32", frame_count, event_count, samples);
-}
-
-fn bench_f64(
-    processor: &mut StartedPluginAudioProcessor<BenchHostHandlers>,
-    frame_count: u32,
-    event_count: u32,
-) {
-    let frames = usize::try_from(frame_count).expect("benchmark frame count fits usize");
-    let mut main_inputs = [vec![0.0_f64; frames], vec![0.0_f64; frames]];
-    let mut sidechain_inputs = [vec![0.0_f64; frames], vec![0.0_f64; frames]];
-    let mut outputs = [vec![0.0_f64; frames], vec![0.0_f64; frames]];
-    let mut input_ports = AudioPorts::with_capacity(4, 2);
-    let mut output_ports = AudioPorts::with_capacity(2, 1);
-    let input_audio = input_ports.with_input_buffers([
-        AudioPortBuffer {
-            channels: AudioPortBufferType::f64_input_only(
-                main_inputs.iter_mut().map(InputChannel::variable),
-            ),
-            latency: 0,
-        },
-        AudioPortBuffer {
-            channels: AudioPortBufferType::f64_input_only(
-                sidechain_inputs.iter_mut().map(InputChannel::variable),
-            ),
-            latency: 0,
-        },
-    ]);
-    let mut output_audio = output_ports.with_output_buffers([AudioPortBuffer {
-        channels: AudioPortBufferType::f64_output_only(outputs.iter_mut().map(Vec::as_mut_slice)),
-        latency: 0,
-    }]);
-    let events = parameter_events(frame_count, event_count);
-    let mut output_events = EventBuffer::with_capacity(0);
-
-    let samples = measure_batches(|| {
-        let status = processor
-            .process(
-                &input_audio,
-                &mut output_audio,
-                &events.as_input(),
-                &mut output_events.as_output(),
-                None,
-                None,
-            )
-            .expect("f64 benchmark callback succeeds");
-        black_box(status);
-    });
-    report("f64", frame_count, event_count, samples);
+fn matrix<S: Sample>(verify_only: bool) {
+    for frames in [32, 128, 512] {
+        for events in [0, SPARSE_EVENTS, MAX_EVENTS] {
+            run::<S, 2, 2>(frames, events, false, verify_only);
+        }
+    }
+    // Focused topology/alias slices rather than a Cartesian-product catalog.
+    for events in [0, MAX_EVENTS] {
+        run::<S, 1, 1>(128, events, false, verify_only);
+        run::<S, 2, 1>(128, events, false, verify_only);
+        run::<S, 2, 0>(128, events, false, verify_only);
+        run::<S, 8, 2>(128, events, false, verify_only);
+        run::<S, 2, 2>(128, events, true, verify_only);
+    }
 }
 
 fn main() {
-    let entry =
-        PluginEntry::load_from_clack::<SingleComponentEntry<BenchComponent, F32AndF64>>(c"")
-            .expect("static benchmark entry loads");
-    let descriptor = entry
-        .get_factory::<PluginFactory>()
-        .expect("plugin factory exists")
-        .plugin_descriptor(0)
-        .expect("benchmark descriptor exists");
-    let host_info = HostInfo::new("chassis-bench", "", "", "").expect("host info is valid");
-    let mut plugin = PluginInstance::<BenchHostHandlers>::new(
-        |()| BenchHostShared,
-        |_| BenchHostMainThread,
-        &entry,
-        descriptor.id().expect("benchmark plugin id is valid"),
-        &host_info,
-    )
-    .expect("benchmark plugin instantiates");
-    let processor = plugin
-        .activate(
-            |_, _| BenchHostAudioProcessor,
-            PluginAudioConfiguration {
-                sample_rate: 48_000.0,
-                min_frames_count: 1,
-                max_frames_count: 512,
-            },
-        )
-        .expect("benchmark plugin activates");
-    let mut processor = processor
-        .start_processing()
-        .expect("benchmark processing starts");
-
-    println!("# chassis-clap adapter-only benchmark");
+    let mut verify_only = false;
+    for argument in std::env::args().skip(1) {
+        match argument.as_str() {
+            "--bench" => {}
+            "--verify-only" => verify_only = true,
+            _ => panic!("unknown benchmark argument: {argument}"),
+        }
+    }
+    println!("# useful gain/wet-dry/linked-duck DSP; three globally modulated floats; 48 kHz");
     println!(
-        "# os={} arch={}",
+        "# os={} arch={}; record revision, CPU, OS version, compiler, flags and operating conditions",
         std::env::consts::OS,
         std::env::consts::ARCH
     );
-    println!("# run with repository toolchain and record CPU model + rustc -V alongside results");
-    println!("precision,frames,events,median_ns,p95_ns,p99_ns,median_callbacks_per_second");
-
-    for frame_count in FRAME_COUNTS {
-        for event_count in EVENT_COUNTS {
-            bench_f32(&mut processor, frame_count, event_count);
-            bench_f64(&mut processor, frame_count, event_count);
-        }
+    println!(
+        "# identical input refill, timed stepped-control evaluation, output consumption; setup/verification excluded"
+    );
+    println!(
+        "# bare-trusted omits framework validation/publication; no-sidechain uses linked main input detector"
+    );
+    println!(
+        "# percentiles are of {BATCHES} BATCH AVERAGES, not individual callback-tail latency; p99 is maximum batch average"
+    );
+    println!(
+        "precision,frames,main_channels,sidechain_channels,relationship,events,path,evaluation,batches,iterations,batch_mean_p50_ns,batch_mean_p95_ns,batch_mean_p99_ns"
+    );
+    matrix::<f32>(verify_only);
+    matrix::<f64>(verify_only);
+    if verify_only {
+        println!("# all 228 path/strategy/precision/workload preflights passed");
     }
-
-    plugin.deactivate(processor.stop_processing());
 }
