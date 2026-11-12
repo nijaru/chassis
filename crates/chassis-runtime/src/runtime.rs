@@ -15,6 +15,7 @@ use crate::{
     },
     automation::ParameterEventChange,
     buffer::ChannelBuffer,
+    controls::{self, ControlError, ControlObservation, ControlState, ParameterControls},
     events::{
         EventOutputError, EventPortDescriptor, EventPortIndex, EventPortKey, EventPortSchemaError,
         EventSink, NoteEventPortError,
@@ -521,6 +522,7 @@ where
     parameters: ParameterStore,
     modulation: Vec<f64>,
     custom_state: Vec<StateEntry>,
+    control_state: Option<ControlState>,
     active: Option<ActiveRuntime<P>>,
 }
 
@@ -548,6 +550,7 @@ where
             schema,
             parameters,
             custom_state: Vec::new(),
+            control_state: None,
             active: None,
         };
         runtime
@@ -631,7 +634,12 @@ where
         &self.parameters
     }
 
-    /// Mutably access durable base/control values from the owning control context.
+    /// Mutably synchronize external base values, without outbound notifications.
+    ///
+    /// This low-level external/backend path does not begin/end gestures or
+    /// produce local intent. Use [`Self::controls`] for local product edits and
+    /// explicit notification effects. Successful plain writes, even equal ones,
+    /// still clear normalized provenance.
     ///
     /// Cross-thread adapters must synchronize before entering this single-owner
     /// semantic store; this method itself does not make the runtime `Sync`.
@@ -660,6 +668,33 @@ where
     /// ```
     pub fn parameters_mut(&mut self) -> ParameterValuesMut<'_> {
         self.parameters.values_mut()
+    }
+
+    /// Borrow the synchronous headless control protocol, active or inactive.
+    ///
+    /// NON-REALTIME: first access provisions optional gesture metadata. This
+    /// exposes desired parameters, not mutable DSP. Returned notification effects
+    /// are not delivered; the embedding owns ordered delivery outside this borrow.
+    /// Unused controls add no queue, callback scan or observation work.
+    pub fn controls(&mut self) -> ParameterControls<'_> {
+        let state = self
+            .control_state
+            .get_or_insert_with(|| ControlState::new(self.schema.parameters().len()));
+        ParameterControls::new(&mut self.parameters, state)
+    }
+
+    /// Read one coherent latest desired base/provenance/gesture snapshot.
+    ///
+    /// This allocates nothing, invokes no author hook, and does not initialize
+    /// control metadata or produce an edit. It is not a history of automation.
+    ///
+    /// # Errors
+    /// Rejects an unknown schema-local parameter index.
+    pub fn control_observation(
+        &self,
+        parameter: ParameterIndex,
+    ) -> Result<ControlObservation, ControlError> {
+        controls::observe(&self.parameters, self.control_state.as_ref(), parameter)
     }
 
     /// Return the durable validated non-parameter semantic state entries.
@@ -919,6 +954,7 @@ where
             schema,
             parameters,
             custom_state: _,
+            control_state: _,
             modulation,
             active,
         } = self;

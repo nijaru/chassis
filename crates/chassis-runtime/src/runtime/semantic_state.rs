@@ -308,6 +308,8 @@ impl<P: Processor> InstanceRuntime<P> {
     ///
     /// Changed custom state freezes active DSP's pre-load controls/resources
     /// until reactivation. Desired state remains independently saveable.
+    /// Every accepted replacement, including identical state, revokes outstanding
+    /// gesture changes while preserving their matching End authority.
     ///
     /// # Errors
     ///
@@ -351,6 +353,9 @@ impl<P: Processor> InstanceRuntime<P> {
             self.parameters = candidate_parameters;
         }
         self.custom_state = candidate_custom;
+        if let Some(controls) = &mut self.control_state {
+            controls.invalidate_changes();
+        }
         Ok(())
     }
 

@@ -22,6 +22,7 @@ InstanceRuntime<P>
   durable ParameterStore derived from that schema
   durable validated custom semantic state
   instance-lifetime held external modulation (not persisted)
+  optional headless gesture metadata (not persisted, separate from ParameterStore)
   active/inactive lifecycle
   accepted active I/O configuration
   activation-scoped LatencySamples
@@ -42,6 +43,8 @@ Deployment publication bridge
 ```
 
 Each mutable semantic guarantee has one authority. Host/shared/editor representations are synchronized projections, not independently mutable second owners.
+
+The optional synchronous [control protocol](parameters-state.md#product-originated-edits-and-modulation) borrows the canonical desired store. Its ledger survives reset/reactivation and stays outside the store moved to frozen DSP on a custom-state load. Successful complete replacement revokes old gesture changes but keeps matching closure authority. It creates no process-time scan, notification queue, or host callback.
 
 ## Schema ownership
 

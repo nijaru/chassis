@@ -243,7 +243,7 @@ Explicit host/application ramps are reproduced without automatic extra smoothing
 
 Global additive float modulation shares the ordered parameter-control stream but not durable base storage. Held amounts survive reset, reactivation, and state load, and are excluded from save. [Parameters/state](parameters-state.md#global-additive-float-modulation) owns the domain, combination, lifecycle, and custom-resource transition contract. Native note expression is a separate supported capability; it does not enable per-note parameter modulation.
 
-Editor/application-originated parameter edits need typed begin/change/end gesture semantics, observation, and echo suppression. They must never expose unrestricted mutable processor access.
+Use `InstanceRuntime::controls()` for headless local begin/change/end or discrete edits, and explicit external ingress. It returns notification effects after scalar application, not a host delivery receipt. `control_observation` reads latest desired base/provenance without emitting intent. The embedding serializes operations and ordered effect delivery; this is not a cross-thread endpoint. [Parameters/state](parameters-state.md#product-originated-edits-and-modulation) owns token lifetime, stale-but-closable gestures on load, echo suppression and delivery obligations. No API exposes unrestricted mutable processor access.
 
 ## Control and optional editor boundary
 

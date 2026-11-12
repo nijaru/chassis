@@ -1,5 +1,7 @@
 //! Production normalized controls and runtime-owned coordinate provenance.
 
+#[path = "control_protocol.rs"]
+mod control_protocol;
 #[path = "normalized_trajectories.rs"]
 mod trajectories;
 
@@ -656,6 +658,37 @@ fn mapping_configuration_equality_is_semantic_not_pointer_identity() {
     );
 }
 
+fn reject_invalid_controls(runtime: &mut InstanceRuntime<Dsp>, broken: &mut ParameterStore) {
+    let invalid_endpoint = [ParameterEvent::normalized_set(0, GAIN, 0.25)];
+    assert!(
+        broken
+            .validate_events(ParameterEvents::new(&invalid_endpoint, 4, 1).unwrap())
+            .is_err()
+    );
+    for invalid in [f64::NAN, -0.1, 1.1] {
+        assert!(
+            runtime
+                .parameters_mut()
+                .set_normalized_index(GAIN, invalid)
+                .is_err()
+        );
+    }
+    assert!(
+        runtime
+            .parameters_mut()
+            .set_normalized_index(BOOL, 0.5)
+            .is_err()
+    );
+    assert!(
+        runtime
+            .parameters_mut()
+            .set_normalized_index(ParameterIndex::new(99), 0.5)
+            .is_err()
+    );
+    assert!(broken.set_normalized_index(GAIN, 0.25).is_err());
+    assert!(broken.set_normalized_index(GAIN, 0.75).is_err());
+}
+
 pub(super) fn qualify() {
     let component = Definition::default();
     let mut runtime = InstanceRuntime::for_component(&component).unwrap();
@@ -671,6 +704,9 @@ pub(super) fn qualify() {
     )
     .unwrap();
     broken.set_normalized_index(GAIN, 0.5).unwrap();
+    // Control metadata/handle preparation is NONRT; callback observation is not.
+    let (gesture, begin) = runtime.controls().begin(GAIN).unwrap();
+    assert_eq!(begin.notifications().count(), 1);
     super::ALLOCATIONS.store(0, std::sync::atomic::Ordering::Relaxed);
     super::DEALLOCATIONS.store(0, std::sync::atomic::Ordering::Relaxed);
     super::COUNT_THIS_THREAD.with(|flag| flag.set(true));
@@ -685,6 +721,12 @@ pub(super) fn qualify() {
             .set_normalized_index(OTHER, coordinate)
             .unwrap();
         let rendered = render(&mut runtime, &[]).unwrap();
+        let observed = runtime.control_observation(GAIN).unwrap();
+        assert_eq!(observed.normalized_coordinate(), Some(coordinate));
+        assert_eq!(
+            observed.gesture(),
+            chassis_runtime::controls::GestureStatus::Active
+        );
         assert_eq!(rendered[1].to_bits(), coordinate.to_bits());
         assert_eq!(
             rendered[0].to_bits(),
@@ -717,36 +759,11 @@ pub(super) fn qualify() {
             runtime.parameters().get_event_value(ParameterIndex::new(3)),
             Some(ParameterEventValue::Choice(ChoiceIndex::new(1)))
         );
-        let invalid_endpoint = [ParameterEvent::normalized_set(0, GAIN, 0.25)];
-        assert!(
-            broken
-                .validate_events(ParameterEvents::new(&invalid_endpoint, 4, 1).unwrap())
-                .is_err()
-        );
-        for invalid in [f64::NAN, -0.1, 1.1] {
-            assert!(
-                runtime
-                    .parameters_mut()
-                    .set_normalized_index(GAIN, invalid)
-                    .is_err()
-            );
-        }
-        assert!(
-            runtime
-                .parameters_mut()
-                .set_normalized_index(BOOL, 0.5)
-                .is_err()
-        );
-        assert!(
-            runtime
-                .parameters_mut()
-                .set_normalized_index(ParameterIndex::new(99), 0.5)
-                .is_err()
-        );
-        assert!(broken.set_normalized_index(GAIN, 0.25).is_err());
-        assert!(broken.set_normalized_index(GAIN, 0.75).is_err());
+        reject_invalid_controls(&mut runtime, &mut broken);
     }
     super::COUNT_THIS_THREAD.with(|flag| flag.set(false));
+    let end = runtime.controls().end(&gesture).unwrap();
+    assert_eq!(end.notifications().count(), 1);
     assert_eq!(
         super::ALLOCATIONS.load(std::sync::atomic::Ordering::Relaxed),
         0

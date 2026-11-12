@@ -217,7 +217,17 @@ The `mode` choice remains process-inert until a stepped-DSP conformance case is 
 
 ## Product-originated edits and modulation
 
-Future editor/control edits use explicit begin/change/end gesture semantics, host notification ordering, and echo suppression without unrestricted mutable processor access.
+`InstanceRuntime::controls()` implements the synchronous headless control protocol over the same canonical desired parameter store. Its optional gesture ledger is instance-lifetime metadata, outside both the active processor and the store moved into frozen controls. First access provisions it off-callback; processing performs no gesture scan or implicit notification work.
+
+- `begin` / `change` / `end` use an opaque instance-bound token, with one open gesture per parameter. `edit` applies a discrete local change and returns ordered Begin/Value/End effects. Invalid values, duplicate begins, foreign/ended tokens and exhausted gesture serials publish nothing.
+- `ControlValue::Plain` and `Normalized` use existing scalar admission. Local changes return validated plain-base notifications; external input returns no outbound effect. Equal plain writes still clear normalized provenance: value equality is not evidence of an acknowledgement.
+- `control_observation` reads a fixed-width latest desired base/provenance/gesture snapshot without initializing the ledger or invoking hooks. It is not an ordered change log, an edit command, or an effective/modulated value. Observation never produces notification effects.
+- Every accepted complete load, including identical state, revokes outstanding tokens' **change** authority but preserves their matching **End**. Rejected loads preserve both. A stale gesture must be ended before another begins on that parameter. Reset/deactivation/reactivation preserve gestures. Local edits after a custom-resource load affect desired/saveable state, not frozen DSP.
+- Token destruction does not notify a host. `close` explicitly returns End effects for all live/stale/abandoned gestures, allocated off-thread, before controller detachment. Serial identities are never reused.
+
+Returned effects are **not delivered notifications**. The embedding must serialize each accepted operation and complete ordered effect delivery against subsequent canonical/gesture mutation, including external/backend writes, complete loads and automation completion. Deliver effects outside the runtime borrow and defer or reject reentrant mutations until delivery completes; read-only queries can observe the already-published state. Returned effects are immutable; the runtime neither refreshes nor filters them. Holding effects while accepting further writes, including a replacement during a batch's delivery, requires a deployment-owned stale-effect/delivery protocol that this synchronous API does not provide. `parameters_mut()` remains an explicitly external, unnotified backend synchronization path; it does not generate local intent.
+
+The [headless fixture](../../crates/chassis-runtime/tests/support/control_protocol.rs) exercises this public protocol while stopped, across loads and reactivation, and alongside frozen resources. CLAP product submission, deferred notification delivery, backpressure and cross-thread observations are not implemented by this slice; they remain M2 closure work.
 
 Modulation remains separate from base state and must not overwrite persistent values.
 
@@ -225,7 +235,7 @@ Realtime-originated host notifications require a narrow bounded capability; prod
 
 ## Remaining freeze gates
 
-The [roadmap](../roadmap.md#core-stability-gates) owns the full core-stability gate. This contract still needs product-originated gesture/echo semantics, and refreshed automated-render/active-save evidence. Prepared adoption must preserve this state/control authority; its ownership belongs to [runtime services](runtime-services.md), not a generalized copy of the CLAP scalar bridge.
+The [roadmap](../roadmap.md#core-stability-gates) owns the full core-stability gate. This contract still needs deployment-integrated product-originated gesture/echo delivery with bounded contention/capacity and state precedence, and refreshed automated-render/active-save evidence. Prepared adoption must preserve this state/control authority; its ownership belongs to [runtime services](runtime-services.md), not a generalized copy of the CLAP scalar bridge.
 
 API and CHSS compatibility are separate explicit decisions, supported by versioned fixtures and a migration policy. A second format is not required to stabilize the declared core subset; if another adapter is later selected, its state/automation round trips become that adapter's qualification gate. Do not defer initial compatibility policy until there are already released products.
 

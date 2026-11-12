@@ -9,6 +9,7 @@
 pub mod audio;
 pub mod automation;
 pub mod buffer;
+pub mod controls;
 pub mod events;
 pub mod midi;
 pub mod modulation;
