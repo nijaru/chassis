@@ -1,4 +1,5 @@
-//! Bounded source-contract proof, not a production normalized-automation API.
+//! Independent source-contract reference versus compact production cursors and
+//! explicitly bounded dense expansion. No production source-format adapter.
 //!
 //! Independent implementation of the documented VST3 queue mathematics, checked
 //! 2026-11-12 against `ivstparameterchanges.h` at
@@ -150,25 +151,29 @@ fn validate_queue(queue: Queue<'_>, frames: u32) -> Result<(), Rejection> {
     Ok(())
 }
 
-// Compact candidate: retain the source coordinate, but clip its -1 anchor to
+// Compact production path: retain the source coordinate, but clip its -1 anchor to
 // an explicit sample-zero coordinate BEFORE mapping. A signed runtime offset
 // is consequently not the only faithful representation. At most N+1 records.
 fn compact(queue: Queue<'_>, curve: Curve, frames: u32) -> [f64; FRAMES as usize] {
     validate_queue(queue, frames).unwrap();
-    let mut records = [ParameterEvent::linear(0, INDEX, 0.0); SOURCE_POINTS + 1];
+    let descriptor = ParameterDescriptor::float("source", "Source", 0.0, 1.0, 0.0)
+        .unwrap()
+        .with_float_mapping(curve)
+        .unwrap();
+    let mut store = ParameterStore::new(&[descriptor]).unwrap();
+    store.set_normalized_index(INDEX, queue.initial).unwrap();
+    let mut records = [ParameterEvent::normalized_linear(0, INDEX, 0.0); SOURCE_POINTS + 1];
     let mut length = 0;
     if let Some(first) = queue.points.first().filter(|p| p.offset > 0) {
-        records[0] = ParameterEvent::set(
+        records[0] = ParameterEvent::normalized_set(
             0,
             INDEX,
-            ParameterEventValue::Float(
-                queue.initial + (first.coordinate - queue.initial) / f64::from(first.offset + 1),
-            ),
+            queue.initial + (first.coordinate - queue.initial) / f64::from(first.offset + 1),
         );
         length = 1;
     }
     for point in queue.points {
-        records[length] = ParameterEvent::linear(point.offset, INDEX, point.coordinate);
+        records[length] = ParameterEvent::normalized_linear(point.offset, INDEX, point.coordinate);
         length += 1;
     }
     let events = ParameterEvents::new(
@@ -177,12 +182,11 @@ fn compact(queue: Queue<'_>, curve: Curve, frames: u32) -> [f64; FRAMES as usize
         u32::try_from(SOURCE_POINTS + 1).unwrap(),
     )
     .unwrap();
-    // The standalone numeric cursor operates in source coordinates here. These
-    // records are NOT supplied to a plain-unit ParameterStore as if mapped.
-    let mut cursor = events.float_cursor(INDEX, queue.initial).unwrap();
+    store.validate_events(events).unwrap();
+    let mut cursor = store.float_cursor(events, INDEX).unwrap();
     let mut values = [0.0; FRAMES as usize];
     for frame in 0..frames {
-        values[frame as usize] = curve.map(cursor.value_at(frame).unwrap());
+        values[frame as usize] = cursor.value_at(frame).unwrap();
     }
     values
 }
@@ -683,8 +687,8 @@ fn completed_state_reopens_in_plain_units_without_the_source_anchor_or_modulatio
         .activate(&component, config, DEFAULT_EFFECT_CONFIGURATION)
         .unwrap();
     let mut output = [[-99.0; FRAMES as usize]; PARAMETERS];
-    // No source queue is resumed: reseeding its coordinate after arbitrary
-    // plain-state replacement still needs a production ownership contract.
+    // A complete plain-state reopen has no retained source coordinate. This
+    // reference resumes no queue; production normalized sets explicitly reseed.
     render(
         &mut reopened,
         ParameterEvents::empty_for_block(4),

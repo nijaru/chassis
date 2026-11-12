@@ -139,7 +139,9 @@ Linear segment/ramp
   start sample/value -> end sample/value
 ```
 
-Adapter rules:
+Core float trajectories support both plain and normalized coordinates. [Parameters/state](parameters-state.md#trajectory-portability-before-stabilization) owns interpolation domains, explicit source anchoring, mixed-point ordering and completed-coordinate publication. Normalized coordinates are mapped before plain modulation; CLAP still supplies plain sets, not normalized ramps.
+
+Mapping requirements for a selected adapter (not support claims for VST3 or Audio Units):
 
 - VST3 parameter queues are piecewise-linear approximations; preserve those segments.
 - Audio Unit explicit ramp events remain linear ramps with supplied duration/end value.

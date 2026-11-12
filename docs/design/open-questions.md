@@ -2,9 +2,7 @@
 
 This file owns unresolved decisions, not implemented inventories or a second roadmap. [The execution plan](../next-runtime-slice.md) orders work; [validation](validation.md) owns evidence; [the roadmap](../roadmap.md) owns the initial core boundary, stability gates, and possible later extensions. All APIs and CHSS bytes remain pre-alpha.
 
-## Control trajectories and origins
-
-Which timed representation preserves source interpolation domains and boundary anchors using the prepared float mapper and canonical scalar provenance? Define explicit source anchoring when a plain edit or state load leaves provenance unknown, mixed-domain ordering and bounded admission. [Trajectory portability](parameters-state.md#trajectory-portability-before-stabilization) owns the reference-backed constraints; an inverse conversion is not source-history reconstruction.
+## Control origins and publication
 
 How do typed gestures and origin-aware changes preserve host notification ordering, observation, echo suppression, and state/resource authority while processing is stopped or a replacement is pending? These are core control questions; they do not require an editor toolkit.
 

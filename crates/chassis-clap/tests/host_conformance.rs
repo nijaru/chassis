@@ -15,7 +15,6 @@ use std::{
 use chassis_clap::{ClapComponent, F32AndF64, SingleComponentEntry};
 use chassis_runtime::{
     audio::{AudioPortIndex, MAIN_INPUT, MAIN_OUTPUT},
-    automation::ParameterEventValue,
     modulation::GlobalFloatModulation,
     parameters::{ChoiceOption, ParameterDescriptor, ParameterIndex},
     process::{ActivationConfig, ProcessBlock},
@@ -194,10 +193,10 @@ impl Processor for ProbeProcessor {
 
 impl ProbeProcessor {
     fn process_trim<S: Copy>(&self, block: &mut ProcessBlock<'_, S>, apply: impl Fn(&mut S, f64)) {
-        let Some(ParameterEventValue::Float(base)) = block.parameters().get_event_value(self.trim)
-        else {
-            panic!("trim is a float");
-        };
+        let base = block
+            .parameters()
+            .float_cursor(block.parameter_events(), self.trim)
+            .unwrap();
         let amount = block.modulation(self.trim).unwrap();
         let events = block.parameter_events();
         block.for_each_channel(|mut channel| {
@@ -208,10 +207,10 @@ impl ProbeProcessor {
                     .output_endpoint()
                     .is_some_and(|endpoint| endpoint.port_index() == self.main_output)
             {
-                let mut trim = self
-                    .modulation
-                    .cursor(events, self.trim, base, amount)
-                    .unwrap();
+                let mut trim = self.modulation.cursor(
+                    base.clone(),
+                    events.modulation_cursor(self.trim, amount).unwrap(),
+                );
                 for (offset, sample) in channel
                     .copy_input_to_output()
                     .unwrap()

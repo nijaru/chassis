@@ -1,7 +1,6 @@
 //! Explicit global additive float modulation, independent of durable base values.
 
-use crate::automation::{FloatParameterCursor, ParameterCursorError, ParameterEvents};
-use crate::parameters::ParameterIndex;
+use crate::automation::{FloatParameterCursor, ParameterCursorError};
 
 /// Setup-resolved global modulation semantics for an opted-in float parameter.
 ///
@@ -20,39 +19,30 @@ impl GlobalFloatModulation {
         Self { minimum, maximum }
     }
 
-    /// Compose a validated base trajectory with a held modulation trajectory.
+    /// Compose already-constructed plain-base and held-modulation cursors.
     ///
-    /// Initial values come from the consumed [`ProcessBlock`](crate::process::ProcessBlock),
-    /// not a separately sampled desired control view. This allocates nothing.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ParameterCursorError::NonFiniteInitial`] for non-finite initial values.
-    pub fn cursor(
+    /// Construct base from the consumed store so normalized interpolation is
+    /// mapped before addition. Explicit low-level callers own cursor/schema
+    /// agreement; typed float handles couple those inputs automatically.
+    #[must_use]
+    pub fn cursor<'a>(
         self,
-        events: ParameterEvents<'_>,
-        parameter: ParameterIndex,
-        initial_base: f64,
-        initial_amount: f64,
-    ) -> Result<ModulatedFloatCursor<'_>, ParameterCursorError> {
-        Ok(ModulatedFloatCursor {
-            base: events.float_cursor(parameter, initial_base)?,
-            amount: Some(events.modulation_cursor(parameter, initial_amount)?),
+        base: FloatParameterCursor<'a>,
+        amount: FloatParameterCursor<'a>,
+    ) -> ModulatedFloatCursor<'a> {
+        ModulatedFloatCursor {
+            base,
+            amount: Some(amount),
             domain: self,
-        })
+        }
     }
 
-    pub(crate) fn base_cursor(
-        self,
-        events: ParameterEvents<'_>,
-        parameter: ParameterIndex,
-        initial: f64,
-    ) -> Result<ModulatedFloatCursor<'_>, ParameterCursorError> {
-        Ok(ModulatedFloatCursor {
-            base: events.float_cursor(parameter, initial)?,
+    pub(crate) fn base_cursor(self, base: FloatParameterCursor<'_>) -> ModulatedFloatCursor<'_> {
+        ModulatedFloatCursor {
+            base,
             amount: None,
             domain: self,
-        })
+        }
     }
 }
 

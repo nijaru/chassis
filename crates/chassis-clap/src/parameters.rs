@@ -464,8 +464,10 @@ impl ClapStateProjection {
                 ParameterEventChange::Modulate { amount } => {
                     self.modulation.set(event.parameter(), amount);
                 }
-                ParameterEventChange::Linear { .. } => {
-                    unreachable!("CLAP input events cannot encode a linear endpoint")
+                ParameterEventChange::Linear { .. }
+                | ParameterEventChange::NormalizedSet { .. }
+                | ParameterEventChange::NormalizedLinear { .. } => {
+                    unreachable!("CLAP input events encode only plain sets and modulation")
                 }
             }
         }

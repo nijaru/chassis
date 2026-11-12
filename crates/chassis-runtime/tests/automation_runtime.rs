@@ -75,21 +75,19 @@ impl Process<f64> for Gain {
         &mut self,
         block: &mut ProcessBlock<'_, f64>,
     ) -> Result<(), chassis_runtime::runtime::ProcessError> {
-        let ParameterValue::Float(initial) = block
-            .parameters()
-            .get_index(ParameterIndex::new(0))
-            .unwrap()
-        else {
-            unreachable!("gain schema is float");
-        };
-        let initial = *initial;
         let events = block.parameter_events();
+        let base = block
+            .parameters()
+            .float_cursor(events, ParameterIndex::new(0))
+            .unwrap();
         let amount = block.modulation(ParameterIndex::new(0)).unwrap();
         block.for_each_channel(|mut channel| {
-            let mut cursor = self
-                .0
-                .cursor(events, ParameterIndex::new(0), initial, amount)
-                .unwrap();
+            let mut cursor = self.0.cursor(
+                base.clone(),
+                events
+                    .modulation_cursor(ParameterIndex::new(0), amount)
+                    .unwrap(),
+            );
             for (offset, sample) in channel
                 .copy_input_to_output()
                 .unwrap()

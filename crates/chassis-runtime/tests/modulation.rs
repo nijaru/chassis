@@ -61,9 +61,11 @@ fn effective_sum_saturates_without_clamping_or_persisting_the_signal() {
         (-f64::MAX, -f64::MAX, -f64::MAX),
         (f64::MAX, -f64::MAX, 0.0),
     ] {
-        let mut cursor = spec
-            .cursor(ParameterEvents::empty_for_block(1), index, base, amount)
-            .unwrap();
+        let events = ParameterEvents::empty_for_block(1);
+        let mut cursor = spec.cursor(
+            events.float_cursor(index, base).unwrap(),
+            events.modulation_cursor(index, amount).unwrap(),
+        );
         assert_eq!(cursor.value_at(0).unwrap().to_bits(), expected.to_bits());
     }
 }

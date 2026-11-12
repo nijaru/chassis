@@ -3,7 +3,7 @@
 //! [`ParameterStore`] is the semantic authority for a component's current
 //! base/control values. It validates every replacement. Complete persistence
 //! belongs to `InstanceRuntime`. Host event queues remain adapter-owned; borrowed
-//! plain-unit process events are validated here against the active schema.
+//! plain/normalized process events are admitted here against the active schema.
 
 mod control;
 mod handles;
@@ -1212,6 +1212,17 @@ pub struct ParameterStore {
     descriptors: Vec<ParameterDescriptor>,
     values: Vec<StoredParameterValue>,
     lookup: Vec<usize>,
+    // Derived admission scratch, never a DSP baseline or independently writable
+    // semantic store. Only normalized batches clear/use it; plain batches keep
+    // their existing path. Completion cannot call a user mapper after DSP/tail.
+    prepared_endpoints: Vec<Option<PreparedEndpoint>>,
+}
+
+#[derive(Clone, Copy)]
+struct PreparedEndpoint {
+    event_index: usize,
+    value: ParameterEventValue,
+    coordinate: Option<f64>,
 }
 
 /// Mutable parameter values borrowed without authority to replace their schema.
@@ -1373,10 +1384,12 @@ impl ParameterStore {
         lookup.sort_unstable_by(|left, right| {
             descriptors[*left].key().cmp(descriptors[*right].key())
         });
+        let prepared_endpoints = vec![None; descriptors.len()];
         Ok(Self {
             descriptors,
             values,
             lookup,
+            prepared_endpoints,
         })
     }
 
@@ -1524,28 +1537,59 @@ impl ParameterStore {
             .zip(self.values.iter().map(|stored| &stored.value))
     }
 
-    /// Validate normalized process-time parameter events against this schema.
+    /// Admit plain/normalized process-time events and prepare mapped completion.
     ///
-    /// This performs no allocation or stable-key lookup on the successful path
-    /// and leaves the store unchanged. Adapters resolve persistent/backend
-    /// identity to [`ParameterIndex`] before constructing the process event
-    /// stream.
+    /// This mutates only reusable scratch, not canonical values/provenance.
+    /// Success and rejection perform no allocation or stable-key lookup. Adapters
+    /// resolve persistent/backend identity to [`ParameterIndex`] before building
+    /// the process event stream.
     ///
     /// # Errors
     ///
     /// Returns [`ParameterAutomationError`] for out-of-range indices or values
     /// outside their descriptor domains.
     pub fn validate_events(
-        &self,
+        &mut self,
         events: ParameterEvents<'_>,
     ) -> Result<(), ParameterAutomationError> {
+        let normalized = events.has_normalized();
+        if normalized {
+            self.prepared_endpoints.fill(None);
+        }
         for (event_index, event) in events.iter().enumerate() {
-            let Some(descriptor) = self.descriptor(event.parameter()) else {
-                return Err(ParameterAutomationError::UnknownParameter { index: event_index });
-            };
-            let value = match event.change() {
-                ParameterEventChange::Set(value) => value,
-                ParameterEventChange::Linear { value } => ParameterEventValue::Float(value),
+            let position = usize::try_from(event.parameter().get())
+                .ok()
+                .filter(|&position| position < self.descriptors.len())
+                .ok_or(ParameterAutomationError::UnknownParameter { index: event_index })?;
+            let descriptor = &self.descriptors[position];
+            let (value, coordinate) = match event.change() {
+                ParameterEventChange::Set(value) => (value, None),
+                ParameterEventChange::Linear { value } => (ParameterEventValue::Float(value), None),
+                ParameterEventChange::NormalizedSet { value }
+                | ParameterEventChange::NormalizedLinear { value } => {
+                    let plain = descriptor.mapped_float(value).map_err(|error| {
+                        ParameterAutomationError::InvalidMapping {
+                            index: event_index,
+                            error,
+                        }
+                    })?;
+                    // Some(None) is a plain point, not permission to fall back
+                    // to the canonical coordinate predating that point.
+                    let previous = self.prepared_endpoints[position]
+                        .map_or(self.values[position].source_coordinate, |point| {
+                            point.coordinate
+                        });
+                    if matches!(
+                        event.change(),
+                        ParameterEventChange::NormalizedLinear { .. }
+                    ) && previous.is_none()
+                    {
+                        return Err(ParameterAutomationError::MissingSourceCoordinate {
+                            index: event_index,
+                        });
+                    }
+                    (ParameterEventValue::Float(plain), Some(value))
+                }
                 ParameterEventChange::Modulate { amount } => {
                     descriptor
                         .validate_modulation_amount(amount)
@@ -1562,6 +1606,13 @@ impl ParameterStore {
                     error,
                 }
             })?;
+            if normalized {
+                self.prepared_endpoints[position] = Some(PreparedEndpoint {
+                    event_index,
+                    value,
+                    coordinate,
+                });
+            }
         }
         Ok(())
     }
@@ -1572,6 +1623,21 @@ impl ParameterStore {
     /// value. Choice values clone schema-owned IDs: neither replacement nor
     /// dropping the old value can allocate or destroy the last ID owner.
     pub(crate) fn retain_automation_endpoints(&mut self, events: ParameterEvents<'_>) {
+        if events.has_normalized() {
+            for (event_index, event) in events.iter().enumerate() {
+                let position = usize::try_from(event.parameter().get())
+                    .expect("validated parameter index fits usize");
+                if let Some(endpoint) = self.prepared_endpoints[position]
+                    && endpoint.event_index == event_index
+                {
+                    let mut value =
+                        self.descriptors[position].value_from_validated_event(endpoint.value);
+                    value.source_coordinate = endpoint.coordinate;
+                    self.values[position] = value;
+                }
+            }
+            return;
+        }
         for event in events.iter() {
             let position = usize::try_from(event.parameter().get())
                 .expect("validated parameter index fits usize");
@@ -1579,6 +1645,10 @@ impl ParameterStore {
                 ParameterEventChange::Linear { value } => ParameterEventValue::Float(value),
                 ParameterEventChange::Set(value) => value,
                 ParameterEventChange::Modulate { .. } => continue,
+                ParameterEventChange::NormalizedSet { .. }
+                | ParameterEventChange::NormalizedLinear { .. } => {
+                    unreachable!("normalized batches complete from prepared endpoints");
+                }
             };
             self.values[position] = self.descriptors[position].value_from_validated_event(value);
         }
@@ -1595,6 +1665,18 @@ impl ParameterStore {
 /// An automation event does not match the active parameter schema.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParameterAutomationError {
+    /// Normalized endpoint input, type or mapped result failed validation.
+    InvalidMapping {
+        /// Zero-based event index.
+        index: usize,
+        /// Mapping/domain failure.
+        error: ParameterControlError,
+    },
+    /// A normalized linear endpoint followed a plain-origin baseline/point.
+    MissingSourceCoordinate {
+        /// Zero-based event index.
+        index: usize,
+    },
     /// Event index did not identify a descriptor in the active schema.
     UnknownParameter {
         /// Zero-based event index.
@@ -1612,6 +1694,14 @@ pub enum ParameterAutomationError {
 impl fmt::Display for ParameterAutomationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidMapping { index, error } => write!(
+                formatter,
+                "invalid mapping for parameter event {index}: {error}"
+            ),
+            Self::MissingSourceCoordinate { index } => write!(
+                formatter,
+                "parameter event {index} requires an explicit normalized source anchor"
+            ),
             Self::UnknownParameter { index } => {
                 write!(
                     formatter,
@@ -1780,7 +1870,7 @@ mod tests {
     #[test]
     fn automation_validation_uses_dense_indices_and_parameter_domains() {
         let definitions = descriptors();
-        let store = ParameterStore::new(&definitions).expect("schema is valid");
+        let mut store = ParameterStore::new(&definitions).expect("schema is valid");
         let gain = store.index("input.gain").expect("gain index exists");
         let quality = store.index("quality.level").expect("quality index exists");
         let mode = store.index("mode").expect("mode index exists");

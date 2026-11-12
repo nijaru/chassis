@@ -3,7 +3,6 @@
 
 use chassis_clap::{ClapComponent, SingleComponentEntry};
 use chassis_runtime::{
-    automation::ParameterEventValue,
     modulation::GlobalFloatModulation,
     parameters::{ParameterDescriptor, ParameterIndex, ParameterStore},
     process::{ActivationConfig, ProcessBlock},
@@ -167,21 +166,22 @@ impl<const RACE: bool> Process<f32> for TableDsp<RACE> {
             // measured. Disconnect also releases DSP if a host assertion panics.
             let _ = release.lock().unwrap().recv();
         }
-        let Some(ParameterEventValue::Float(base)) =
-            block.parameters().get_event_value(ParameterIndex::new(0))
-        else {
-            unreachable!()
-        };
         let events = block.parameter_events();
+        let base = block
+            .parameters()
+            .float_cursor(events, ParameterIndex::new(0))
+            .unwrap();
         let amount = block.modulation(ParameterIndex::new(0)).unwrap();
         block.for_each_channel(|mut channel| {
             let Some(output) = channel.output_mut() else {
                 return;
             };
-            let mut cursor = self
-                .1
-                .cursor(events, ParameterIndex::new(0), base, amount)
-                .unwrap();
+            let mut cursor = self.1.cursor(
+                base.clone(),
+                events
+                    .modulation_cursor(ParameterIndex::new(0), amount)
+                    .unwrap(),
+            );
             for (offset, sample) in output.iter_mut().enumerate() {
                 let index =
                     usize::from(cursor.value_at(u32::try_from(offset).unwrap()).unwrap() >= 0.5);

@@ -4,9 +4,9 @@ use core::{any::Any, fmt};
 use std::sync::Arc;
 
 use super::{
-    ParameterControlError, ParameterDefinitionError, ParameterDescriptor, ParameterIndex,
-    ParameterKind, ParameterStore, ParameterStoreError, ParameterValue, ParameterValueError,
-    StoredParameterValue,
+    ParameterControlError, ParameterDefinitionError, ParameterDescriptor, ParameterEventValueError,
+    ParameterIndex, ParameterKind, ParameterStore, ParameterStoreError, ParameterType,
+    ParameterValue, ParameterValueError, StoredParameterValue,
 };
 
 /// An immutable, already-prepared float mapping, independent of text display.
@@ -151,8 +151,8 @@ impl std::error::Error for ParameterMappingError {}
 impl ParameterDescriptor {
     /// Replace this float's prepared normalization capability.
     ///
-    /// Both presentation conversion directions and normalized base edits use
-    /// this mapping. Text policy remains separate. No preparation or owning
+    /// Both presentation conversion directions and normalized scalar/timed edits
+    /// use this mapping. Text policy remains separate. No preparation or owning
     /// mapping clone/drop occurs during dense normalized mutation.
     ///
     /// # Errors
@@ -265,7 +265,7 @@ impl ParameterDescriptor {
         Ok(value)
     }
 
-    fn mapped_float(&self, normalized: f64) -> Result<f64, ParameterControlError> {
+    pub(crate) fn mapped_float(&self, normalized: f64) -> Result<f64, ParameterControlError> {
         validate_normalized(normalized)?;
         let mapping = self
             .mapping
@@ -281,6 +281,45 @@ impl ParameterDescriptor {
 }
 
 impl ParameterStore {
+    /// Follow plain and normalized base events from this consumed store's pair.
+    ///
+    /// Borrows the prepared mapper without cloning or releasing an owning handle.
+    /// Queries validate mapped interiors as well as endpoints. Callers supplying
+    /// raw events must still admit the complete batch before product DSP.
+    ///
+    /// # Errors
+    /// Rejects unknown/non-float indices and invalid initial values. Evaluation
+    /// additionally rejects missing source anchors, bad mapping results or queries.
+    pub fn float_cursor<'a>(
+        &'a self,
+        events: crate::automation::ParameterEvents<'a>,
+        index: ParameterIndex,
+    ) -> Result<crate::automation::FloatParameterCursor<'a>, crate::automation::ParameterCursorError>
+    {
+        let position = usize::try_from(index.get())
+            .map_err(|_| ParameterEventValueError::UnknownParameter(index))?;
+        let stored = self
+            .values
+            .get(position)
+            .ok_or(ParameterEventValueError::UnknownParameter(index))?;
+        let value = stored.event_value();
+        let crate::automation::ParameterEventValue::Float(initial) = value else {
+            return Err(
+                ParameterEventValueError::InvalidValue(ParameterValueError::WrongType {
+                    expected: ParameterType::Float,
+                    actual: value.value_type(),
+                })
+                .into(),
+            );
+        };
+        events.mapped_float_cursor(
+            index,
+            initial,
+            stored.source_coordinate,
+            &self.descriptors[position],
+        )
+    }
+
     /// Replace a float base from a normalized control coordinate by stable key.
     ///
     /// This is a non-realtime convenience. Use [`Self::set_normalized_index`]

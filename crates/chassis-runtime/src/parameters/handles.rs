@@ -18,7 +18,8 @@ use crate::{
 /// Like dense indices, handles must only be used with the schema that resolved
 /// them. Access detects unknown indices and wrong types, not another schema's
 /// coincidentally matching index and type. The domain and modulation capability
-/// are cached here during setup, keeping descriptor metadata off the callback.
+/// are cached here during setup. Cursors borrow the consumed store's prepared
+/// mapper by dense index, without stable lookup or owning handle clone/drop.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FloatParameter {
     index: ParameterIndex,
@@ -146,8 +147,8 @@ impl FloatParameter {
         block: &ProcessBlock<'events, S>,
     ) -> Result<FloatParameterCursor<'events>, ParameterCursorError> {
         block
-            .parameter_events()
-            .float_cursor(self.index, self.value(block.parameters())?)
+            .parameters()
+            .float_cursor(block.parameter_events(), self.index)
     }
 
     /// Follow the effective trajectory from this block's consumed controls.
@@ -163,16 +164,19 @@ impl FloatParameter {
         self,
         block: &ProcessBlock<'events, S>,
     ) -> Result<ModulatedFloatCursor<'events>, ParameterCursorError> {
-        let base = self.value(block.parameters())?;
+        let base = self.base_cursor(block)?;
         if self.modulated {
             let amount = block
                 .modulation(self.index)
                 .ok_or(ParameterEventValueError::UnknownParameter(self.index))?;
-            self.domain
-                .cursor(block.parameter_events(), self.index, base, amount)
+            Ok(self.domain.cursor(
+                base,
+                block
+                    .parameter_events()
+                    .modulation_cursor(self.index, amount)?,
+            ))
         } else {
-            self.domain
-                .base_cursor(block.parameter_events(), self.index, base)
+            Ok(self.domain.base_cursor(base))
         }
     }
 }

@@ -1,10 +1,11 @@
 //! Borrowed, bounded process-time base automation and global modulation.
 //!
 //! [`ParameterEvents`] validates a backend-normalized event slice without
-//! copying it. Events are globally sample-sorted, retain equal-offset source
-//! order, and use a point representation for linear ramps: a `Linear` event
-//! reaches its endpoint from the preceding point for that parameter. The
-//! implicit preceding point is the parameter's base value at block offset zero.
+//! copying it. Events are globally sample-sorted and retain equal-offset source
+//! order. A linear point reaches its endpoint from the preceding base point in
+//! that endpoint's domain: plain units or normalized coordinates before mapping.
+//! The implicit anchor remains block offset zero. Normalized linear points need
+//! known provenance; normalized sets explicitly seed it after plain edits/loads.
 //! After successful processing, [`InstanceRuntime`](crate::runtime::InstanceRuntime)
 //! retains each parameter's last point as its next base value. All points lie
 //! inside the block; a source ramp spanning blocks must supply clipped local
@@ -14,7 +15,10 @@
 
 use core::fmt;
 
-use crate::parameters::{ChoiceIndex, ParameterEventValueError, ParameterIndex, ParameterType};
+use crate::parameters::{
+    ChoiceIndex, ParameterControlError, ParameterDescriptor, ParameterEventValueError,
+    ParameterIndex, ParameterType,
+};
 
 /// A process-time parameter value using setup-resolved dense identity.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -45,6 +49,20 @@ impl ParameterEventValue {
 /// The change represented by one parameter event.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ParameterEventChange {
+    /// Establish a normalized float coordinate at the event offset, mapping to plain base.
+    NormalizedSet {
+        /// Finite source coordinate in 0..=1.
+        value: f64,
+    },
+    /// Interpolate normalized coordinates before mapping to plain base.
+    ///
+    /// Requires retained normalized provenance or a preceding normalized point.
+    /// A preceding plain point clears that eligibility, even at equal value.
+    /// The implicit block-start anchor remains offset zero, not sample -1.
+    NormalizedLinear {
+        /// Finite source endpoint in 0..=1.
+        value: f64,
+    },
     /// Set the base value at the event's sample offset.
     Set(ParameterEventValue),
     /// Replace the held global additive amount without changing base state.
@@ -52,7 +70,7 @@ pub enum ParameterEventChange {
         /// Finite plain-unit delta, not a normalized position or increment.
         amount: f64,
     },
-    /// Linearly reach the floating-point endpoint at the event's offset.
+    /// Linearly reach the plain-unit floating-point endpoint at the event's offset.
     ///
     /// The segment starts at the preceding point for this parameter. If no
     /// earlier point exists in the block, it starts at the parameter's base
@@ -96,6 +114,29 @@ impl ParameterEvent {
         }
     }
 
+    /// Establish an explicit normalized source anchor, including after a plain edit/load.
+    #[must_use]
+    pub const fn normalized_set(offset: u32, parameter: ParameterIndex, value: f64) -> Self {
+        Self {
+            offset,
+            parameter,
+            change: ParameterEventChange::NormalizedSet { value },
+        }
+    }
+
+    /// Reach a normalized endpoint from the preceding normalized coordinate.
+    ///
+    /// Interpolation occurs before forward mapping. Sources with an implicit
+    /// sample -1 baseline must clip it to an explicit normalized set at zero.
+    #[must_use]
+    pub const fn normalized_linear(offset: u32, parameter: ParameterIndex, value: f64) -> Self {
+        Self {
+            offset,
+            parameter,
+            change: ParameterEventChange::NormalizedLinear { value },
+        }
+    }
+
     /// Replace the held global modulation amount at this sample offset.
     #[must_use]
     pub const fn modulation(offset: u32, parameter: ParameterIndex, amount: f64) -> Self {
@@ -128,8 +169,8 @@ impl ParameterEvent {
 /// Validated borrowed parameter events for one process block.
 ///
 /// Construction checks the event count, value shape, finite floating-point
-/// values, and nondecreasing sample offsets. It does not copy event storage or
-/// validate an index against a component schema; the active
+/// values, normalized coordinate bounds, and nondecreasing sample offsets. It
+/// does not copy storage or validate indices against a component schema; the active
 /// [`ParameterStore`](crate::parameters::ParameterStore) performs that second
 /// boundary check before product DSP runs.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -183,6 +224,12 @@ impl<'a> ParameterEvents<'a> {
             previous_offset = Some(event.offset);
 
             match event.change {
+                ParameterEventChange::NormalizedSet { value }
+                | ParameterEventChange::NormalizedLinear { value } => {
+                    if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+                        return Err(ParameterEventsError::InvalidNormalizedValue { index });
+                    }
+                }
                 ParameterEventChange::Set(ParameterEventValue::Float(value))
                 | ParameterEventChange::Linear { value }
                 | ParameterEventChange::Modulate { amount: value } => {
@@ -246,7 +293,33 @@ impl<'a> ParameterEvents<'a> {
             .filter(move |event| event.parameter == parameter)
     }
 
-    /// Create a lazy floating-point trajectory cursor for one parameter.
+    pub(crate) fn has_normalized(self) -> bool {
+        self.events.iter().any(|event| {
+            matches!(
+                event.change,
+                ParameterEventChange::NormalizedSet { .. }
+                    | ParameterEventChange::NormalizedLinear { .. }
+            )
+        })
+    }
+
+    pub(crate) fn mapped_float_cursor(
+        self,
+        parameter: ParameterIndex,
+        initial: f64,
+        coordinate: Option<f64>,
+        descriptor: &'a ParameterDescriptor,
+    ) -> Result<FloatParameterCursor<'a>, ParameterCursorError> {
+        let mut cursor = self.cursor(parameter, initial, CursorKind::Base)?;
+        cursor.mapping = Some(descriptor);
+        cursor.point_coordinate = coordinate;
+        Ok(cursor)
+    }
+
+    /// Create a lazy plain-only floating-point trajectory cursor for one parameter.
+    ///
+    /// Normalized points require [`ParameterStore::float_cursor`](crate::parameters::ParameterStore::float_cursor)
+    /// or a typed float handle; this explicit-plain-baseline cursor rejects them.
     ///
     /// The caller supplies the validated base value at block offset zero. A
     /// cursor may be queried at nondecreasing offsets only.
@@ -344,6 +417,8 @@ impl<'a> ParameterEvents<'a> {
             next_event: 0,
             point_offset: 0,
             point_value: initial,
+            point_coordinate: None,
+            mapping: None,
             last_query_offset: None,
         })
     }
@@ -358,7 +433,9 @@ enum CursorKind {
 /// Lazy cursor over a floating-point base trajectory or held modulation.
 ///
 /// The cursor performs no allocation. It consumes only events for its target
-/// while preserving the source order of equal-offset events.
+/// while preserving the source order of equal-offset events. Store/handle cursors
+/// borrow prepared mapping for normalized interpolation; explicit-plain-baseline
+/// cursors reject normalized evaluation. Every mapped result is validated.
 #[derive(Clone)]
 pub struct FloatParameterCursor<'events> {
     kind: CursorKind,
@@ -368,21 +445,24 @@ pub struct FloatParameterCursor<'events> {
     next_event: usize,
     point_offset: u32,
     point_value: f64,
+    point_coordinate: Option<f64>,
+    mapping: Option<&'events ParameterDescriptor>,
     last_query_offset: Option<u32>,
 }
 
 impl FloatParameterCursor<'_> {
     /// Evaluate the trajectory at one sample offset.
     ///
-    /// Values are constant between points unless the next point is linear,
-    /// in which case the returned value is interpolated lazily.
+    /// Values are constant unless the next point is linear. Interpolation uses
+    /// that endpoint's domain, mapping normalized coordinates to validated plain
+    /// base before returning. No inverse conversion is used.
     ///
     /// # Errors
     ///
-    /// Returns an error for an out-of-range/non-monotonic query or when a
-    /// directly-used set event is not floating-point. The latter indicates
-    /// that the cursor was used without the schema validation performed by
-    /// [`ParameterStore`](crate::parameters::ParameterStore).
+    /// Rejects out-of-range/non-monotonic queries, non-float points, missing
+    /// mapping/source anchors, and invalid mapped interiors or endpoints.
+    /// Direct users must admit the complete event batch against the store before
+    /// DSP; cursor checks do not replace whole-batch admission.
     pub fn value_at(&mut self, offset: u32) -> Result<f64, ParameterCursorError> {
         validate_query(self.frame_count, self.last_query_offset, offset)?;
 
@@ -407,22 +487,27 @@ impl FloatParameterCursor<'_> {
         let Some(event) = self.events.get(index) else {
             return Ok(self.point_value);
         };
-        let ParameterEventChange::Linear { value } = event.change else {
-            return Ok(self.point_value);
+        let (start, end, mapping) = match event.change {
+            ParameterEventChange::Linear { value } => (self.point_value, value, None),
+            ParameterEventChange::NormalizedLinear { value } => {
+                let mapping = self
+                    .mapping
+                    .ok_or(ParameterCursorError::MappingUnavailable)?;
+                let start = self
+                    .point_coordinate
+                    .ok_or(ParameterCursorError::MissingSourceCoordinate)?;
+                (start, value, Some(mapping))
+            }
+            _ => return Ok(self.point_value),
         };
-        if event.offset <= self.point_offset {
-            return Ok(self.point_value);
-        }
-
         let span = f64::from(event.offset - self.point_offset);
         let progress = f64::from(offset - self.point_offset) / span;
-        if self.point_value.is_sign_negative() != value.is_sign_negative()
-            && self.point_value != 0.0
-            && value != 0.0
-        {
-            Ok(self.point_value.mul_add(1.0 - progress, value * progress))
-        } else {
-            Ok(self.point_value + (value - self.point_value) * progress)
+        let value = interpolate(start, end, progress);
+        match mapping {
+            Some(mapping) => mapping
+                .mapped_float(value)
+                .map_err(ParameterCursorError::Mapping),
+            None => Ok(value),
         }
     }
 
@@ -432,7 +517,10 @@ impl FloatParameterCursor<'_> {
                 (self.kind, event.change),
                 (
                     CursorKind::Base,
-                    ParameterEventChange::Set(_) | ParameterEventChange::Linear { .. }
+                    ParameterEventChange::Set(_)
+                        | ParameterEventChange::Linear { .. }
+                        | ParameterEventChange::NormalizedSet { .. }
+                        | ParameterEventChange::NormalizedLinear { .. }
                 ) | (
                     CursorKind::Modulation,
                     ParameterEventChange::Modulate { .. }
@@ -445,7 +533,26 @@ impl FloatParameterCursor<'_> {
         index: usize,
         event: &ParameterEvent,
     ) -> Result<(), ParameterCursorError> {
+        let coordinate = match event.change {
+            ParameterEventChange::NormalizedSet { value } => Some(value),
+            ParameterEventChange::NormalizedLinear { value } => {
+                if self.mapping.is_none() {
+                    return Err(ParameterCursorError::MappingUnavailable);
+                }
+                if self.point_coordinate.is_none() {
+                    return Err(ParameterCursorError::MissingSourceCoordinate);
+                }
+                Some(value)
+            }
+            _ => None,
+        };
         let value = match event.change {
+            ParameterEventChange::NormalizedSet { value }
+            | ParameterEventChange::NormalizedLinear { value } => self
+                .mapping
+                .ok_or(ParameterCursorError::MappingUnavailable)?
+                .mapped_float(value)
+                .map_err(ParameterCursorError::Mapping)?,
             ParameterEventChange::Set(ParameterEventValue::Float(value))
             | ParameterEventChange::Linear { value }
             | ParameterEventChange::Modulate { amount: value } => value,
@@ -459,7 +566,16 @@ impl FloatParameterCursor<'_> {
         };
         self.point_offset = event.offset;
         self.point_value = value;
+        self.point_coordinate = coordinate;
         Ok(())
+    }
+}
+
+fn interpolate(start: f64, end: f64, progress: f64) -> f64 {
+    if start.is_sign_negative() != end.is_sign_negative() && start != 0.0 && end != 0.0 {
+        start.mul_add(1.0 - progress, end * progress)
+    } else {
+        start + (end - start) * progress
     }
 }
 
@@ -541,6 +657,10 @@ impl StepCursor<'_> {
                 ParameterEventChange::Set(value) => value,
                 ParameterEventChange::Linear { value } => ParameterEventValue::Float(value),
                 ParameterEventChange::Modulate { .. } => unreachable!("modulation was skipped"),
+                ParameterEventChange::NormalizedSet { .. }
+                | ParameterEventChange::NormalizedLinear { .. } => {
+                    return Err(ParameterCursorError::MappingUnavailable);
+                }
             };
             if value.value_type() != self.value.value_type() {
                 return Err(ParameterCursorError::WrongValueType {
@@ -609,6 +729,11 @@ pub enum ParameterEventsError {
         /// Current event offset.
         actual: u32,
     },
+    /// A normalized source coordinate was non-finite or outside 0..=1.
+    InvalidNormalizedValue {
+        /// Zero-based event index.
+        index: usize,
+    },
     /// A float base value, linear endpoint, or modulation amount was not finite.
     NonFiniteValue {
         /// Zero-based event index.
@@ -644,6 +769,10 @@ impl fmt::Display for ParameterEventsError {
                 formatter,
                 "parameter event {index} offset {actual} follows previous offset {previous}"
             ),
+            Self::InvalidNormalizedValue { index } => write!(
+                formatter,
+                "parameter event {index} has an invalid normalized coordinate"
+            ),
             Self::NonFiniteValue { index } => {
                 write!(formatter, "parameter event {index} has a non-finite value")
             }
@@ -656,6 +785,12 @@ impl std::error::Error for ParameterEventsError {}
 /// Failure while evaluating a parameter trajectory cursor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParameterCursorError {
+    /// Normalized source points need a consumed store's prepared mapper.
+    MappingUnavailable,
+    /// A plain-origin baseline/point cannot seed a normalized linear segment.
+    MissingSourceCoordinate,
+    /// A consumed mapping input/result was invalid, including segment interiors.
+    Mapping(ParameterControlError),
     /// Cursor's initial base value or held amount was not finite.
     NonFiniteInitial,
     /// Query offset was outside the validated block.
@@ -688,6 +823,13 @@ pub enum ParameterCursorError {
 impl fmt::Display for ParameterCursorError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::MappingUnavailable => {
+                formatter.write_str("normalized trajectory requires a prepared float mapping")
+            }
+            Self::MissingSourceCoordinate => {
+                formatter.write_str("normalized linear segment requires an explicit source anchor")
+            }
+            Self::Mapping(error) => error.fmt(formatter),
             Self::NonFiniteInitial => formatter.write_str("parameter cursor base is not finite"),
             Self::OffsetOutOfRange {
                 offset,
@@ -723,6 +865,7 @@ impl std::error::Error for ParameterCursorError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::InvalidParameter(error) => Some(error),
+            Self::Mapping(error) => Some(error),
             _ => None,
         }
     }

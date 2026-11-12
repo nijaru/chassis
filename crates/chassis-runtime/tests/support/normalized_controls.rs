@@ -1,12 +1,19 @@
-//! Production normalized scalar mutation and runtime-owned coordinate provenance.
+//! Production normalized controls and runtime-owned coordinate provenance.
+
+#[path = "normalized_trajectories.rs"]
+mod trajectories;
+
+thread_local! {
+    static AFTER_DSP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
 use chassis_runtime::{
     audio::{AudioPortIndex, DEFAULT_EFFECT_CONFIGURATION},
     automation::{ParameterEvent, ParameterEventValue, ParameterEvents},
     buffer::{ChannelBuffer, InputEndpoint, OutputEndpoint},
     parameters::{
-        FloatMapping, FloatParameter, ParameterControlError, ParameterDescriptor, ParameterIndex,
-        ParameterMappingError, ParameterStore, ParameterValue,
+        ChoiceIndex, ChoiceOption, FloatMapping, FloatParameter, ParameterControlError,
+        ParameterDescriptor, ParameterIndex, ParameterMappingError, ParameterStore, ParameterValue,
     },
     process::{ActivationConfig, ProcessBlock, ProcessConfig, ProcessContext, ProcessMode},
     runtime::{
@@ -30,13 +37,15 @@ const BOOL: ParameterIndex = ParameterIndex::new(2);
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Mapping {
     Plateau(f64),
+    Square,
+    CompletionProbe,
     Broken,
 }
 impl FloatMapping for Mapping {
     fn validate(&self, minimum: f64, maximum: f64) -> Result<(), ParameterControlError> {
         let valid = match self {
             Self::Plateau(cutoff) => cutoff.is_finite() && (0.0..1.0).contains(cutoff),
-            Self::Broken => true,
+            Self::Square | Self::CompletionProbe | Self::Broken => true,
         };
         if valid && matches!((minimum, maximum), (0.0, 1.0)) {
             Ok(())
@@ -48,6 +57,12 @@ impl FloatMapping for Mapping {
     }
     fn normalized_to_plain(&self, coordinate: f64) -> f64 {
         match *self {
+            Self::Square | Self::CompletionProbe => {
+                if matches!(self, Self::CompletionProbe) {
+                    assert!(!AFTER_DSP.with(std::cell::Cell::get), "mapping after DSP");
+                }
+                coordinate * coordinate
+            }
             Self::Plateau(cutoff) => {
                 if coordinate <= cutoff {
                     0.0
@@ -77,6 +92,7 @@ impl FloatMapping for Mapping {
                     cutoff + plain * (1.0 - cutoff)
                 }
             }
+            Self::Square | Self::CompletionProbe => plain.sqrt(),
             Self::Broken => plain,
         })
     }
@@ -104,6 +120,7 @@ struct Dsp {
     bank: bool,
     failure: Failure,
     processed: bool,
+    completion_probe: bool,
 }
 #[derive(Debug)]
 struct InvalidBank;
@@ -139,6 +156,17 @@ impl Component for Definition {
                     .unwrap(),
                 ParameterDescriptor::float("other", "Other", 0.0, 1.0, 0.0).unwrap(),
                 ParameterDescriptor::boolean("enabled", "Enabled", true).unwrap(),
+                ParameterDescriptor::choice(
+                    "mode",
+                    "Mode",
+                    vec![
+                        ChoiceOption::new("a", "A").unwrap(),
+                        ChoiceOption::new("b", "B").unwrap(),
+                    ],
+                    "a",
+                )
+                .unwrap(),
+                ParameterDescriptor::integer("count", "Count", 0, 4, 0).unwrap(),
             ],
         )
     }
@@ -161,6 +189,7 @@ impl Component for Definition {
             bank: bank(custom).unwrap(),
             failure: self.failure,
             processed: false,
+            completion_probe: matches!(self.mapping, Mapping::CompletionProbe),
         })
     }
 }
@@ -180,16 +209,23 @@ impl Process<f64> for Dsp {
             .normalized_coordinate(self.gain.index())
             .unwrap()
             .unwrap_or(-1.0);
-        let base = self.gain.cursor(block)?.value_at(0)?;
+        let mut cursor = self.gain.cursor(block)?;
+        let mut values = [0.0; 4];
+        for offset in 0..block.frame_count() {
+            values[offset as usize] =
+                cursor.value_at(offset)? + 2.0 * f64::from(u8::from(self.bank));
+        }
         block.for_each_channel(|mut channel| {
-            let value = if channel.output_endpoint().unwrap().channel() == 0 {
-                base + 2.0 * f64::from(u8::from(self.bank))
+            let left = channel.output_endpoint().unwrap().channel() == 0;
+            let output = channel.output_mut().unwrap();
+            if left {
+                output.copy_from_slice(&values[..output.len()]);
             } else {
-                coordinate
-            };
-            channel.output_mut().unwrap().fill(value);
+                output.fill(coordinate);
+            }
         });
         self.processed = true;
+        AFTER_DSP.with(|flag| flag.set(self.completion_probe));
         if matches!(self.failure, Failure::Process) {
             return Err(ProcessError::Message("injected DSP failure"));
         }
@@ -208,31 +244,40 @@ fn render(
     runtime: &mut InstanceRuntime<Dsp>,
     events: &[ParameterEvent],
 ) -> Result<[f64; 2], InstanceProcessError> {
+    let output = render_frames(runtime, events, 4)?;
+    Ok([output[0][0], output[1][0]])
+}
+fn render_frames(
+    runtime: &mut InstanceRuntime<Dsp>,
+    events: &[ParameterEvent],
+    frames: u32,
+) -> Result<[[f64; 4]; 2], InstanceProcessError> {
     let mut left = [0.0; 4];
     let mut right = [0.0; 4];
     let mut buffers = [
         ChannelBuffer::in_place(
             InputEndpoint::new(AudioPortIndex::new(0), 0),
             OutputEndpoint::new(AudioPortIndex::new(1), 0),
-            &mut left,
-            4,
+            &mut left[..frames as usize],
+            frames,
         )
         .unwrap(),
         ChannelBuffer::in_place(
             InputEndpoint::new(AudioPortIndex::new(0), 1),
             OutputEndpoint::new(AudioPortIndex::new(1), 1),
-            &mut right,
-            4,
+            &mut right[..frames as usize],
+            frames,
         )
         .unwrap(),
     ];
     let context = ProcessContext::new(
         ProcessMode::Realtime,
         &TransportSnapshot::UNKNOWN,
-        ParameterEvents::new(events, 4, 16).unwrap(),
+        ParameterEvents::new(events, frames, 16).unwrap(),
     );
-    runtime.process(4, context, &mut buffers)?;
-    Ok([left[0], right[0]])
+    runtime.process(frames, context, &mut buffers)?;
+    AFTER_DSP.with(|flag| flag.set(false));
+    Ok([left, right])
 }
 fn document(runtime: &InstanceRuntime<Dsp>, gain: f64, bank: bool) -> StateDocument {
     let current = runtime.state_document().unwrap();
@@ -648,6 +693,35 @@ pub(super) fn qualify() {
             } else {
                 1.0_f64.to_bits()
             }
+        );
+        let timed = [
+            ParameterEvent::normalized_set(0, GAIN, 0.25),
+            ParameterEvent::set(0, OTHER, ParameterEventValue::Float(0.5)),
+            ParameterEvent::normalized_set(1, OTHER, 0.25),
+            ParameterEvent::set(2, BOOL, ParameterEventValue::Boolean(false)),
+            ParameterEvent::set(
+                2,
+                ParameterIndex::new(3),
+                ParameterEventValue::Choice(ChoiceIndex::new(1)),
+            ),
+            ParameterEvent::set(2, ParameterIndex::new(4), ParameterEventValue::Integer(2)),
+            ParameterEvent::normalized_linear(3, GAIN, 0.75),
+            ParameterEvent::normalized_linear(3, OTHER, 0.75),
+        ];
+        render(&mut runtime, &timed).unwrap();
+        assert_eq!(
+            pair(runtime.parameters()),
+            (0.5_f64.to_bits(), Some(0.75_f64.to_bits()))
+        );
+        assert_eq!(
+            runtime.parameters().get_event_value(ParameterIndex::new(3)),
+            Some(ParameterEventValue::Choice(ChoiceIndex::new(1)))
+        );
+        let invalid_endpoint = [ParameterEvent::normalized_set(0, GAIN, 0.25)];
+        assert!(
+            broken
+                .validate_events(ParameterEvents::new(&invalid_endpoint, 4, 1).unwrap())
+                .is_err()
         );
         for invalid in [f64::NAN, -0.1, 1.1] {
             assert!(
