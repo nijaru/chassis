@@ -4,7 +4,7 @@ This file owns unresolved decisions, not implemented inventories or a second roa
 
 ## Control trajectories and origins
 
-Which representation preserves source interpolation domains and boundary anchors without callback use of non-realtime presentation policy? [Trajectory portability](parameters-state.md#trajectory-portability-before-stabilization) records the VST3 normalized-ramp counterexample that the initial core proof must address.
+Which timed representation preserves source interpolation domains and boundary anchors using the prepared float mapper and canonical scalar provenance? Define explicit source anchoring when a plain edit or state load leaves provenance unknown, mixed-domain ordering and bounded admission. [Trajectory portability](parameters-state.md#trajectory-portability-before-stabilization) owns the reference-backed constraints; an inverse conversion is not source-history reconstruction.
 
 How do typed gestures and origin-aware changes preserve host notification ordering, observation, echo suppression, and state/resource authority while processing is stopped or a replacement is pending? These are core control questions; they do not require an editor toolkit.
 

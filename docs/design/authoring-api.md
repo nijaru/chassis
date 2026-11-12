@@ -193,17 +193,20 @@ Match `StateExportError` for export construction/encoding, `StateValidationError
 
 An accepted active custom-state replacement freezes the pre-load DSP base/modulation controls and withholds trajectories until reactivation; base automation is discarded, while modulation updates only the desired external signal; desired replacement state remains saveable. Keep dependent values together in custom state and use complete loads for coupled non-realtime edits. Direct parameter edits and automation enforce independently valid descriptor domains; custom validation cannot narrow their combinations. Activation rechecks custom policy and prepares resources, and processors must handle legal effective controls safely until replacement. See [state validity](parameters-state.md#state-validity-closure).
 
-Attach an immutable, value-comparable `ParameterControlPolicy` to a descriptor when default linear mapping/plain text is insufficient:
+Attach a prepared, value-comparable `FloatMapping` for a custom float taper and an independent `ParameterControlPolicy` for text:
 
 ```rust,ignore
 let trim = ParameterDescriptor::float("trim", "Trim", 0.0, 1.0, 0.5)?
+    .with_float_mapping(TrimMapping)?
     .with_control_policy(TrimControl { precision: 1 })?;
 let plain = trim.normalized_to_value(0.5)?; // Float(0.25)
 let mut text = String::new();
 trim.format_value(&plain, &mut text)?; // "25.0 %"
 ```
 
-[TrimControl](../../examples/clap-conformance/src/trim_control.rs) is the executable example; [parameters/state](parameters-state.md#control-mapping-and-presentation) owns validation, rounding, configuration equality, and deployment limits. Policies run off the callback and never transform stored values or automation. CLAP shares policy text, not an arbitrary host-knob normalized taper.
+[TrimMapping and TrimControl](../../examples/clap-conformance/src/trim_control.rs) are the executable configurations; [parameters/state](parameters-state.md#control-mapping-and-presentation) owns validation, rounding, configuration equality and deployment limits. Prepared forward mapping has an author-enforced realtime contract; inverse conversion and text policy remain non-realtime. CLAP shares policy text, not an arbitrary host-knob normalized taper.
+
+Use `runtime.parameters_mut().set_normalized(key, coordinate)` for scalar control edits. Its dense `set_normalized_index` counterpart validates and replaces plain base plus exact coordinate without framework allocation. `normalized_coordinate(index)` reads retained provenance; non-realtime `normalized_value(index)` prefers that coordinate over a representative inverse. [Scalar provenance](parameters-state.md#normalized-scalar-provenance) defines invalidation and lifecycle behavior. These methods do not add timed normalized trajectories, gestures or host notification.
 
 ## Notes, MIDI, and output
 

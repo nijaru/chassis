@@ -35,6 +35,8 @@ use chassis_runtime::{
 
 #[path = "support/linked_composition.rs"]
 mod linked_composition;
+#[path = "support/normalized_controls.rs"]
+mod normalized_controls;
 #[path = "support/resource_state.rs"]
 mod resource_state;
 #[path = "support/trajectory_portability.rs"]
@@ -205,6 +207,7 @@ fn repeated_post_activation_process_calls_do_not_allocate_or_deallocate() {
     mixed_event_callbacks_do_not_allocate_or_reclaim();
     linked_composition::qualify();
     trajectory_portability::qualify();
+    normalized_controls::qualify();
 }
 
 fn typed_automation_callbacks_do_not_allocate_or_reclaim() {

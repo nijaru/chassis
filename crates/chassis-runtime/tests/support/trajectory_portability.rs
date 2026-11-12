@@ -12,8 +12,8 @@ use chassis_runtime::{
     automation::{ParameterEvent, ParameterEventChange, ParameterEventValue, ParameterEvents},
     buffer::{ChannelBuffer, InputEndpoint, OutputEndpoint},
     parameters::{
-        FloatParameter, ParameterControlError, ParameterControlPolicy, ParameterDescriptor,
-        ParameterKind, ParameterStore, ParameterValue,
+        FloatMapping, FloatParameter, ParameterControlError, ParameterDescriptor, ParameterStore,
+        ParameterValue,
     },
     process::{ActivationConfig, ProcessBlock, ProcessConfig, ProcessContext, ProcessMode},
     runtime::{Component, InstanceProcessError, InstanceRuntime, Process, ProcessError, Processor},
@@ -36,8 +36,8 @@ enum Curve {
     Plateau,
 }
 impl Curve {
-    // These closed, pure fixture functions are explicitly separate from the
-    // non-realtime presentation-policy hooks below. No general mapper is implied.
+    // Keep these closed reference formulas independent of the interpolation
+    // implementations. Only representative inverse conversion below is non-RT.
     fn map(self, coordinate: f64) -> f64 {
         match self {
             Self::Identity => coordinate,
@@ -52,30 +52,24 @@ impl Curve {
         }
     }
 }
-impl ParameterControlPolicy for Curve {
-    fn normalized_to_value(
-        &self,
-        _: &ParameterKind,
-        coordinate: f64,
-    ) -> Result<ParameterValue, ParameterControlError> {
-        assert!(
-            !super::counting_this_thread(),
-            "presentation hook entered the callback"
-        );
-        Ok(ParameterValue::Float(self.map(coordinate)))
+impl FloatMapping for Curve {
+    fn validate(&self, minimum: f64, maximum: f64) -> Result<(), ParameterControlError> {
+        if matches!((minimum, maximum), (0.0, 1.0)) {
+            Ok(())
+        } else {
+            Err(ParameterControlError::InvalidPolicy(
+                "proof mapping requires 0..=1",
+            ))
+        }
     }
-    fn value_to_normalized(
-        &self,
-        _: &ParameterKind,
-        value: &ParameterValue,
-    ) -> Result<f64, ParameterControlError> {
+    fn normalized_to_plain(&self, coordinate: f64) -> f64 {
+        self.map(coordinate)
+    }
+    fn plain_to_normalized(&self, value: f64) -> Result<f64, ParameterControlError> {
         assert!(
             !super::counting_this_thread(),
-            "presentation hook entered the callback"
+            "non-realtime inverse entered the callback"
         );
-        let ParameterValue::Float(value) = *value else {
-            unreachable!("fixture schema is float")
-        };
         Ok(match self {
             Self::Identity => value,
             Self::Square => value.sqrt(),
@@ -313,7 +307,7 @@ impl Component for Effect {
                 .map(|(key, curve)| {
                     ParameterDescriptor::float(key, key, 0.0, 1.0, 0.0)
                         .unwrap()
-                        .with_control_policy(curve)
+                        .with_float_mapping(curve)
                         .unwrap()
                         .with_global_modulation()
                         .unwrap()

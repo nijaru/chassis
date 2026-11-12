@@ -1,4 +1,4 @@
-//! Non-realtime control mapping and text policy, separate from DSP trajectories.
+//! Non-realtime text presentation, independent of prepared float mapping.
 
 use core::{any::Any, fmt};
 use std::sync::Arc;
@@ -8,7 +8,7 @@ use super::{
     ParameterValueError,
 };
 
-/// Failure to map or present a parameter on the control thread.
+/// Failure to map or present a parameter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParameterControlError {
     /// A typed input or policy result violates the descriptor's domain.
@@ -38,17 +38,17 @@ impl fmt::Display for ParameterControlError {
 }
 impl std::error::Error for ParameterControlError {}
 
-/// Immutable author-defined control mapping, units, precision, and text syntax.
+/// Immutable author-defined units, precision, and text syntax.
 ///
 /// Attach a value-comparable configuration with
 /// [`ParameterDescriptor::with_control_policy`]. Use the descriptor's methods,
-/// not these hooks directly: they validate typed domains and normalized inputs
-/// and outputs. Policies must be deterministic and immutable; equality must
-/// compare every configuration value that changes behavior.
+/// not these hooks directly: they validate typed inputs and outputs. Policies
+/// must be deterministic and immutable; equality must compare every
+/// configuration value that changes behavior.
 ///
-/// These are non-realtime hooks. They do not transform stored plain units,
-/// automation trajectories, or modulation. Display rounding may be lossy;
-/// authors define the precision and supported text round trips together.
+/// These are non-realtime hooks. Float normalization belongs exclusively to
+/// [`super::FloatMapping`], not this presentation policy. Display rounding may
+/// be lossy; authors define precision and supported text round trips together.
 /// Unoverridden hooks use [`DefaultParameterControl`]'s behavior.
 pub trait ParameterControlPolicy: fmt::Debug + Send + Sync + 'static {
     /// Check domain/configuration compatibility during schema validation.
@@ -58,32 +58,6 @@ pub trait ParameterControlPolicy: fmt::Debug + Send + Sync + 'static {
     /// Return an error when this policy cannot support the validated domain.
     fn validate(&self, _kind: &ParameterKind) -> Result<(), ParameterControlError> {
         Ok(())
-    }
-
-    /// Map a validated plain-unit value to a finite normalized control position.
-    ///
-    /// # Errors
-    ///
-    /// Return an error if this value cannot be mapped.
-    fn value_to_normalized(
-        &self,
-        kind: &ParameterKind,
-        value: &ParameterValue,
-    ) -> Result<f64, ParameterControlError> {
-        linear_to_normalized(kind, value)
-    }
-
-    /// Map a finite `0..=1` control position to a typed plain-unit value.
-    ///
-    /// # Errors
-    ///
-    /// Return an error if this position cannot be mapped.
-    fn normalized_to_value(
-        &self,
-        kind: &ParameterKind,
-        normalized: f64,
-    ) -> Result<ParameterValue, ParameterControlError> {
-        linear_from_normalized(kind, normalized)
     }
 
     /// Write display text, including any product-defined units and precision.
@@ -115,18 +89,12 @@ pub trait ParameterControlPolicy: fmt::Debug + Send + Sync + 'static {
     }
 }
 
-/// Default linear control mapping and plain-unit text.
+/// Default plain-unit numeric text and choice names.
 ///
-/// Normalized discrete controls choose the nearest step, with ties toward the
-/// higher step; boolean switches at `0.5`. Constant domains map to zero and every
-/// valid normalized position maps back to the constant. Endpoints are exact.
-/// Interior round trips are limited by floating-point resolution, including for
-/// wide integer domains; text preserves exact integer values.
-///
-/// Text uses numeric `Display`, `0`/`1` booleans, and choice names. Numeric
-/// stepped text truncates toward zero after checking its unrounded domain;
-/// non-integer spellings require magnitude below `2^53`. Choice text trims outer
-/// whitespace and rejects ambiguous names.
+/// Numeric stepped text truncates toward zero after checking the unrounded
+/// domain. Exact integer text preserves the whole `i64` range; fractional text
+/// requires magnitude below `2^53`. Choice text trims outer whitespace and
+/// rejects ambiguous names.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DefaultParameterControl;
 impl ParameterControlPolicy for DefaultParameterControl {}
@@ -173,39 +141,7 @@ impl ParameterDescriptor {
     }
 
     pub(super) fn validate_control(&self) -> Result<(), ParameterControlError> {
-        self.control_policy().validate(&self.kind)?;
-        // Probe basic usability, not a proof of arbitrary policy inverses or
-        // monotonicity. Display rounding is deliberately not constrained here.
-        let (minimum, maximum) = match &self.kind {
-            ParameterKind::Float {
-                minimum, maximum, ..
-            } => (
-                ParameterValue::Float(*minimum),
-                ParameterValue::Float(*maximum),
-            ),
-            ParameterKind::Integer {
-                minimum, maximum, ..
-            } => (
-                ParameterValue::Integer(*minimum),
-                ParameterValue::Integer(*maximum),
-            ),
-            ParameterKind::Boolean { .. } => (
-                ParameterValue::Boolean(false),
-                ParameterValue::Boolean(true),
-            ),
-            ParameterKind::Choice { options, .. } => (
-                ParameterValue::Choice(options[0].id().clone()),
-                ParameterValue::Choice(options[options.len() - 1].id().clone()),
-            ),
-        };
-        for value in [minimum, self.default_value(), maximum] {
-            let normalized = self.value_to_normalized(&value)?;
-            self.normalized_to_value(normalized)?;
-        }
-        for normalized in [0.0, 1.0] {
-            self.normalized_to_value(normalized)?;
-        }
-        Ok(())
+        self.control_policy().validate(&self.kind)
     }
 
     /// Return this descriptor's non-realtime control policy.
@@ -214,42 +150,6 @@ impl ParameterDescriptor {
         self.control
             .as_ref()
             .map_or(&DefaultParameterControl, |policy| policy.0.as_ref())
-    }
-
-    /// Map a validated typed value to a finite normalized control position.
-    ///
-    /// # Errors
-    ///
-    /// Rejects invalid typed inputs and non-finite/out-of-range policy results.
-    pub fn value_to_normalized(
-        &self,
-        value: &ParameterValue,
-    ) -> Result<f64, ParameterControlError> {
-        self.validate_value(value)
-            .map_err(ParameterControlError::Value)?;
-        let normalized = self
-            .control_policy()
-            .value_to_normalized(&self.kind, value)?;
-        validate_normalized(normalized)?;
-        Ok(normalized)
-    }
-
-    /// Map a normalized control position to a validated typed plain-unit value.
-    ///
-    /// # Errors
-    ///
-    /// Rejects invalid normalized inputs and typed policy results.
-    pub fn normalized_to_value(
-        &self,
-        normalized: f64,
-    ) -> Result<ParameterValue, ParameterControlError> {
-        validate_normalized(normalized)?;
-        let value = self
-            .control_policy()
-            .normalized_to_value(&self.kind, normalized)?;
-        self.validate_value(&value)
-            .map_err(ParameterControlError::Value)?;
-        Ok(value)
     }
 
     /// Format a typed value through the non-realtime presentation policy.
@@ -304,158 +204,6 @@ impl fmt::Write for CheckedWriter<'_> {
             Ok(())
         }
     }
-}
-
-fn validate_normalized(value: f64) -> Result<(), ParameterControlError> {
-    if value.is_finite() && (0.0..=1.0).contains(&value) {
-        Ok(())
-    } else {
-        Err(ParameterControlError::InvalidNormalized)
-    }
-}
-
-#[allow(
-    clippy::cast_precision_loss,
-    reason = "normalized f64 controls have finite resolution; integer differences remain exact before conversion"
-)]
-#[expect(
-    clippy::float_cmp,
-    reason = "endpoint and constant-domain identity must be exact, not an epsilon neighborhood"
-)]
-fn linear_to_normalized(
-    kind: &ParameterKind,
-    value: &ParameterValue,
-) -> Result<f64, ParameterControlError> {
-    let normalized = match (kind, value) {
-        (
-            ParameterKind::Float {
-                minimum, maximum, ..
-            },
-            ParameterValue::Float(value),
-        ) => {
-            if minimum == maximum {
-                0.0
-            } else if value == maximum {
-                1.0
-            } else {
-                let span = maximum - minimum;
-                if span.is_finite() {
-                    (value - minimum) / span
-                } else {
-                    (value * 0.5 - minimum * 0.5) / (maximum * 0.5 - minimum * 0.5)
-                }
-            }
-        }
-        (
-            ParameterKind::Integer {
-                minimum, maximum, ..
-            },
-            ParameterValue::Integer(value),
-        ) => {
-            let span = i128::from(*maximum) - i128::from(*minimum);
-            if span == 0 {
-                0.0
-            } else {
-                (i128::from(*value) - i128::from(*minimum)) as f64 / span as f64
-            }
-        }
-        (ParameterKind::Boolean { .. }, ParameterValue::Boolean(value)) => {
-            f64::from(u8::from(*value))
-        }
-        (ParameterKind::Choice { options, .. }, ParameterValue::Choice(value)) => {
-            let index = options
-                .iter()
-                .position(|option| option.id() == value)
-                .ok_or(ParameterControlError::Value(
-                    ParameterValueError::UnknownChoice,
-                ))?;
-            if options.len() == 1 {
-                0.0
-            } else {
-                index as f64 / (options.len() - 1) as f64
-            }
-        }
-        _ => {
-            return Err(ParameterControlError::Value(
-                ParameterValueError::WrongType {
-                    expected: kind.value_type(),
-                    actual: value.value_type(),
-                },
-            ));
-        }
-    };
-    Ok(normalized)
-}
-
-#[expect(
-    clippy::float_cmp,
-    reason = "endpoint and constant-domain identity must be exact, not an epsilon neighborhood"
-)]
-fn linear_from_normalized(
-    kind: &ParameterKind,
-    normalized: f64,
-) -> Result<ParameterValue, ParameterControlError> {
-    Ok(match kind {
-        ParameterKind::Float {
-            minimum, maximum, ..
-        } => {
-            let value = if normalized == 0.0 || minimum == maximum {
-                *minimum
-            } else if normalized == 1.0 {
-                *maximum
-            } else {
-                let span = maximum - minimum;
-                if span.is_finite() {
-                    normalized.mul_add(span, *minimum)
-                } else {
-                    // An overflowing span implies opposite signs. The weighted
-                    // terms are finite and their sum cannot overflow.
-                    (1.0 - normalized) * minimum + normalized * maximum
-                }
-            };
-            ParameterValue::Float(value)
-        }
-        ParameterKind::Integer {
-            minimum, maximum, ..
-        } => {
-            let offset = nearest_step(normalized, minimum.abs_diff(*maximum));
-            let value = i64::try_from(i128::from(*minimum) + i128::from(offset))
-                .map_err(|_| ParameterControlError::InvalidNormalized)?;
-            ParameterValue::Integer(value)
-        }
-        ParameterKind::Boolean { .. } => ParameterValue::Boolean(normalized >= 0.5),
-        ParameterKind::Choice { options, .. } => {
-            let span = u64::try_from(options.len() - 1)
-                .map_err(|_| ParameterControlError::InvalidPolicy("too many choices"))?;
-            let index = usize::try_from(nearest_step(normalized, span))
-                .expect("normalized choice offset is bounded by its option count");
-            let option = options
-                .get(index)
-                .ok_or(ParameterControlError::InvalidNormalized)?;
-            ParameterValue::Choice(option.id().clone())
-        }
-    })
-}
-
-// Round the exact binary control coordinate times an integer span. Converting
-// the span to f64 first loses low bits and can reverse a wide-domain half tie.
-// Validated coordinates are in 0..=1, so the denominator shift is at least 52
-// and the product fits in 117 bits even for the full-width i64 domain.
-fn nearest_step(normalized: f64, span: u64) -> u64 {
-    let bits = normalized.to_bits();
-    let exponent = (bits >> 52) & 0x7ff;
-    let fraction = bits & ((1_u64 << 52) - 1);
-    let (significand, shift) = if exponent == 0 {
-        (fraction, 1074)
-    } else {
-        (fraction | (1_u64 << 52), 1075 - exponent)
-    };
-    if shift >= 128 {
-        return 0;
-    }
-    let product = u128::from(significand) * u128::from(span);
-    let rounded = (product >> shift) + ((product >> (shift - 1)) & 1);
-    u64::try_from(rounded).expect("normalized offset is bounded by its integer span")
 }
 
 fn format_plain(

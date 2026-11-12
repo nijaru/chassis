@@ -38,6 +38,8 @@ impl ConformanceEffect {
             .expect("float parameter is valid")
             .with_control_policy(trim_control::TrimControl { precision: 1 })
             .expect("trim control policy is valid")
+            .with_float_mapping(trim_control::TrimMapping)
+            .expect("trim mapping is valid")
             .with_global_modulation()
             .expect("trim is a float");
         Self {

@@ -3,7 +3,7 @@
 use chassis_runtime::{
     audio::DEFAULT_EFFECT_CONFIGURATION,
     parameters::{
-        ChoiceOption, DefaultParameterControl, ParameterControlError, ParameterControlPolicy,
+        ChoiceOption, FloatMapping, ParameterControlError, ParameterControlPolicy,
         ParameterDescriptor, ParameterKind, ParameterStore, ParameterValue,
     },
     process::{ActivationConfig, ProcessConfig},
@@ -15,17 +15,19 @@ use core::{convert::Infallible, fmt, num::NonZeroU32};
 
 #[path = "../../../examples/clap-conformance/src/trim_control.rs"]
 mod trim_control;
-use trim_control::TrimControl;
+use trim_control::{TrimControl, TrimMapping};
 
 fn trim(precision: u8) -> ParameterDescriptor {
     ParameterDescriptor::float("trim", "Trim", 0.0, 1.0, 0.5)
         .unwrap()
         .with_control_policy(TrimControl { precision })
         .unwrap()
+        .with_float_mapping(TrimMapping)
+        .unwrap()
 }
 
 #[test]
-fn author_mapping_units_precision_and_plain_state_are_one_policy() {
+fn prepared_mapping_and_text_policy_preserve_plain_state() {
     let descriptor = trim(1);
     for (normalized, plain) in [(0.0, 0.0), (0.5, 0.25), (1.0, 1.0)] {
         let value = ParameterValue::Float(plain);
@@ -183,29 +185,26 @@ fn standard_discrete_mapping_and_text_use_their_declared_rounding() {
 
 #[derive(Debug, PartialEq)]
 struct BadInterior;
-impl ParameterControlPolicy for BadInterior {
-    fn value_to_normalized(
-        &self,
-        kind: &ParameterKind,
-        value: &ParameterValue,
-    ) -> Result<f64, ParameterControlError> {
-        if value == &ParameterValue::Float(0.25) {
-            Ok(f64::NAN)
-        } else {
-            DefaultParameterControl.value_to_normalized(kind, value)
-        }
+impl FloatMapping for BadInterior {
+    fn validate(&self, _: f64, _: f64) -> Result<(), ParameterControlError> {
+        Ok(())
     }
-    fn normalized_to_value(
-        &self,
-        kind: &ParameterKind,
-        value: f64,
-    ) -> Result<ParameterValue, ParameterControlError> {
+    fn plain_to_normalized(&self, value: f64) -> Result<f64, ParameterControlError> {
+        Ok(if value.to_bits() == 0.25_f64.to_bits() {
+            f64::NAN
+        } else {
+            value
+        })
+    }
+    fn normalized_to_plain(&self, value: f64) -> f64 {
         if value.to_bits() == 0.25_f64.to_bits() {
-            Ok(ParameterValue::Boolean(true))
+            f64::NAN
         } else {
-            DefaultParameterControl.normalized_to_value(kind, value)
+            value
         }
     }
+}
+impl ParameterControlPolicy for BadInterior {
     fn parse(&self, _: &ParameterKind, _: &str) -> Result<ParameterValue, ParameterControlError> {
         Ok(ParameterValue::Float(2.0))
     }
@@ -254,10 +253,12 @@ fn wide_integer_mapping_preserves_exact_binary_rounding() {
 }
 
 #[test]
-fn policy_outputs_and_writer_failures_are_checked_after_admission() {
+fn mapping_outputs_and_writer_failures_are_checked_after_admission() {
     let descriptor = ParameterDescriptor::float("x", "X", 0.0, 1.0, 0.5)
         .unwrap()
         .with_control_policy(BadInterior)
+        .unwrap()
+        .with_float_mapping(BadInterior)
         .unwrap();
     for normalized in [f64::NAN, f64::INFINITY, -0.1, 1.1, 0.25] {
         assert!(descriptor.normalized_to_value(normalized).is_err());

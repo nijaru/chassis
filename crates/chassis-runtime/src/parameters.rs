@@ -1,16 +1,18 @@
-//! Typed parameter schemas and non-realtime base-value storage.
+//! Typed parameter schemas and canonical base-value ownership.
 //!
 //! [`ParameterStore`] is the semantic authority for a component's current
 //! base/control values. It validates every replacement. Complete persistence
-//! belongs to `InstanceRuntime`. Host event queues remain adapter-owned; normalized
-//! borrowed process events are validated here against the active schema.
+//! belongs to `InstanceRuntime`. Host event queues remain adapter-owned; borrowed
+//! plain-unit process events are validated here against the active schema.
 
 mod control;
 mod handles;
+mod mapping;
 
 pub use handles::{BooleanParameter, ChoiceParameter, FloatParameter, IntegerParameter};
 
 pub use control::{DefaultParameterControl, ParameterControlError, ParameterControlPolicy};
+pub use mapping::{FloatMapping, ParameterMappingError};
 
 use core::fmt;
 use std::{
@@ -367,6 +369,7 @@ pub struct ParameterDescriptor {
     name: String,
     kind: ParameterKind,
     control: Option<control::ControlPolicy>,
+    mapping: Option<mapping::Mapping>,
     global_modulation: bool,
     bypass: bool,
 }
@@ -388,10 +391,17 @@ impl ParameterDescriptor {
         if name.trim().is_empty() {
             return Err(ParameterDefinitionError::EmptyName(key));
         }
+        let mapping = match &kind {
+            ParameterKind::Float {
+                minimum, maximum, ..
+            } => Some(mapping::Mapping::linear(*minimum, *maximum)),
+            _ => None,
+        };
         let descriptor = Self {
             key,
             name,
             kind,
+            mapping,
             control: None,
             global_modulation: false,
             bypass: false,
@@ -691,7 +701,8 @@ impl ParameterDescriptor {
                 }
             }
         }
-        self.validate_control()
+        self.validate_mapping()
+            .and_then(|()| self.validate_control())
             .map_err(|reason| ParameterDefinitionError::InvalidControlPolicy {
                 parameter: self.key.clone(),
                 reason,
@@ -764,6 +775,7 @@ impl ParameterDescriptor {
                     choice_index: Some(ChoiceIndex::new(
                         u32::try_from(index).expect("validated choice count fits u32"),
                     )),
+                    source_coordinate: None,
                 })
                 .ok_or(ParameterValueError::UnknownChoice);
         }
@@ -771,6 +783,7 @@ impl ParameterDescriptor {
         Ok(StoredParameterValue {
             value,
             choice_index: None,
+            source_coordinate: None,
         })
     }
 
@@ -799,6 +812,7 @@ impl ParameterDescriptor {
         StoredParameterValue {
             value,
             choice_index,
+            source_coordinate: None,
         }
     }
 
@@ -904,7 +918,7 @@ pub enum ParameterDefinitionError {
         /// Unknown default identity.
         choice: ChoiceId,
     },
-    /// The control policy rejected this domain or its configuration.
+    /// Float mapping or text policy rejected this domain or its configuration.
     InvalidControlPolicy {
         /// Parameter whose policy was rejected.
         parameter: ParameterKey,
@@ -1081,6 +1095,13 @@ pub enum ParameterStoreError {
     },
     /// Dense index did not identify a descriptor in this schema.
     UnknownParameterIndex(ParameterIndex),
+    /// Normalized scalar mutation failed mapping validation.
+    InvalidMapping {
+        /// Requested parameter key.
+        parameter: String,
+        /// Coordinate or mapping result failure.
+        error: ParameterControlError,
+    },
     /// Proposed value failed descriptor validation.
     InvalidValue {
         /// Requested parameter key.
@@ -1120,6 +1141,10 @@ impl fmt::Display for ParameterStoreError {
             Self::UnknownParameterIndex(index) => {
                 write!(formatter, "unknown parameter index {}", index.get())
             }
+            Self::InvalidMapping { parameter, error } => write!(
+                formatter,
+                "invalid mapping for parameter {parameter}: {error}"
+            ),
             Self::InvalidValue { parameter, error } => write!(
                 formatter,
                 "invalid value for parameter {parameter}: {error}"
@@ -1159,6 +1184,9 @@ struct StoredParameterValue {
     value: ParameterValue,
     // Derived at the sole mutation boundary, never resolved from text in DSP.
     choice_index: Option<ChoiceIndex>,
+    // Provenance of this exact base, not an independently writable control cache.
+    // All plain-origin replacements construct None, including equal-value edits.
+    source_coordinate: Option<f64>,
 }
 
 impl StoredParameterValue {
@@ -1196,6 +1224,33 @@ pub struct ParameterValuesMut<'a> {
 }
 
 impl ParameterValuesMut<'_> {
+    /// Replace a float base by stable key, retaining its exact normalized coordinate.
+    ///
+    /// # Errors
+    /// Returns the same errors as [`ParameterStore::set_normalized`].
+    pub fn set_normalized(
+        &mut self,
+        key: impl AsRef<str>,
+        normalized: f64,
+    ) -> Result<(), ParameterStoreError> {
+        self.store.set_normalized(key, normalized)
+    }
+
+    /// Failure-atomically replace a float base and normalized provenance by dense index.
+    ///
+    /// Allocation-free with an admitted realtime mapping. This is a scalar base
+    /// edit, not completion of a timed trajectory.
+    ///
+    /// # Errors
+    /// Returns the same errors as [`ParameterStore::set_normalized_index`].
+    pub fn set_normalized_index(
+        &mut self,
+        index: ParameterIndex,
+        normalized: f64,
+    ) -> Result<(), ParameterMappingError> {
+        self.store.set_normalized_index(index, normalized)
+    }
+
     /// Replace a value after validating its stable key and domain.
     ///
     /// # Errors

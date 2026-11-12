@@ -106,6 +106,8 @@ impl Default for ProbeComponent {
                     .expect("probe parameter is valid")
                     .with_control_policy(trim_control::TrimControl { precision: 1 })
                     .unwrap()
+                    .with_float_mapping(trim_control::TrimMapping)
+                    .unwrap()
                     .with_global_modulation()
                     .unwrap(),
                 ParameterDescriptor::integer("steps", "Steps", -4, 4, 0).unwrap(),
