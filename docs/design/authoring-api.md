@@ -245,6 +245,25 @@ Global additive float modulation shares the ordered parameter-control stream but
 
 Use `InstanceRuntime::controls()` for headless local begin/change/end or discrete edits, and explicit external ingress. It returns notification effects after scalar application, not a host delivery receipt. `control_observation` reads latest desired base/provenance without emitting intent. The embedding serializes operations and ordered effect delivery; this is not a cross-thread endpoint. [Parameters/state](parameters-state.md#product-originated-edits-and-modulation) owns token lifetime, stale-but-closable gestures on load, echo suppression and delivery obligations. No API exposes unrestricted mutable processor access.
 
+## CLAP product controller
+
+Select an optional controller separately from component semantics and sample precision:
+
+```rust,ignore
+use chassis_clap::{F32AndF64, SingleComponentEntry};
+
+type ProductEntry = SingleComponentEntry<MyComponent, F32AndF64, MyController>;
+// Export ProductEntry through the existing CLAP entry macro.
+```
+
+Implement `ClapController<MyComponent>` with `MAX_PENDING_NOTIFICATIONS`, optionally `MAX_DELIVERIES_PER_CALLBACK`, `new(&MyComponent)` and `on_main_thread(&mut ClapControls)`. Construction is once per instance, not per activation; the scoped context cannot escape or move to a worker. The default third argument is `NoController`, which provisions no controller/gesture/outbox storage. An enabled controller needs capacity at least three and a positive delivery bound.
+
+In the callback, resolve a stable key with `parameter_index`, read `observe`, and submit `begin` / `change` / `end` or a discrete `edit`. Use core `ControlValue::{Plain, Normalized}` and retain opaque tokens in controller-owned state. Success accepts canonical desired state and ordered history, not host receipt. Handle `Full` and `Busy` without losing pending product intent; `request_callback` asks for a future main-thread turn, not a deadline. `HostUnavailable`, invalid values/tokens and terminal instance faults are explicit errors. End/`close` use reserved closure credits, including after a successful load has made a token stale. Never deliver duplicate core notification effects yourself.
+
+Do not unconditionally resubmit the same edit on every callback: callbacks also service refused output and deferred work. Track whether product intent has already been accepted. The host must continue main-thread and flush/process service and accept output for delivery to finish. This capability creates no GUI, worker, timer or cross-thread command endpoint, and DSP cannot invoke it.
+
+Run the [public-entry controller fixture](../../crates/chassis-clap/tests/host_product_controls.rs) with `cargo test -p chassis-clap --test host_product_controls --locked`. Its product-owned scripts retain tokens and drive real stopped/active CLAP callbacks, refusal, replacement, reentry and f32/f64 audio. [Parameters/state](parameters-state.md#bounded-clap-product-controls) owns reservations, supersession, load/output serialization and failure behavior.
+
 ## Control and optional editor boundary
 
 Typed gestures, control origins, observation and bounded telemetry are shared core concerns and can be exercised without a window system. They must not expose unrestricted mutable processor access.

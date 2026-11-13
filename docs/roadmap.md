@@ -18,7 +18,7 @@ The core is component execution and the difficult machinery around it. It is not
 
 Not every component uses every service. Optional core capabilities must impose no hidden executor, queue, allocation, or observation work when unused. Resource lifetime/publication is committed core work; a general-purpose executor, disk streamer, FFT backend, and instrument engine are not.
 
-The current runtime and CLAP fixtures implement much of this boundary, but prepared adoption, deployment-integrated control/gesture delivery, and other closure work remain. Implemented inventories and revision-scoped evidence belong to their contracts and the validation guide, not a second completion log here.
+The current runtime and CLAP fixtures implement much of this boundary, but prepared adoption, integrated control/resource qualification, and other closure work remain. Implemented inventories and revision-scoped evidence belong to their contracts and the validation guide, not a second completion log here.
 
 Established effect, instrument, resource-backed, and event-processing workloads are sufficient requirements sources. No named product migration is needed. Equally, a feature's presence in a DAW or another framework does not make it a core prerequisite. Per-note parameter modulation, timestamped transport, wider channel-layout families, and larger observation streams can remain explicitly unsupported in the initial stable surface.
 

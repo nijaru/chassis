@@ -2,9 +2,10 @@ use std::{fmt, string::String, sync::Mutex, vec::Vec};
 
 use chassis_runtime::{
     automation::{ParameterEvent, ParameterEventChange, ParameterEventValue},
+    controls::{ControlError, ControlValue},
     parameters::{
-        ChoiceId, ChoiceIndex, ChoiceOption, ParameterDescriptor, ParameterIndex, ParameterKind,
-        ParameterStore, ParameterValuesMut,
+        ChoiceId, ChoiceIndex, ChoiceOption, ParameterControlError, ParameterDescriptor,
+        ParameterIndex, ParameterKind, ParameterStore, ParameterValue, ParameterValuesMut,
     },
     state::{StateEntry, StateValue},
 };
@@ -23,7 +24,7 @@ mod publication;
 mod state;
 
 use publication::StatePublication;
-pub(crate) use publication::{ParameterGeneration, PublicationError};
+pub(crate) use publication::{ControlSnapshot, ParameterGeneration, PublicationError};
 pub(crate) use state::StateProjectionError;
 
 const EXACT_INTEGER_LIMIT: f64 = 9_007_199_254_740_992.0;
@@ -425,15 +426,89 @@ impl ClapStateProjection {
             .map(|position| self.id_lookup[position])
     }
 
-    fn index_for_key(&self, key: &str) -> Option<usize> {
+    pub(crate) fn index_for_key(&self, key: &str) -> Option<usize> {
         self.key_lookup
             .binary_search_by(|index| self.bindings[*index].descriptor.key().as_str().cmp(key))
             .ok()
             .map(|position| self.key_lookup[position])
     }
 
-    pub(crate) fn value_control(&self, index: usize) -> f64 {
-        self.publication.value_control(index)
+    pub(crate) fn value_control(&self, index: usize) -> Result<f64, ParameterSyncError> {
+        self.publication
+            .value_control(index)
+            .map_err(ParameterSyncError::Publication)
+    }
+
+    pub(crate) fn control_snapshot(
+        &self,
+        index: usize,
+    ) -> Result<ControlSnapshot, ParameterSyncError> {
+        self.publication
+            .control_snapshot(index)
+            .map_err(ParameterSyncError::Publication)
+    }
+
+    /// Prepare admission off-thread, before acquiring any publication writer.
+    pub(crate) fn prepare_control(
+        &self,
+        parameter: ParameterIndex,
+        value: ControlValue,
+    ) -> Result<ControlSnapshot, ControlError> {
+        let binding = usize::try_from(parameter.get())
+            .ok()
+            .and_then(|index| self.bindings.get(index))
+            .ok_or(ControlError::UnknownParameter(parameter))?;
+        match value {
+            ControlValue::Plain(value) => {
+                binding
+                    .descriptor
+                    .validate_event_value(&value)
+                    .map_err(ControlError::InvalidValue)?;
+                let plain = binding
+                    .plain_value(value)
+                    .expect("descriptor-validated payload has a CLAP plain projection");
+                Ok(ControlSnapshot::plain(plain))
+            }
+            ControlValue::Normalized(coordinate) => {
+                if !matches!(binding.descriptor.kind(), ParameterKind::Float { .. }) {
+                    return Err(ControlError::Mapping(ParameterControlError::InvalidPolicy(
+                        "normalized source coordinates require a float parameter",
+                    )));
+                }
+                let ParameterValue::Float(plain) = binding
+                    .descriptor
+                    .normalized_to_value(coordinate)
+                    .map_err(ControlError::Mapping)?
+                else {
+                    unreachable!("a float descriptor maps to a float value")
+                };
+                Ok(ControlSnapshot {
+                    plain,
+                    coordinate: Some(coordinate),
+                })
+            }
+        }
+    }
+
+    pub(crate) fn publish_control(
+        &self,
+        parameter: ParameterIndex,
+        value: ControlSnapshot,
+    ) -> Result<u64, ParameterSyncError> {
+        let index = usize::try_from(parameter.get())
+            .ok()
+            .filter(|index| *index < self.bindings.len())
+            .ok_or(ParameterSyncError::InvalidPublishedValue)?;
+        self.publication
+            .publish_control_value(index, value)
+            .map_err(ParameterSyncError::Publication)
+    }
+
+    // The caller holds the delivery claim against local edits/full loads;
+    // ingress is serialized in the same callback consumer domain.
+    pub(crate) fn notification_superseded(&self, parameter: ParameterIndex, revision: u64) -> bool {
+        let index = usize::try_from(parameter.get()).expect("validated index fits usize");
+        self.publication.notification_superseded(index, revision)
     }
 
     pub(crate) fn apply_input(&self, input: &InputEvents<'_>) -> Result<(), ParameterSyncError> {
@@ -490,7 +565,8 @@ impl ClapStateProjection {
         let Some((index, value)) = self.validated_plain_value(id, value) else {
             return false;
         };
-        self.publication.publish_value_control(index, value).is_ok()
+        self.publish_control(self.bindings[index].index(), ControlSnapshot::plain(value))
+            .is_ok()
     }
 
     #[cfg(test)]
@@ -510,7 +586,7 @@ impl ClapStateProjection {
     pub(crate) fn sync_into(
         &self,
         mut store: ParameterValuesMut<'_>,
-        scratch: &mut [f64],
+        scratch: &mut [ControlSnapshot],
         synchronized_generation: Option<ParameterGeneration>,
         activation_custom_generation: u64,
     ) -> Result<Option<ParameterGeneration>, ParameterSyncError> {
@@ -522,7 +598,7 @@ impl ClapStateProjection {
         if current.is_some() && current == synchronized_generation {
             return Ok(current);
         }
-        let Some(snapshot) = self.publication.try_snapshot_into(scratch) else {
+        let Some(snapshot) = self.publication.try_snapshot_controls_into(scratch) else {
             return Ok(None);
         };
         if snapshot.custom_generation != activation_custom_generation {
@@ -532,17 +608,41 @@ impl ClapStateProjection {
             .bindings
             .iter()
             .zip(scratch.iter().copied())
-            .any(|(binding, value)| binding.process_value(value).is_none())
+            .any(|(binding, value)| {
+                binding.process_value(value.plain).is_none()
+                    || value.coordinate.is_some_and(|coordinate| {
+                        !matches!(binding.descriptor.kind(), ParameterKind::Float { .. })
+                            || !coordinate.is_finite()
+                            || !(0.0..=1.0).contains(&coordinate)
+                    })
+            })
         {
             return Err(ParameterSyncError::InvalidPublishedValue);
         }
         for (binding, value) in self.bindings.iter().zip(scratch.iter().copied()) {
-            let parameter = binding
-                .process_value(value)
-                .ok_or(ParameterSyncError::InvalidPublishedValue)?;
-            store
-                .set_event_value(binding.index(), parameter)
-                .map_err(|_| ParameterSyncError::StoreRejected)?;
+            if let Some(coordinate) = value.coordinate {
+                // Forward mapping is bounded realtime work by FloatMapping's
+                // author contract. Divergence is fatal, never a partial-store
+                // recovery promise; no inverse/presentation hook is invoked.
+                store
+                    .set_normalized_index(binding.index(), coordinate)
+                    .map_err(|_| ParameterSyncError::StoreRejected)?;
+                let Some(ParameterEventValue::Float(mapped)) =
+                    store.get_event_value(binding.index())
+                else {
+                    return Err(ParameterSyncError::StoreRejected);
+                };
+                if mapped.to_bits() != value.plain.to_bits() {
+                    return Err(ParameterSyncError::StoreRejected);
+                }
+            } else {
+                let parameter = binding
+                    .process_value(value.plain)
+                    .ok_or(ParameterSyncError::InvalidPublishedValue)?;
+                store
+                    .set_event_value(binding.index(), parameter)
+                    .map_err(|_| ParameterSyncError::StoreRejected)?;
+            }
         }
         Ok(Some(snapshot.generation))
     }
@@ -553,23 +653,37 @@ impl ClapStateProjection {
         &self,
         store: &ParameterStore,
         expected_generation: Option<ParameterGeneration>,
-        scratch: &mut [f64],
+        scratch: &mut [ControlSnapshot],
+        changed: &[bool],
     ) -> Result<Option<ParameterGeneration>, ParameterSyncError> {
         self.check_healthy()?;
-        if scratch.len() != self.publication.len() {
+        if scratch.len() != self.publication.len() || changed.len() != self.publication.len() {
             return Err(ParameterSyncError::InvalidPublishedValue);
         }
         let Some(generation) = expected_generation else {
             return Ok(None);
         };
-        for (binding, target) in self.bindings.iter().zip(scratch.iter_mut()) {
-            *target = store
+        for ((binding, target), changed) in
+            self.bindings.iter().zip(scratch.iter_mut()).zip(changed)
+        {
+            if !changed {
+                continue;
+            }
+            let plain = store
                 .get_event_value(binding.index())
                 .and_then(|value| binding.plain_value(value))
                 .ok_or(ParameterSyncError::StoreRejected)?;
+            let coordinate = if matches!(binding.descriptor.kind(), ParameterKind::Float { .. }) {
+                store
+                    .normalized_coordinate(binding.index())
+                    .map_err(|_| ParameterSyncError::StoreRejected)?
+            } else {
+                None
+            };
+            *target = ControlSnapshot { plain, coordinate };
         }
         self.publication
-            .try_publish_values_from(generation, scratch)
+            .try_publish_values_from(generation, scratch, changed)
             .map_err(ParameterSyncError::Publication)
     }
 }
@@ -666,6 +780,216 @@ mod tests {
     };
     use clack_plugin::events::Pckn;
 
+    #[derive(Debug, PartialEq)]
+    struct Plateau;
+
+    impl chassis_runtime::parameters::FloatMapping for Plateau {
+        fn validate(&self, _: f64, _: f64) -> Result<(), ParameterControlError> {
+            Ok(())
+        }
+        fn normalized_to_plain(&self, coordinate: f64) -> f64 {
+            if (0.25..=0.75).contains(&coordinate) {
+                0.5
+            } else {
+                coordinate
+            }
+        }
+        fn plain_to_normalized(&self, plain: f64) -> Result<f64, ParameterControlError> {
+            Ok(plain)
+        }
+    }
+
+    #[test]
+    fn prepared_controls_validate_schema_and_preserve_noninjective_coordinates() {
+        let descriptors = [
+            ParameterDescriptor::float("gain", "Gain", 0.0, 1.0, 0.5)
+                .unwrap()
+                .with_float_mapping(Plateau)
+                .unwrap(),
+            ParameterDescriptor::boolean("bypass", "Bypass", false).unwrap(),
+        ];
+        let state = ClapStateProjection::new(&descriptors, &[("gain", 1), ("bypass", 2)]).unwrap();
+        let a = ParameterIndex::new(0);
+        let b = ParameterIndex::new(1);
+        assert!(matches!(
+            state.prepare_control(ParameterIndex::new(2), ControlValue::Normalized(0.5)),
+            Err(ControlError::UnknownParameter(_))
+        ));
+        assert!(matches!(
+            state.prepare_control(b, ControlValue::Normalized(0.5)),
+            Err(ControlError::Mapping(ParameterControlError::InvalidPolicy(
+                _
+            )))
+        ));
+        for bad in [f64::NAN, f64::INFINITY, -0.1, 1.1] {
+            assert!(matches!(
+                state.prepare_control(a, ControlValue::Normalized(bad)),
+                Err(ControlError::Mapping(
+                    ParameterControlError::InvalidNormalized
+                ))
+            ));
+            assert!(matches!(
+                state.prepare_control(a, ControlValue::Plain(ParameterEventValue::Float(bad))),
+                Err(ControlError::InvalidValue(_))
+            ));
+        }
+        assert!(matches!(
+            state.prepare_control(a, ControlValue::Plain(ParameterEventValue::Boolean(true))),
+            Err(ControlError::InvalidValue(_))
+        ));
+        let mut store = ParameterStore::new(&descriptors).unwrap();
+        let mut scratch = [ControlSnapshot::plain(0.0); 2];
+        for coordinate in [0.25, 0.75, -0.0] {
+            let prepared = state
+                .prepare_control(a, ControlValue::Normalized(coordinate))
+                .unwrap();
+            let revision = state.publish_control(a, prepared).unwrap();
+            assert!(!state.notification_superseded(a, revision));
+            let observed = state.control_snapshot(0).unwrap();
+            assert_eq!(observed.plain.to_bits(), prepared.plain.to_bits());
+            assert_eq!(observed.coordinate.unwrap().to_bits(), coordinate.to_bits());
+            state
+                .sync_into(store.values_mut(), &mut scratch, None, 0)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                store.normalized_coordinate(a).unwrap().unwrap().to_bits(),
+                coordinate.to_bits()
+            );
+            assert_eq!(
+                store.get_event_value(a),
+                Some(ParameterEventValue::Float(prepared.plain))
+            );
+        }
+        // A same-value plain edit still clears provenance through the real UI publisher.
+        let plain = state
+            .prepare_control(a, ControlValue::Plain(ParameterEventValue::Float(0.0)))
+            .unwrap();
+        state.publish_control(a, plain).unwrap();
+        state
+            .sync_into(store.values_mut(), &mut scratch, None, 0)
+            .unwrap()
+            .unwrap();
+        assert_eq!(store.normalized_coordinate(a), Ok(None));
+    }
+
+    #[test]
+    fn completed_pairs_publish_only_base_touched_parameters() {
+        let descriptors = [
+            ParameterDescriptor::float("gain", "Gain", 0.0, 1.0, 0.5)
+                .unwrap()
+                .with_float_mapping(Plateau)
+                .unwrap(),
+            ParameterDescriptor::boolean("bypass", "Bypass", false).unwrap(),
+        ];
+        let state = ClapStateProjection::new(&descriptors, &[("gain", 1), ("bypass", 2)]).unwrap();
+        let a = ParameterIndex::new(0);
+        let local = state
+            .prepare_control(a, ControlValue::Normalized(0.25))
+            .unwrap();
+        let revision = state.publish_control(a, local).unwrap();
+        let mut store = ParameterStore::new(&descriptors).unwrap();
+        let mut scratch = [ControlSnapshot::plain(0.0); 2];
+        let baseline = state
+            .sync_into(store.values_mut(), &mut scratch, None, 0)
+            .unwrap();
+        store.set("bypass", ParameterValue::Boolean(true)).unwrap();
+        let completed = state
+            .publish_parameters(&store, baseline, &mut scratch, &[false, true])
+            .unwrap();
+        assert!(completed.is_some());
+        assert_eq!(state.control_snapshot(0).unwrap(), local);
+        assert!(!state.notification_superseded(a, revision));
+        store.set_normalized_index(a, 0.75).unwrap();
+        let completed = state
+            .publish_parameters(&store, completed, &mut scratch, &[true, false])
+            .unwrap();
+        assert!(completed.is_some());
+        assert!(state.notification_superseded(a, revision));
+        assert_eq!(
+            state.control_snapshot(0).unwrap(),
+            ControlSnapshot {
+                plain: 0.5,
+                coordinate: Some(0.75)
+            }
+        );
+        store.reset();
+        state
+            .sync_into(store.values_mut(), &mut scratch, None, 0)
+            .unwrap()
+            .unwrap();
+        assert_eq!(store.normalized_coordinate(a), Ok(Some(0.75)));
+        assert_eq!(store.get("bypass"), Some(&ParameterValue::Boolean(true)));
+    }
+
+    #[test]
+    fn pair_sync_prevalidates_all_inputs_and_rejects_mapper_disagreement() {
+        let descriptors = descriptors();
+        let state =
+            ClapStateProjection::new(&descriptors, &[("gain", 1), ("steps", 2), ("bypass", 3)])
+                .unwrap();
+        let mut store = ParameterStore::new(&descriptors).unwrap();
+        let mut scratch = [ControlSnapshot::plain(0.0); 3];
+        // Deliberately corrupt private publication to model an internal bug.
+        state
+            .publication
+            .publish_control_value(0, ControlSnapshot::plain(0.75))
+            .unwrap();
+        for bad in [
+            ControlSnapshot {
+                plain: 2.0,
+                coordinate: Some(0.5),
+            }, // non-float
+            ControlSnapshot {
+                plain: 2.0,
+                coordinate: Some(f64::INFINITY),
+            },
+            ControlSnapshot::plain(99.0),
+        ] {
+            state.publication.publish_control_value(1, bad).unwrap();
+            assert_eq!(
+                state.sync_into(store.values_mut(), &mut scratch, None, 0),
+                Err(ParameterSyncError::InvalidPublishedValue)
+            );
+            assert_eq!(store.get("gain"), Some(&ParameterValue::Float(0.5)));
+        }
+        state
+            .publication
+            .publish_control_value(1, ControlSnapshot::plain(0.0))
+            .unwrap();
+        for coordinate in [f64::NEG_INFINITY, -0.1, 1.1] {
+            state
+                .publication
+                .publish_control_value(
+                    0,
+                    ControlSnapshot {
+                        plain: 0.75,
+                        coordinate: Some(coordinate),
+                    },
+                )
+                .unwrap();
+            assert_eq!(
+                state.sync_into(store.values_mut(), &mut scratch, None, 0),
+                Err(ParameterSyncError::InvalidPublishedValue)
+            );
+        }
+        state
+            .publication
+            .publish_control_value(
+                0,
+                ControlSnapshot {
+                    plain: 0.75,
+                    coordinate: Some(0.5),
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            state.sync_into(store.values_mut(), &mut scratch, None, 0),
+            Err(ParameterSyncError::StoreRejected)
+        );
+        // Mapper disagreement is a fatal run error, not a partial-DSP rollback promise.
+    }
+
     fn normalized_events(
         state: &ClapStateProjection,
         input: &InputEvents<'_>,
@@ -725,7 +1049,10 @@ mod tests {
                 Some(ParameterEventValue::Boolean(expected > 0.0))
             );
             assert!(state.apply_plain_value(ClapId::new(3), plain));
-            assert_eq!(state.value_control(2).to_bits(), expected.to_bits());
+            assert_eq!(
+                state.value_control(2).unwrap().to_bits(),
+                expected.to_bits()
+            );
         }
         for (plain, expected) in [(-2.7, -2), (2.7, 2)] {
             assert_eq!(
@@ -738,7 +1065,7 @@ mod tests {
             );
             assert!(state.apply_plain_value(ClapId::new(2), plain));
             assert_eq!(
-                state.value_control(1).to_bits(),
+                state.value_control(1).unwrap().to_bits(),
                 integer_to_plain(expected).to_bits()
             );
         }
@@ -786,7 +1113,7 @@ mod tests {
             Some(ParameterEventValue::Choice(ChoiceIndex::new(0)))
         );
         assert!(state.apply_plain_value(ClapId::new(1), 0.99));
-        assert_eq!(state.value_control(0).to_bits(), 0.0_f64.to_bits());
+        assert_eq!(state.value_control(0).unwrap().to_bits(), 0.0_f64.to_bits());
 
         let descriptors = descriptors();
         assert!(matches!(
@@ -855,7 +1182,7 @@ mod tests {
         );
         assert_eq!(normalized, []);
         state.apply_input(&input).unwrap();
-        assert_eq!(state.value_control(0).to_bits(), 0.0_f64.to_bits());
+        assert_eq!(state.value_control(0).unwrap().to_bits(), 0.0_f64.to_bits());
     }
 
     #[test]
@@ -879,7 +1206,7 @@ mod tests {
                 Err("CLAP targeted parameter events are unsupported")
             );
             state.apply_input(&input).unwrap();
-            assert_eq!(state.value_control(0).to_bits(), 0.0_f64.to_bits());
+            assert_eq!(state.value_control(0).unwrap().to_bits(), 0.0_f64.to_bits());
         }
     }
 
@@ -930,7 +1257,7 @@ mod tests {
         assert!(state.apply_plain_value(ClapId::new(1), 0.75));
         assert!(state.apply_plain_value(ClapId::new(2), -2.0));
         let mut store = ParameterStore::new(&descriptors).expect("schema is valid");
-        let mut scratch = vec![0.0; 3];
+        let mut scratch = vec![ControlSnapshot::plain(0.0); 3];
         state
             .sync_into(store.values_mut(), &mut scratch, None, 0)
             .expect("projection syncs");
@@ -952,25 +1279,25 @@ mod tests {
             ClapStateProjection::new(&descriptors, &[("gain", 1), ("steps", 2), ("bypass", 3)])
                 .expect("parameter mapping is valid");
         let mut store = ParameterStore::new(&descriptors).expect("schema is valid");
-        let mut scratch = vec![0.0; 3];
+        let mut scratch = vec![ControlSnapshot::plain(0.0); 3];
         assert!(state.apply_plain_value(ClapId::new(2), -2.0));
         let baseline = state
             .sync_into(store.values_mut(), &mut scratch, None, 0)
             .unwrap();
         store.set("gain", ParameterValue::Float(0.75)).unwrap();
         let published = state
-            .publish_parameters(&store, baseline, &mut scratch)
+            .publish_parameters(&store, baseline, &mut scratch, &[true, false, false])
             .unwrap();
         assert!(published.is_some());
-        assert!((state.value_control(0) - 0.75).abs() <= f64::EPSILON);
-        assert!((state.value_control(1) + 2.0).abs() <= f64::EPSILON);
+        assert!((state.value_control(0).unwrap() - 0.75).abs() <= f64::EPSILON);
+        assert!((state.value_control(1).unwrap() + 2.0).abs() <= f64::EPSILON);
 
         // A control edit after the block baseline wins over the whole completed
         // store, including the untouched integer and local automated float.
         store.set("gain", ParameterValue::Float(0.25)).unwrap();
         assert!(state.apply_plain_value(ClapId::new(2), 4.0));
         let rejected = state
-            .publish_parameters(&store, published, &mut scratch)
+            .publish_parameters(&store, published, &mut scratch, &[true, false, false])
             .unwrap();
         assert!(rejected.is_none());
         let synchronized = state
@@ -984,7 +1311,7 @@ mod tests {
         store.set("gain", ParameterValue::Float(0.0)).unwrap();
         assert!(
             state
-                .publish_parameters(&store, None, &mut scratch)
+                .publish_parameters(&store, None, &mut scratch, &[true, false, false])
                 .unwrap()
                 .is_none()
         );
@@ -1010,7 +1337,7 @@ mod tests {
             state.apply_state(&document, &state_identity()),
             Err(StateProjectionError::InvalidValue)
         ));
-        assert!((state.value_control(0) - 0.75).abs() <= f64::EPSILON);
+        assert!((state.value_control(0).unwrap() - 0.75).abs() <= f64::EPSILON);
     }
 
     #[test]
@@ -1031,7 +1358,7 @@ mod tests {
                 actual: 1
             })
         ));
-        assert!((state.value_control(0) - 0.5).abs() <= f64::EPSILON);
+        assert!((state.value_control(0).unwrap() - 0.5).abs() <= f64::EPSILON);
     }
 
     #[test]
@@ -1041,7 +1368,7 @@ mod tests {
             ClapStateProjection::new(&descriptors, &[("gain", 1), ("steps", 2), ("bypass", 3)])
                 .unwrap();
         let mut store = ParameterStore::new(&descriptors).unwrap();
-        let mut scratch = [0.0; 3];
+        let mut scratch = [ControlSnapshot::plain(0.0); 3];
         let baseline = state
             .sync_into(store.values_mut(), &mut scratch, None, 0)
             .unwrap();
@@ -1065,7 +1392,7 @@ mod tests {
         assert_eq!(store.get("gain"), Some(&ParameterValue::Float(0.5)));
         assert!(
             state
-                .publish_parameters(&store, baseline, &mut scratch)
+                .publish_parameters(&store, baseline, &mut scratch, &[false; 3])
                 .unwrap()
                 .is_none()
         );
@@ -1095,7 +1422,7 @@ mod tests {
                 ))
                 .expect("entry is structurally valid");
             assert!(state.apply_state(&document, &state_identity()).is_err());
-            assert_eq!(state.value_control(0).to_bits(), 0.0_f64.to_bits());
+            assert_eq!(state.value_control(0).unwrap().to_bits(), 0.0_f64.to_bits());
         }
     }
 
@@ -1119,8 +1446,8 @@ mod tests {
         restored
             .apply_state(&document, &state_identity())
             .expect("state applies");
-        assert!((restored.value_control(0) - 0.75).abs() <= f64::EPSILON);
-        assert!((restored.value_control(2) - 1.0).abs() <= f64::EPSILON);
+        assert!((restored.value_control(0).unwrap() - 0.75).abs() <= f64::EPSILON);
+        assert!((restored.value_control(2).unwrap() - 1.0).abs() <= f64::EPSILON);
     }
 
     fn choice_descriptors() -> Vec<ParameterDescriptor> {
@@ -1186,7 +1513,7 @@ mod tests {
             .expect("parameter mapping is valid");
         assert!(state.apply_plain_value(ClapId::new(2), 2.0));
         let mut store = ParameterStore::new(&descriptors).expect("schema is valid");
-        let mut scratch = vec![0.0; 2];
+        let mut scratch = vec![ControlSnapshot::plain(0.0); 2];
         let baseline = state
             .sync_into(store.values_mut(), &mut scratch, None, 0)
             .expect("control choice syncs");
@@ -1204,7 +1531,7 @@ mod tests {
             )
             .unwrap();
         state
-            .publish_parameters(&store, baseline, &mut scratch)
+            .publish_parameters(&store, baseline, &mut scratch, &[false, true])
             .expect("completed choice publication succeeds");
         store.reset();
         state
@@ -1216,7 +1543,7 @@ mod tests {
                 ChoiceId::new("warm").expect("choice id is valid")
             ))
         );
-        assert!((state.value_control(1) - 1.0).abs() <= f64::EPSILON);
+        assert!((state.value_control(1).unwrap() - 1.0).abs() <= f64::EPSILON);
     }
 
     #[test]
@@ -1244,7 +1571,7 @@ mod tests {
         restored
             .apply_state(&document, &state_identity())
             .expect("state applies");
-        assert!((restored.value_control(1) - 2.0).abs() <= f64::EPSILON);
+        assert!((restored.value_control(1).unwrap() - 2.0).abs() <= f64::EPSILON);
 
         // Unknown choice identities are rejected transactionally.
         let mut corrupt = StateDocument::new("com.example.test", 1).expect("document is valid");
@@ -1261,6 +1588,6 @@ mod tests {
             restored.apply_state(&corrupt, &state_identity()),
             Err(StateProjectionError::InvalidValue)
         ));
-        assert!((restored.value_control(1) - 2.0).abs() <= f64::EPSILON);
+        assert!((restored.value_control(1).unwrap() - 2.0).abs() <= f64::EPSILON);
     }
 }

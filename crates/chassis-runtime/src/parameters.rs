@@ -1235,6 +1235,15 @@ pub struct ParameterValuesMut<'a> {
 }
 
 impl ParameterValuesMut<'_> {
+    /// Read a durable base value using its dense process-domain payload.
+    ///
+    /// Allocation-free and without author hooks or stable-identity lookup.
+    /// Returns `None` for an unknown index, just like [`ParameterStore::get_event_value`].
+    #[must_use]
+    pub fn get_event_value(&self, index: ParameterIndex) -> Option<ParameterEventValue> {
+        self.store.get_event_value(index)
+    }
+
     /// Replace a float base by stable key, retaining its exact normalized coordinate.
     ///
     /// # Errors

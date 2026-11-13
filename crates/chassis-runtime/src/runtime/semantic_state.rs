@@ -353,8 +353,8 @@ impl<P: Processor> InstanceRuntime<P> {
             self.parameters = candidate_parameters;
         }
         self.custom_state = candidate_custom;
-        if let Some(controls) = &mut self.control_state {
-            controls.invalidate_changes();
+        if let Some(protocol) = &mut self.gesture_protocol {
+            protocol.invalidate_changes();
         }
         Ok(())
     }

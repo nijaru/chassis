@@ -8,6 +8,7 @@
 //! including native voice-lifetime feedback.
 
 mod audio;
+mod controls;
 mod descriptor;
 mod event_ports;
 mod input_events;
@@ -24,6 +25,7 @@ mod transport;
 
 use core::{marker::PhantomData, num::NonZeroU32};
 use std::{
+    cell::{Cell, RefCell},
     io::{Read as _, Write as _},
     sync::{
         Arc,
@@ -71,7 +73,8 @@ use input_events::InputScratch;
 use midi::ClapMidiInput;
 use output_events::ClapEventOutput;
 use parameters::{
-    ClapStateProjection, ParameterGeneration, ParameterSyncError, StateProjectionError,
+    ClapStateProjection, ControlSnapshot, ParameterGeneration, ParameterSyncError,
+    StateProjectionError,
 };
 use process_audio::{ClapBufferSource, ClapSample, ClapSamplePrecision, sample_precision};
 
@@ -79,6 +82,8 @@ use process_audio::{ClapBufferSource, ClapSample, ClapSamplePrecision, sample_pr
 pub use audio::{ClapAudioPort, DEFAULT_CLAP_AUDIO_PORTS};
 /// Re-export of Clack's CLAP entry macro for Chassis export crates.
 pub use clack_plugin::clack_export_entry;
+pub use controls::{ClapControlError, ClapController, ClapControls, NoController};
+use controls::{ControlOutbox, ControllerState};
 /// Author-supplied CLAP export metadata.
 pub use descriptor::ClapDescriptor;
 /// Explicit CLAP event-port identity and preferred-dialect projection.
@@ -163,12 +168,16 @@ pub struct F32Only;
 pub struct F32AndF64;
 
 /// Clack plugin marker that exports one [`ClapComponent`] through Chassis.
-pub struct ChassisPlugin<C, M = F32Only>(PhantomData<fn() -> (C, M)>);
+pub struct ChassisPlugin<C, M = F32Only, D = NoController>(
+    PhantomData<fn() -> (C, M)>,
+    PhantomData<fn() -> D>,
+);
 
 /// Single-plugin CLAP entry with an explicit audio precision capability.
 ///
 /// Defaults to [`F32Only`]; use [`F32AndF64`] for a dual-precision export.
-pub type SingleComponentEntry<C, M = F32Only> = SinglePluginEntry<ChassisPlugin<C, M>>;
+pub type SingleComponentEntry<C, M = F32Only, D = NoController> =
+    SinglePluginEntry<ChassisPlugin<C, M, D>>;
 
 #[derive(Default)]
 struct RenderState {
@@ -205,12 +214,25 @@ pub struct ChassisShared {
     // A completed scalar only: relaxed loads publish no associated payload.
     tail: AtomicU32,
     tail_notification_pending: AtomicBool,
+    outbox: Option<Arc<ControlOutbox>>,
 }
 
 impl PluginShared<'_> for ChassisShared {}
 
+impl ChassisShared {
+    fn report_audio_publication_fault(&self, host: HostSharedHandle<'_>) {
+        if self.parameters.check_healthy().is_err() {
+            if let Some(outbox) = &self.outbox {
+                // Live gestures retain End debt even after all records drained.
+                outbox.request_callback(host);
+            }
+            host.request_restart();
+        }
+    }
+}
+
 /// Main-thread owner of the format-independent Chassis component definition.
-pub struct ChassisMainThread<'host, C> {
+pub struct ChassisMainThread<'host, C, D = NoController> {
     component: C,
     schema: Arc<ComponentSchema>,
     audio: ClapAudioConfiguration,
@@ -219,6 +241,10 @@ pub struct ChassisMainThread<'host, C> {
     render: Arc<RenderState>,
     latency: AtomicU32,
     host: HostMainThreadHandle<'host>,
+    host_params: Option<HostParams>,
+    outbox: Option<Arc<ControlOutbox>>,
+    controller: Option<RefCell<ControllerState<D>>>,
+    controller_deferred: Cell<bool>,
 }
 
 /// CLAP audio-thread wrapper around an activated Chassis instance runtime.
@@ -233,7 +259,8 @@ where
     host_tail: Option<HostTail>,
     shared: &'a ChassisShared,
     input: InputScratch,
-    control_values: Vec<f64>,
+    control_values: Vec<ControlSnapshot>,
+    changed_parameters: Vec<bool>,
     parameter_generation: Option<ParameterGeneration>,
     activation_custom_generation: u64,
     custom_state_pending: bool,
@@ -242,14 +269,15 @@ where
     _precision: PhantomData<fn() -> M>,
 }
 
-impl<C> Plugin for ChassisPlugin<C, F32Only>
+impl<C, D> Plugin for ChassisPlugin<C, F32Only, D>
 where
     C: ClapComponent,
+    D: ClapController<C>,
     C::Processor: ChassisProcess<f32> + Send + 'static,
 {
     type AudioProcessor<'a> = ChassisAudioProcessor<'a, C::Processor, F32Only>;
     type Shared<'a> = ChassisShared;
-    type MainThread<'a> = ChassisMainThread<'a, C>;
+    type MainThread<'a> = ChassisMainThread<'a, C, D>;
 
     fn declare_extensions(builder: &mut PluginExtensions<Self>, shared: Option<&Self::Shared<'_>>) {
         builder.register::<PluginAudioPorts>();
@@ -266,9 +294,10 @@ where
     }
 }
 
-impl<C> DefaultPluginFactory for ChassisPlugin<C>
+impl<C, D> DefaultPluginFactory for ChassisPlugin<C, F32Only, D>
 where
     C: ClapComponent,
+    D: ClapController<C>,
     C::Processor: ChassisProcess<f32> + Send + 'static,
 {
     fn get_descriptor() -> PluginDescriptor {
@@ -276,25 +305,26 @@ where
     }
 
     fn new_shared(_host: HostSharedHandle) -> Result<ChassisShared, PluginError> {
-        new_shared::<C>()
+        new_shared::<C, D>()
     }
 
     fn new_main_thread<'a>(
         host: HostMainThreadHandle<'a>,
         shared: &'a ChassisShared,
-    ) -> Result<ChassisMainThread<'a, C>, PluginError> {
-        new_main_thread::<C>(shared, false, host)
+    ) -> Result<ChassisMainThread<'a, C, D>, PluginError> {
+        new_main_thread::<C, D>(shared, false, host)
     }
 }
 
-impl<C> Plugin for ChassisPlugin<C, F32AndF64>
+impl<C, D> Plugin for ChassisPlugin<C, F32AndF64, D>
 where
     C: ClapComponent,
+    D: ClapController<C>,
     C::Processor: ChassisProcess<f32> + ChassisProcess<f64> + Send + 'static,
 {
     type AudioProcessor<'a> = ChassisAudioProcessor<'a, C::Processor, F32AndF64>;
     type Shared<'a> = ChassisShared;
-    type MainThread<'a> = ChassisMainThread<'a, C>;
+    type MainThread<'a> = ChassisMainThread<'a, C, D>;
 
     fn declare_extensions(builder: &mut PluginExtensions<Self>, shared: Option<&Self::Shared<'_>>) {
         builder.register::<PluginAudioPorts>();
@@ -311,9 +341,10 @@ where
     }
 }
 
-impl<C> DefaultPluginFactory for ChassisPlugin<C, F32AndF64>
+impl<C, D> DefaultPluginFactory for ChassisPlugin<C, F32AndF64, D>
 where
     C: ClapComponent,
+    D: ClapController<C>,
     C::Processor: ChassisProcess<f32> + ChassisProcess<f64> + Send + 'static,
 {
     fn get_descriptor() -> PluginDescriptor {
@@ -321,14 +352,14 @@ where
     }
 
     fn new_shared(_host: HostSharedHandle) -> Result<ChassisShared, PluginError> {
-        new_shared::<C>()
+        new_shared::<C, D>()
     }
 
     fn new_main_thread<'a>(
         host: HostMainThreadHandle<'a>,
         shared: &'a ChassisShared,
-    ) -> Result<ChassisMainThread<'a, C>, PluginError> {
-        new_main_thread::<C>(shared, true, host)
+    ) -> Result<ChassisMainThread<'a, C, D>, PluginError> {
+        new_main_thread::<C, D>(shared, true, host)
     }
 }
 
@@ -362,6 +393,22 @@ fn projected_runtime<C: Component>(
     runtime
         .apply_state(component, &document)
         .map_err(PluginError::from)?;
+    let mut controls = vec![ControlSnapshot::plain(0.0); shared.parameters.bindings().len()];
+    if shared
+        .parameters
+        .sync_into(
+            runtime.parameters_mut(),
+            &mut controls,
+            None,
+            custom_generation,
+        )
+        .map_err(sync_error)?
+        .is_none()
+    {
+        return Err(PluginError::Message(
+            "CLAP activation could not capture desired controls",
+        ));
+    }
     shared
         .parameters
         .modulation
@@ -370,9 +417,10 @@ fn projected_runtime<C: Component>(
     Ok((runtime, custom_generation))
 }
 
-fn new_shared<C>() -> Result<ChassisShared, PluginError>
+fn new_shared<C, D>() -> Result<ChassisShared, PluginError>
 where
     C: ClapComponent,
+    D: ClapController<C>,
 {
     let component = C::default();
     let runtime = InstanceRuntime::for_component(&component).map_err(PluginError::from)?;
@@ -433,6 +481,14 @@ where
     parameters
         .apply_state(&defaults, identity)
         .map_err(|error| state_error(&error))?;
+    let outbox = if D::MAX_PENDING_NOTIFICATIONS == 0 {
+        None
+    } else {
+        Some(Arc::new(ControlOutbox::new(
+            D::MAX_PENDING_NOTIFICATIONS,
+            D::MAX_DELIVERIES_PER_CALLBACK,
+        )?))
+    };
     Ok(ChassisShared {
         schema: Arc::new(schema),
         parameters: Arc::new(parameters),
@@ -440,16 +496,18 @@ where
         render: Arc::new(RenderState::default()),
         tail: AtomicU32::new(0),
         tail_notification_pending: AtomicBool::new(false),
+        outbox,
     })
 }
 
-fn new_main_thread<'a, C>(
+fn new_main_thread<'a, C, D>(
     shared: &ChassisShared,
     supports_f64: bool,
     host: HostMainThreadHandle<'a>,
-) -> Result<ChassisMainThread<'a, C>, PluginError>
+) -> Result<ChassisMainThread<'a, C, D>, PluginError>
 where
     C: ClapComponent,
+    D: ClapController<C>,
 {
     let component = C::default();
     projected_runtime(&component, shared)?;
@@ -463,7 +521,19 @@ where
     if supports_f64 {
         audio = audio.with_f64_support();
     }
-    Ok(ChassisMainThread {
+    let controller = shared
+        .outbox
+        .as_ref()
+        .map(|_| {
+            ControllerState::<D>::new::<C>(&component, shared.schema.parameters().len())
+                .map(RefCell::new)
+        })
+        .transpose()?;
+    let host_params = shared
+        .outbox
+        .as_ref()
+        .and_then(|_| host.get_extension::<HostParams>());
+    let main_thread = ChassisMainThread {
         component,
         schema: Arc::clone(&shared.schema),
         audio,
@@ -472,22 +542,66 @@ where
         render: Arc::clone(&shared.render),
         latency: AtomicU32::new(0),
         host,
-    })
+        host_params,
+        outbox: shared.outbox.as_ref().map(Arc::clone),
+        controller,
+        controller_deferred: Cell::new(false),
+    };
+    if main_thread.controller.is_some() {
+        main_thread.host.as_shared().request_callback();
+    }
+    Ok(main_thread)
 }
 
-impl<'host, C> PluginMainThread<'host, ChassisShared> for ChassisMainThread<'host, C> where
-    C: ClapComponent
+impl<'host, C, D> PluginMainThread<'host, ChassisShared> for ChassisMainThread<'host, C, D>
+where
+    C: ClapComponent,
+    D: ClapController<C>,
 {
+    fn on_main_thread(&self) {
+        let Some(outbox) = &self.outbox else {
+            return;
+        };
+        outbox.begin_service();
+        let controller = self
+            .controller
+            .as_ref()
+            .expect("enabled outbox owns a controller");
+        let Ok(mut controller) = controller.try_borrow_mut() else {
+            self.controller_deferred.set(true);
+            return;
+        };
+        let (requested, panic) =
+            controller.run::<C>(&self.shared, outbox, self.host_params.is_some());
+        drop(controller);
+        // Host callbacks may reenter. Publish and release every controller borrow first.
+        if outbox.has_pending()
+            && let Some(params) = self.host_params
+        {
+            params.request_flush(self.host.as_shared());
+        }
+        let deferred = self.controller_deferred.replace(false);
+        if requested || deferred {
+            outbox.request_callback(*self.host.as_shared());
+        }
+        if self.shared.check_healthy().is_err() {
+            self.host.as_shared().request_restart();
+        }
+        if let Some(payload) = panic {
+            std::panic::resume_unwind(payload);
+        }
+    }
 }
 
-fn activate_processor<'a, C, P, M>(
+fn activate_processor<'a, C, P, M, D>(
     host: HostAudioProcessorHandle<'a>,
-    main_thread: &ChassisMainThread<'_, C>,
+    main_thread: &ChassisMainThread<'_, C, D>,
     shared: &'a ChassisShared,
     audio_config: PluginAudioConfiguration,
 ) -> Result<ChassisAudioProcessor<'a, P, M>, PluginError>
 where
     C: ClapComponent<Processor = P>,
+    D: ClapController<C>,
     P: Processor,
 {
     let process = map_process_config(audio_config, C::CLAP_MAX_PARAMETER_EVENTS)?
@@ -514,7 +628,11 @@ where
     control_values
         .try_reserve_exact(shared.parameters.bindings().len())
         .map_err(PluginError::from)?;
-    control_values.resize(shared.parameters.bindings().len(), 0.0);
+    control_values.resize(
+        shared.parameters.bindings().len(),
+        ControlSnapshot::plain(0.0),
+    );
+    let changed_parameters = vec![false; shared.parameters.bindings().len()];
     let mut process_slots = Vec::new();
     process_slots
         .try_reserve_exact(main_thread.audio.process_slots().len())
@@ -531,6 +649,7 @@ where
         shared,
         input,
         control_values,
+        changed_parameters,
         parameter_generation: None,
         activation_custom_generation,
         custom_state_pending: false,
@@ -567,9 +686,10 @@ where
     Ok(processor)
 }
 
-impl<C> PluginAudioPortsImpl for ChassisMainThread<'_, C>
+impl<C, D> PluginAudioPortsImpl for ChassisMainThread<'_, C, D>
 where
     C: ClapComponent,
+    D: ClapController<C>,
 {
     fn count(&self, is_input: bool) -> u32 {
         self.audio.count(if is_input {
@@ -591,7 +711,11 @@ where
     }
 }
 
-impl<C: ClapComponent> PluginNotePortsImpl for ChassisMainThread<'_, C> {
+impl<C, D> PluginNotePortsImpl for ChassisMainThread<'_, C, D>
+where
+    C: ClapComponent,
+    D: ClapController<C>,
+{
     fn count(&self, is_input: bool) -> u32 {
         self.notes.count(is_input)
     }
@@ -603,18 +727,20 @@ impl<C: ClapComponent> PluginNotePortsImpl for ChassisMainThread<'_, C> {
     }
 }
 
-impl<C> PluginLatencyImpl for ChassisMainThread<'_, C>
+impl<C, D> PluginLatencyImpl for ChassisMainThread<'_, C, D>
 where
     C: ClapComponent,
+    D: ClapController<C>,
 {
     fn get(&self) -> u32 {
         self.latency.load(Ordering::Acquire)
     }
 }
 
-impl<C> PluginMainThreadParams for ChassisMainThread<'_, C>
+impl<C, D> PluginMainThreadParams for ChassisMainThread<'_, C, D>
 where
     C: ClapComponent,
+    D: ClapController<C>,
 {
     fn count(&self) -> u32 {
         u32::try_from(self.shared.bindings().len()).unwrap_or(u32::MAX)
@@ -652,7 +778,7 @@ where
             .bindings()
             .iter()
             .position(|binding| binding.id() == param_id)?;
-        let value = self.shared.value_control(index);
+        let value = self.shared.value_control(index).ok()?;
         self.shared.check_healthy().ok()?;
         Some(value)
     }
@@ -683,16 +809,27 @@ where
         binding.parse_control(text.to_str().ok()?)
     }
 
-    fn flush(&self, input: &InputEvents, _output: &mut OutputEvents) {
-        if self.shared.apply_input(input).is_err() {
+    fn flush(&self, input: &InputEvents, output: &mut OutputEvents) {
+        let result = self.shared.apply_input(input);
+        if let Some(outbox) = &self.outbox {
+            outbox.drain(&self.shared, output);
+            if outbox.has_pending() {
+                outbox.request_callback(*self.host.as_shared());
+            }
+        }
+        if result.is_err() {
+            if let Some(outbox) = &self.outbox {
+                outbox.request_callback(*self.host.as_shared());
+            }
             self.host.as_shared().request_restart();
         }
     }
 }
 
-impl<C> PluginRenderImpl for ChassisMainThread<'_, C>
+impl<C, D> PluginRenderImpl for ChassisMainThread<'_, C, D>
 where
     C: ClapComponent,
+    D: ClapController<C>,
 {
     fn has_hard_realtime_requirement(&self) -> bool {
         false
@@ -704,9 +841,10 @@ where
     }
 }
 
-impl<C> PluginStateImpl for ChassisMainThread<'_, C>
+impl<C, D> PluginStateImpl for ChassisMainThread<'_, C, D>
 where
     C: ClapComponent,
+    D: ClapController<C>,
 {
     fn save(&self, output: &mut OutputStream) -> Result<(), PluginError> {
         let identity = self
@@ -721,20 +859,67 @@ where
     }
 
     fn load(&self, input: &mut InputStream) -> Result<(), PluginError> {
-        let limits = StateLimits::default();
-        let encoded = read_bounded_state(input, limits.max_total_bytes)?;
-        let mut candidate = component_runtime(&self.component, &self.schema)?;
-        candidate
-            .apply_state_bytes(&self.component, &encoded, limits)
-            .map_err(PluginError::from)?;
-        let document = candidate.state_document().map_err(PluginError::from)?;
-        let identity = self
-            .schema
-            .state_identity()
-            .ok_or(PluginError::Message("CLAP state identity is unavailable"))?;
-        self.shared
-            .apply_state(&document, identity)
-            .map_err(|error| state_error(&error))?;
+        // Borrow first: a reentrant controller/load must never wait on its own
+        // suspended operation. Ordinary concurrent audio delivery is not failure.
+        let mut controller = self
+            .controller
+            .as_ref()
+            .map(|controller| {
+                controller
+                    .try_borrow_mut()
+                    .map_err(|_| PluginError::Message("CLAP controller is busy"))
+            })
+            .transpose()?;
+        let claim = self
+            .outbox
+            .as_ref()
+            .map(|outbox| {
+                outbox.claim_mutation().ok_or(PluginError::Message(
+                    "CLAP state load reentered host output",
+                ))
+            })
+            .transpose()?;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let limits = StateLimits::default();
+            let encoded = read_bounded_state(input, limits.max_total_bytes)?;
+            let mut candidate = component_runtime(&self.component, &self.schema)?;
+            candidate
+                .apply_state_bytes(&self.component, &encoded, limits)
+                .map_err(PluginError::from)?;
+            let document = candidate.state_document().map_err(PluginError::from)?;
+            let identity = self
+                .schema
+                .state_identity()
+                .ok_or(PluginError::Message("CLAP state identity is unavailable"))?;
+            self.shared
+                .apply_state(&document, identity)
+                .map_err(|error| state_error(&error))?;
+            if let Some(controller) = &mut controller {
+                controller.protocol.invalidate_changes();
+            }
+            Ok::<(), PluginError>(())
+        }));
+        let faulted = self.shared.check_healthy().is_err();
+        if faulted && let (Some(controller), Some(outbox)) = (&mut controller, &self.outbox) {
+            controller.fail(outbox);
+        }
+        drop(controller);
+        drop(claim);
+        // A stream/policy callback may have reentered main service while the
+        // controller was borrowed. Preserve that request on rejection and panic too.
+        let deferred = self.controller_deferred.replace(false);
+        if let Some(outbox) = &self.outbox
+            && (deferred || faulted)
+        {
+            outbox.request_callback(*self.host.as_shared());
+        }
+        if faulted {
+            self.host.as_shared().request_restart();
+        }
+        match result {
+            Ok(result) => result?,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
         // A loaded state replaces host-visible plain values; CLAP requires the
         // plugin to request a value rescan rather than assuming hosts poll.
         if !self.shared.bindings().is_empty()
@@ -749,19 +934,20 @@ where
     }
 }
 
-impl<'a, C, P> PluginAudioProcessor<'a, ChassisShared, ChassisMainThread<'a, C>>
+impl<'a, C, P, D> PluginAudioProcessor<'a, ChassisShared, ChassisMainThread<'a, C, D>>
     for ChassisAudioProcessor<'a, P, F32Only>
 where
     C: ClapComponent<Processor = P>,
+    D: ClapController<C>,
     P: ChassisProcess<f32> + Processor + Send + 'static,
 {
     fn activate(
         host: HostAudioProcessorHandle<'a>,
-        main_thread: &ChassisMainThread<'_, C>,
+        main_thread: &ChassisMainThread<'_, C, D>,
         shared: &'a ChassisShared,
         audio_config: PluginAudioConfiguration,
     ) -> Result<Self, PluginError> {
-        activate_processor::<C, P, F32Only>(host, main_thread, shared, audio_config)
+        activate_processor::<C, P, F32Only, D>(host, main_thread, shared, audio_config)
     }
 
     fn process(
@@ -773,7 +959,7 @@ where
         self.process_block::<f32>(process, audio, &mut events)
     }
 
-    fn deactivate(mut self, _main_thread: &ChassisMainThread<'_, C>) {
+    fn deactivate(mut self, _main_thread: &ChassisMainThread<'_, C, D>) {
         let _ = self.runtime.deactivate();
     }
 
@@ -782,25 +968,24 @@ where
     }
 
     fn start_processing(&mut self) -> Result<(), PluginError> {
-        self.ensure_processing_usable()?;
-        self.notify_tail();
-        Ok(())
+        self.start_runtime_processing()
     }
 }
 
-impl<'a, C, P> PluginAudioProcessor<'a, ChassisShared, ChassisMainThread<'a, C>>
+impl<'a, C, P, D> PluginAudioProcessor<'a, ChassisShared, ChassisMainThread<'a, C, D>>
     for ChassisAudioProcessor<'a, P, F32AndF64>
 where
     C: ClapComponent<Processor = P>,
+    D: ClapController<C>,
     P: ChassisProcess<f32> + ChassisProcess<f64> + Processor + Send + 'static,
 {
     fn activate(
         host: HostAudioProcessorHandle<'a>,
-        main_thread: &ChassisMainThread<'_, C>,
+        main_thread: &ChassisMainThread<'_, C, D>,
         shared: &'a ChassisShared,
         audio_config: PluginAudioConfiguration,
     ) -> Result<Self, PluginError> {
-        activate_processor::<C, P, F32AndF64>(host, main_thread, shared, audio_config)
+        activate_processor::<C, P, F32AndF64, D>(host, main_thread, shared, audio_config)
     }
 
     fn process(
@@ -816,7 +1001,7 @@ where
         }
     }
 
-    fn deactivate(mut self, _main_thread: &ChassisMainThread<'_, C>) {
+    fn deactivate(mut self, _main_thread: &ChassisMainThread<'_, C, D>) {
         let _ = self.runtime.deactivate();
     }
 
@@ -825,9 +1010,7 @@ where
     }
 
     fn start_processing(&mut self) -> Result<(), PluginError> {
-        self.ensure_processing_usable()?;
-        self.notify_tail();
-        Ok(())
+        self.start_runtime_processing()
     }
 }
 
@@ -835,8 +1018,8 @@ impl<P> PluginAudioProcessorParams for ChassisAudioProcessor<'_, P, F32Only>
 where
     P: ChassisProcess<f32> + Processor + Send + 'static,
 {
-    fn flush(&mut self, input: &InputEvents, _output: &mut OutputEvents) {
-        self.flush_parameters(input);
+    fn flush(&mut self, input: &InputEvents, output: &mut OutputEvents) {
+        self.flush_parameters(input, output);
     }
 }
 
@@ -844,8 +1027,8 @@ impl<P> PluginAudioProcessorParams for ChassisAudioProcessor<'_, P, F32AndF64>
 where
     P: ChassisProcess<f32> + ChassisProcess<f64> + Processor + Send + 'static,
 {
-    fn flush(&mut self, input: &InputEvents, _output: &mut OutputEvents) {
-        self.flush_parameters(input);
+    fn flush(&mut self, input: &InputEvents, output: &mut OutputEvents) {
+        self.flush_parameters(input, output);
     }
 }
 
@@ -853,10 +1036,20 @@ impl<P, M> ChassisAudioProcessor<'_, P, M>
 where
     P: Processor,
 {
-    fn flush_parameters(&self, input: &InputEvents) {
-        if self.shared.parameters.apply_input(input).is_err() {
+    fn flush_parameters(&self, input: &InputEvents, output: &mut OutputEvents) {
+        let result = self.shared.parameters.apply_input(input);
+        if let Some(outbox) = &self.shared.outbox {
+            outbox.drain(&self.shared.parameters, output);
+            if outbox.has_pending() {
+                outbox.request_callback(*self.host.as_shared());
+            }
+        }
+        if result.is_err() {
             // Flush cannot return an error. A terminal publication fault also
             // rejects processing and reactivation; let the host end this run.
+            if let Some(outbox) = &self.shared.outbox {
+                outbox.request_callback(*self.host.as_shared());
+            }
             self.host.as_shared().request_restart();
         }
     }
@@ -902,6 +1095,34 @@ where
     }
 
     fn process_block<S>(
+        &mut self,
+        process: ClapProcess,
+        audio: Audio,
+        events: &mut Events,
+    ) -> Result<ProcessStatus, PluginError>
+    where
+        P: ChassisProcess<S>,
+        S: ClapSample,
+    {
+        let result = self.process_block_inner::<S>(process, audio, events);
+        if result.is_err() {
+            self.shared
+                .report_audio_publication_fault(*self.host.as_shared());
+        }
+        result
+    }
+
+    fn start_runtime_processing(&mut self) -> Result<(), PluginError> {
+        if let Err(error) = self.ensure_processing_usable() {
+            self.shared
+                .report_audio_publication_fault(*self.host.as_shared());
+            return Err(error);
+        }
+        self.notify_tail();
+        Ok(())
+    }
+
+    fn process_block_inner<S>(
         &mut self,
         process: ClapProcess,
         audio: Audio,
@@ -969,6 +1190,13 @@ where
         } else {
             context.without_parameter_events()
         };
+        if let Some(outbox) = &self.shared.outbox {
+            // Untimed controls precede all timed DSP output, including time zero.
+            outbox.drain(&self.shared.parameters, events.output);
+            if outbox.has_pending() {
+                outbox.request_callback(*self.host.as_shared());
+            }
+        }
         let mut output = ClapEventOutput {
             configuration: &self.shared.notes,
             output: events.output,
@@ -977,6 +1205,23 @@ where
             .process_source_with_output(frame_count, context, &mut buffers, &mut output)
             .map_err(|_| PluginError::Message("Invalid Chassis process block"))?;
 
+        self.publish_parameter_completion(generation)?;
+        // This private replica represents consumed DSP until the next block start.
+        // Do not remap a newer normalized control after product DSP/tail completion.
+        self.publish_tail();
+
+        if !self.restart_sent && self.runtime.restart_requested() {
+            self.restart_sent = true;
+            self.host.as_shared().request_restart();
+        }
+
+        Ok(ProcessStatus::Continue)
+    }
+
+    fn publish_parameter_completion(
+        &mut self,
+        generation: Option<ParameterGeneration>,
+    ) -> Result<(), PluginError> {
         // External held input survives a newer state publication, including
         // while old resources are gated. It is not part of the base-state CAS.
         self.shared
@@ -990,8 +1235,18 @@ where
             )
         });
         if generation.is_some() && base_changed {
+            self.changed_parameters.fill(false);
+            for event in &self.input.parameters {
+                if !matches!(
+                    event.change(),
+                    chassis_runtime::automation::ParameterEventChange::Modulate { .. }
+                ) {
+                    self.changed_parameters[usize::try_from(event.parameter().get())
+                        .expect("admitted parameter fits usize")] = true;
+                }
+            }
             // Runtime completion changed the whole-store cache invariant. A
-            // failed/aborted publication must not let end sync skip restoration.
+            // failed/aborted publication must not let next-block synchronization skip restoration.
             self.parameter_generation = None;
             self.parameter_generation = self
                 .shared
@@ -1000,18 +1255,11 @@ where
                     self.runtime.parameters(),
                     generation,
                     &mut self.control_values,
+                    &self.changed_parameters,
                 )
                 .map_err(sync_error)?;
         }
-        self.sync_parameters()?;
-        self.publish_tail();
-
-        if !self.restart_sent && self.runtime.restart_requested() {
-            self.restart_sent = true;
-            self.host.as_shared().request_restart();
-        }
-
-        Ok(ProcessStatus::Continue)
+        Ok(())
     }
 
     fn sync_parameters(&mut self) -> Result<(), PluginError> {
@@ -1184,8 +1432,8 @@ mod tests {
 
     #[test]
     fn midi2_only_setup_requires_event_capacity_but_no_sysex_capacity() {
-        assert!(new_shared::<UmpOnly<0>>().is_err());
-        let shared = new_shared::<UmpOnly<1>>().unwrap();
+        assert!(new_shared::<UmpOnly<0>, NoController>().is_err());
+        let shared = new_shared::<UmpOnly<1>, NoController>().unwrap();
         let events = [clack_plugin::events::event_types::Midi2Event::new(
             0,
             0,
@@ -1206,7 +1454,7 @@ mod tests {
             admitted.iter().next().unwrap().message(),
             chassis_runtime::midi::MidiMessage::Ump([u32::MAX; 4])
         );
-        assert!(new_shared::<UmpOnly<1025>>().is_err());
+        assert!(new_shared::<UmpOnly<1025>, NoController>().is_err());
     }
 
     #[test]

@@ -15,7 +15,7 @@ use crate::{
     },
     automation::ParameterEventChange,
     buffer::ChannelBuffer,
-    controls::{self, ControlError, ControlObservation, ControlState, ParameterControls},
+    controls::{self, ControlError, ControlObservation, GestureProtocol, ParameterControls},
     events::{
         EventOutputError, EventPortDescriptor, EventPortIndex, EventPortKey, EventPortSchemaError,
         EventSink, NoteEventPortError,
@@ -522,7 +522,7 @@ where
     parameters: ParameterStore,
     modulation: Vec<f64>,
     custom_state: Vec<StateEntry>,
-    control_state: Option<ControlState>,
+    gesture_protocol: Option<GestureProtocol>,
     active: Option<ActiveRuntime<P>>,
 }
 
@@ -550,7 +550,7 @@ where
             schema,
             parameters,
             custom_state: Vec::new(),
-            control_state: None,
+            gesture_protocol: None,
             active: None,
         };
         runtime
@@ -677,10 +677,10 @@ where
     /// are not delivered; the embedding owns ordered delivery outside this borrow.
     /// Unused controls add no queue, callback scan or observation work.
     pub fn controls(&mut self) -> ParameterControls<'_> {
-        let state = self
-            .control_state
-            .get_or_insert_with(|| ControlState::new(self.schema.parameters().len()));
-        ParameterControls::new(&mut self.parameters, state)
+        let protocol = self
+            .gesture_protocol
+            .get_or_insert_with(|| GestureProtocol::new(self.schema.parameters().len()));
+        ParameterControls::new(&mut self.parameters, protocol)
     }
 
     /// Read one coherent latest desired base/provenance/gesture snapshot.
@@ -694,7 +694,7 @@ where
         &self,
         parameter: ParameterIndex,
     ) -> Result<ControlObservation, ControlError> {
-        controls::observe(&self.parameters, self.control_state.as_ref(), parameter)
+        controls::observe(&self.parameters, self.gesture_protocol.as_ref(), parameter)
     }
 
     /// Return the durable validated non-parameter semantic state entries.
@@ -954,7 +954,7 @@ where
             schema,
             parameters,
             custom_state: _,
-            control_state: _,
+            gesture_protocol: _,
             modulation,
             active,
         } = self;

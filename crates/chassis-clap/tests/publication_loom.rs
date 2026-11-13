@@ -22,6 +22,37 @@ use loom::{
 
 const INITIAL_VALUES: [u64; 2] = [10, 20];
 const ROOT_VALUES: [u64; 2] = [11, 21];
+const NONE: u64 = f64::NAN.to_bits();
+const UNKNOWN: [u64; 2] = [NONE; 2];
+
+struct ValueCell {
+    value: AtomicU64,
+    coordinate: AtomicU64,
+    revision: AtomicU64,
+}
+
+impl ValueCell {
+    fn new(value: u64) -> Self {
+        Self {
+            value: AtomicU64::new(value),
+            coordinate: AtomicU64::new(NONE),
+            revision: AtomicU64::new(0),
+        }
+    }
+
+    fn read(&self) -> (u64, u64, u64) {
+        let value = self.value.load(Ordering::Acquire);
+        let coordinate = self.coordinate.load(Ordering::Acquire);
+        let revision = self.revision.load(Ordering::Acquire);
+        (value, coordinate, revision)
+    }
+
+    fn write(&self, value: u64, coordinate: u64, revision: u64) {
+        self.value.store(value, Ordering::Release);
+        self.coordinate.store(coordinate, Ordering::Release);
+        self.revision.store(revision, Ordering::Release);
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Generation {
@@ -34,16 +65,16 @@ struct Snapshot {
     generation: Generation,
     custom_generation: u64,
     values: [u64; 2],
+    coordinates: [u64; 2],
 }
 
 struct PublicationModel {
     root_seq: AtomicU64,
-    root_values: [AtomicU64; 2],
-    root_ticket: AtomicU64,
+    root_values: [ValueCell; 2],
+    replacement_revision: AtomicU64,
     custom_generation: AtomicU64,
     ingress_seq: AtomicU64,
-    ingress_values: [AtomicU64; 2],
-    ingress_tickets: [AtomicU64; 2],
+    ingress_values: [ValueCell; 2],
     operation_ticket: AtomicU64,
 }
 
@@ -51,12 +82,11 @@ impl PublicationModel {
     fn new() -> Self {
         Self {
             root_seq: AtomicU64::new(0),
-            root_values: INITIAL_VALUES.map(AtomicU64::new),
-            root_ticket: AtomicU64::new(0),
+            root_values: INITIAL_VALUES.map(ValueCell::new),
+            replacement_revision: AtomicU64::new(0),
             custom_generation: AtomicU64::new(0),
             ingress_seq: AtomicU64::new(0),
-            ingress_values: INITIAL_VALUES.map(AtomicU64::new),
-            ingress_tickets: [AtomicU64::new(0), AtomicU64::new(0)],
+            ingress_values: INITIAL_VALUES.map(ValueCell::new),
             // Zero denotes no operation. Every reservation is after source CAS.
             operation_ticket: AtomicU64::new(0),
         }
@@ -82,9 +112,9 @@ impl PublicationModel {
 
     fn finish_root(&self, old: u64, ticket: u64, values: [u64; 2], custom_changed: bool) {
         for (slot, value) in self.root_values.iter().zip(values) {
-            slot.store(value, Ordering::Release);
+            slot.write(value, NONE, ticket);
         }
-        self.root_ticket.store(ticket, Ordering::Release);
+        self.replacement_revision.store(ticket, Ordering::Release);
         if custom_changed {
             self.custom_generation.store(ticket, Ordering::Release);
         }
@@ -97,14 +127,20 @@ impl PublicationModel {
         ticket
     }
 
+    fn publish_scalar_root(&self, index: usize, value: u64, coordinate: u64) -> u64 {
+        let (old, ticket) = self.begin_root().expect("root writers are serialized");
+        self.root_values[index].write(value, coordinate, ticket);
+        self.root_seq.store(old + 2, Ordering::Release);
+        ticket
+    }
+
     fn try_flush(&self, index: usize, value: u64) -> Option<u64> {
         let old = self.ingress_seq.load(Ordering::Acquire);
         if !Self::try_begin_source(&self.ingress_seq, old) {
             return None;
         }
         let ticket = self.reserve_ticket();
-        self.ingress_values[index].store(value, Ordering::Release);
-        self.ingress_tickets[index].store(ticket, Ordering::Release);
+        self.ingress_values[index].write(value, NONE, ticket);
         self.ingress_seq.store(old + 2, Ordering::Release);
         Some(ticket)
     }
@@ -122,15 +158,16 @@ impl PublicationModel {
         if !ingress.is_multiple_of(2) || !root.is_multiple_of(2) {
             return None;
         }
-        let cutoff = self.root_ticket.load(Ordering::Acquire);
         let mut values = [0; 2];
-        for (index, value) in values.iter_mut().enumerate() {
-            *value = self.root_values[index].load(Ordering::Acquire);
-            let ingress_value = self.ingress_values[index].load(Ordering::Acquire);
-            let ticket = self.ingress_tickets[index].load(Ordering::Acquire);
-            if ticket > cutoff {
-                *value = ingress_value;
-            }
+        let mut coordinates = UNKNOWN;
+        for index in 0..2 {
+            let (base, base_coordinate, cutoff) = self.root_values[index].read();
+            let (pending, pending_coordinate, ticket) = self.ingress_values[index].read();
+            (values[index], coordinates[index]) = if ticket > cutoff {
+                (pending, pending_coordinate)
+            } else {
+                (base, base_coordinate)
+            };
         }
         let custom_generation = self.custom_generation.load(Ordering::Acquire);
         (self.root_seq.load(Ordering::Acquire) == root
@@ -139,6 +176,7 @@ impl PublicationModel {
                 generation: Generation { root, ingress },
                 custom_generation,
                 values,
+                coordinates,
             })
     }
 
@@ -181,10 +219,13 @@ impl PublicationModel {
         expected: Generation,
         ticket: u64,
         values: [u64; 2],
+        coordinates: [u64; 2],
+        changed: [bool; 2],
     ) -> Option<Generation> {
         for (index, value) in values.into_iter().enumerate() {
-            self.ingress_values[index].store(value, Ordering::Release);
-            self.ingress_tickets[index].store(ticket, Ordering::Release);
+            if changed[index] {
+                self.ingress_values[index].write(value, coordinates[index], ticket);
+            }
         }
         let ingress = expected.ingress + 2;
         self.ingress_seq.store(ingress, Ordering::Release);
@@ -196,12 +237,133 @@ impl PublicationModel {
         })
     }
 
-    fn try_complete(&self, expected: Generation, values: [u64; 2]) -> Option<Generation> {
+    fn try_complete(
+        &self,
+        expected: Generation,
+        values: [u64; 2],
+        coordinates: [u64; 2],
+        changed: [bool; 2],
+    ) -> Option<Generation> {
         if !self.begin_completion(expected) {
             return None;
         }
         let ticket = self.reserve_completion(expected)?;
-        self.finish_completion(expected, ticket, values)
+        self.finish_completion(expected, ticket, values, coordinates, changed)
+    }
+}
+
+#[test]
+fn scalar_root_only_changes_its_parameter_while_other_ingress_survives() {
+    let mut builder = loom::model::Builder::new();
+    builder.preemption_bound = Some(2);
+    builder.check(|| {
+        let publication = Arc::new(PublicationModel::new());
+        publication.try_flush(0, 12).expect("old ingress");
+        let epoch = publication.publish_root(ROOT_VALUES, true);
+        let root = {
+            let publication = Arc::clone(&publication);
+            thread::spawn(move || publication.publish_scalar_root(1, 23, 0.75_f64.to_bits()))
+        };
+        let ingress = {
+            let publication = Arc::clone(&publication);
+            thread::spawn(move || publication.try_flush(0, 13).expect("sole ingress writer"))
+        };
+        let snapshot = publication.try_snapshot();
+        root.join().unwrap();
+        ingress.join().unwrap();
+        let check = |snapshot: Snapshot| {
+            assert_eq!(snapshot.custom_generation, epoch);
+            assert_eq!(
+                snapshot.values[0],
+                if snapshot.generation.ingress == 4 {
+                    13
+                } else {
+                    11
+                }
+            );
+            assert_eq!(snapshot.coordinates[0], NONE);
+            if snapshot.generation.root == 4 {
+                assert_eq!(
+                    (snapshot.values[1], snapshot.coordinates[1]),
+                    (23, 0.75_f64.to_bits())
+                );
+            } else {
+                assert_eq!(snapshot.generation.root, 2);
+                assert_eq!((snapshot.values[1], snapshot.coordinates[1]), (21, NONE));
+            }
+        };
+        if let Some(snapshot) = snapshot {
+            check(snapshot);
+        }
+        let final_snapshot = publication.try_snapshot().expect("writers finished");
+        check(final_snapshot);
+        assert_eq!(final_snapshot.values, [13, 23]);
+        assert_eq!(
+            publication.replacement_revision.load(Ordering::Acquire),
+            epoch
+        );
+    });
+}
+
+#[test]
+fn coherent_pairs_are_read_from_both_sources_with_the_custom_epoch() {
+    for root_writer in [false, true] {
+        loom::model(move || {
+            let publication = Arc::new(PublicationModel::new());
+            let epoch = publication.publish_root(ROOT_VALUES, true);
+            let baseline = publication.try_snapshot().unwrap().generation;
+            let writer = {
+                let publication = Arc::clone(&publication);
+                thread::spawn(move || {
+                    if root_writer {
+                        publication.publish_scalar_root(0, 14, (-0.0_f64).to_bits());
+                    } else {
+                        publication
+                            .try_complete(
+                                baseline,
+                                [14, 999],
+                                [(-0.0_f64).to_bits(), NONE],
+                                [true, false],
+                            )
+                            .expect("unchanged baseline");
+                    }
+                })
+            };
+            let snapshot = publication.try_snapshot();
+            writer.join().unwrap();
+            let check = |snapshot: Snapshot| {
+                assert_eq!(snapshot.custom_generation, epoch);
+                assert_eq!((snapshot.values[1], snapshot.coordinates[1]), (21, NONE));
+                let changed = if root_writer {
+                    snapshot.generation.root == 4
+                } else {
+                    snapshot.generation.ingress == 2
+                };
+                assert_eq!(
+                    (snapshot.values[0], snapshot.coordinates[0]),
+                    if changed {
+                        (14, (-0.0_f64).to_bits())
+                    } else {
+                        (11, NONE)
+                    }
+                );
+            };
+            if let Some(snapshot) = snapshot {
+                check(snapshot);
+            }
+            let final_snapshot = publication.try_snapshot().unwrap();
+            check(final_snapshot);
+            assert_eq!(
+                (final_snapshot.values[0], final_snapshot.coordinates[0]),
+                (14, (-0.0_f64).to_bits())
+            );
+            assert_eq!(
+                publication.ingress_values[1]
+                    .revision
+                    .load(Ordering::Acquire),
+                0
+            );
+        });
     }
 }
 
@@ -222,6 +384,7 @@ fn accepted_root_snapshot_never_mixes_values_and_custom_epoch() {
                     ingress: 0,
                 } => {
                     assert_eq!(snapshot.values, INITIAL_VALUES);
+                    assert_eq!(snapshot.coordinates, UNKNOWN);
                     assert_eq!(snapshot.custom_generation, 0);
                 }
                 Generation {
@@ -229,6 +392,7 @@ fn accepted_root_snapshot_never_mixes_values_and_custom_epoch() {
                     ingress: 0,
                 } => {
                     assert_eq!(snapshot.values, ROOT_VALUES);
+                    assert_eq!(snapshot.coordinates, UNKNOWN);
                     assert_eq!(snapshot.custom_generation, ticket);
                 }
                 generation => panic!("unexpected snapshot generation {generation:?}"),
@@ -328,7 +492,9 @@ fn flush_during_odd_root_is_retained_per_point_until_a_newer_load() {
             "scalar root preserves custom epoch"
         );
         assert_eq!(
-            publication.ingress_tickets[0].load(Ordering::Acquire),
+            publication.ingress_values[0]
+                .revision
+                .load(Ordering::Acquire),
             flush_ticket
         );
         assert!(publication.try_flush(1, 24).expect("next individual point") > cutoff);
@@ -340,7 +506,9 @@ fn flush_during_odd_root_is_retained_per_point_until_a_newer_load() {
             "reads do not retoken or compact"
         );
         assert_eq!(
-            publication.ingress_tickets[0].load(Ordering::Acquire),
+            publication.ingress_values[0]
+                .revision
+                .load(Ordering::Acquire),
             flush_ticket
         );
     });
@@ -360,12 +528,25 @@ fn load_between_first_root_check_and_dsp_ticket_cancels_without_payload_writes()
             baseline.generation.ingress
         );
         assert_eq!(
-            publication.ingress_values[0].load(Ordering::Acquire),
+            publication.ingress_values[0].value.load(Ordering::Acquire),
             INITIAL_VALUES[0]
         );
-        assert_eq!(publication.ingress_values[1].load(Ordering::Acquire), 22);
-        assert_eq!(publication.ingress_tickets[0].load(Ordering::Acquire), 0);
-        assert!(publication.ingress_tickets[1].load(Ordering::Acquire) < root_ticket);
+        assert_eq!(
+            publication.ingress_values[1].value.load(Ordering::Acquire),
+            22
+        );
+        assert_eq!(
+            publication.ingress_values[0]
+                .revision
+                .load(Ordering::Acquire),
+            0
+        );
+        assert!(
+            publication.ingress_values[1]
+                .revision
+                .load(Ordering::Acquire)
+                < root_ticket
+        );
         let snapshot = publication.try_snapshot().expect("canceled gate restored");
         assert_eq!(snapshot.values, ROOT_VALUES);
         assert_eq!(snapshot.custom_generation, root_ticket);
@@ -395,7 +576,13 @@ fn root_after_dsp_ticket_wins_and_completion_cannot_certify_stale_cache() {
         let root_ticket = publication.publish_root(ROOT_VALUES, true);
         assert!(root_ticket > dsp_ticket);
         assert_eq!(
-            publication.finish_completion(baseline.generation, dsp_ticket, [12, 22]),
+            publication.finish_completion(
+                baseline.generation,
+                dsp_ticket,
+                [12, 22],
+                UNKNOWN,
+                [true; 2]
+            ),
             None
         );
         let snapshot = publication.try_snapshot().expect("both sources stable");
@@ -424,7 +611,7 @@ fn concurrent_load_defeats_old_dsp_completion_under_weak_memory() {
         // between these writers except the modeled production atomics. If a
         // root reservation precedes DSP's reservation, the AcqRel ticket chain
         // must make the odd/changed root visible to the second root check.
-        let completed = publication.try_complete(baseline.generation, [12, 22]);
+        let completed = publication.try_complete(baseline.generation, [12, 22], UNKNOWN, [true; 2]);
         let root_ticket = root.join().expect("root writer must not panic");
         let snapshot = publication.try_snapshot().expect("both sources stable");
         assert_eq!(snapshot.values, ROOT_VALUES);
@@ -480,7 +667,12 @@ fn cached_combined_generation_retokens_and_preserves_the_whole_baseline() {
                     );
                 }
                 cached.values[0] = 14; // DSP completes only this parameter.
-                let published = publication.try_complete(expected, cached.values);
+                let published = publication.try_complete(
+                    expected,
+                    cached.values,
+                    cached.coordinates,
+                    [true, false],
+                );
                 assert_eq!(published.is_some(), expected == current.generation);
                 let after = publication
                     .try_snapshot()
@@ -512,11 +704,11 @@ fn same_ingress_generation_completions_have_exactly_one_winner() {
             .generation;
         let first = {
             let publication = Arc::clone(&publication);
-            thread::spawn(move || publication.try_complete(expected, [11, 21]))
+            thread::spawn(move || publication.try_complete(expected, [11, 21], UNKNOWN, [true; 2]))
         };
         let second = {
             let publication = Arc::clone(&publication);
-            thread::spawn(move || publication.try_complete(expected, [12, 22]))
+            thread::spawn(move || publication.try_complete(expected, [12, 22], UNKNOWN, [true; 2]))
         };
         let first = first.join().expect("first completion must not panic");
         let second = second.join().expect("second completion must not panic");

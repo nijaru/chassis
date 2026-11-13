@@ -2,10 +2,6 @@
 
 This file owns unresolved decisions, not implemented inventories or a second roadmap. [The execution plan](../next-runtime-slice.md) orders work; [validation](validation.md) owns evidence; [the roadmap](../roadmap.md) owns the initial core boundary, stability gates, and possible later extensions. All APIs and CHSS bytes remain pre-alpha.
 
-## Control origins and publication
-
-The synchronous [headless protocol](parameters-state.md#product-originated-edits-and-modulation) defines local/external intent, latest observations and stale-but-closable gestures. How does the instance-lifetime deployment bridge preserve these across runtime recreation, deferred host delivery, reentrant state changes and output refusal? Specify acceptance/closure reservations, stale-value suppression after replacement, and observable contention outcomes. Preserve the implemented [versioned flush ingress](parameters-state.md#complete-clap-state-publication) and its common desired-state view while extending publication to product-originated edits. These are core control questions; they do not require an editor toolkit.
-
 ## Prepared data and background-work lifetime
 
 Who owns active and pending immutable resources, coalesced replacements, and deferred reclamation? Which transitions permit compatible adoption, and which require reactivation? What invalidates results on load/reset/deactivation/unload? Cancellation can be late; teardown must remain safe, and offline output cannot depend on wall-clock races.
@@ -14,7 +10,7 @@ This is committed core closure work. Establish the [resource lifecycle](runtime-
 
 ## Bounds and failure policy
 
-What happens at each supported capacity boundary: event admission/output, control publication, resource supersession and observations? Essential events and replaceable observations need not have the same loss/failure policy. Make outcomes visible without realtime logging, blocking, or hidden allocation. Clarify which failures end a run and which permit continued valid processing.
+How should prepared-resource supersession and any larger observation streams report their capacity outcomes? Existing event bounds and [CLAP control reservations/refusal](parameters-state.md#bounded-clap-product-controls) already have explicit policies; preserve them rather than reopening their ownership. Essential events and replaceable observations need not have the same loss/failure policy. Make outcomes visible without realtime logging, blocking, or hidden allocation. Clarify which failures end a run and which permit continued valid processing.
 
 Additional event targeting, portable activity/sleep hints, larger observation streams, and richer I/O policies are not automatic core gates. The supported subset must remain explicit; no silent flattening of note identity, MIDI information, source ordering, or labeled layouts.
 
