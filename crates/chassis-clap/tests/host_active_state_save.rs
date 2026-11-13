@@ -150,33 +150,38 @@ fn parameter_value(bytes: &[u8], key: &str) -> f64 {
     }
 }
 
+#[allow(unsafe_code)]
 fn run_automation_callback(
     processor: StoppedPluginAudioProcessor<TestHostHandlers>,
 ) -> StoppedPluginAudioProcessor<TestHostHandlers> {
     let mut processor = processor.start_processing().expect("processing starts");
-    let mut main_inputs = [vec![0.0_f32; 1], vec![0.0_f32; 1]];
-    let mut sidechain_inputs = [vec![0.0_f32; 1], vec![0.0_f32; 1]];
-    let mut outputs = [vec![0.0_f32; 1], vec![0.0_f32; 1]];
-    let mut input_ports = AudioPorts::with_capacity(4, 2);
-    let mut output_ports = AudioPorts::with_capacity(2, 1);
-    let input_audio = input_ports.with_input_buffers([
-        AudioPortBuffer {
-            channels: AudioPortBufferType::f32_input_only(
-                main_inputs.iter_mut().map(InputChannel::variable),
-            ),
-            latency: 0,
-        },
-        AudioPortBuffer {
-            channels: AudioPortBufferType::f32_input_only(
-                sidechain_inputs.iter_mut().map(InputChannel::variable),
-            ),
-            latency: 0,
-        },
-    ]);
-    let mut output_audio = output_ports.with_output_buffers([AudioPortBuffer {
-        channels: AudioPortBufferType::f32_output_only(outputs.iter_mut().map(Vec::as_mut_slice)),
+    let mut main_inputs = [[0.0_f32; 1]; 2];
+    let mut sidechain_inputs = [[0.0_f32; 1]; 2];
+    let mut outputs = [[0.0_f32; 1]; 2];
+    let mut main_pointers = main_inputs.each_mut().map(|channel| channel.as_mut_ptr());
+    let mut sidechain_pointers = sidechain_inputs
+        .each_mut()
+        .map(|channel| channel.as_mut_ptr());
+    let mut output_pointers = outputs.each_mut().map(|channel| channel.as_mut_ptr());
+    let buffer = |data32| clap_sys::audio_buffer::clap_audio_buffer {
+        data32,
+        data64: std::ptr::null_mut(),
+        channel_count: 2,
         latency: 0,
-    }]);
+        constant_mask: 0,
+    };
+    let input_tables = [
+        buffer(main_pointers.as_mut_ptr()),
+        buffer(sidechain_pointers.as_mut_ptr()),
+    ];
+    let mut output_tables = [buffer(output_pointers.as_mut_ptr())];
+    // Avoid the pinned development host's multiport pointer-table reborrow.
+    // SAFETY: caller-owned tables and disjoint initialized one-frame channels
+    // remain stable through process; inputs are read-only, outputs exclusive.
+    // No backing channel or pointer table is reborrowed while these views live.
+    let input_audio = unsafe { InputAudioBuffers::from_raw_buffers(&input_tables, 1) };
+    // SAFETY: the same storage/lifetime guarantees apply to the exclusive output.
+    let mut output_audio = unsafe { OutputAudioBuffers::from_raw_buffers(&mut output_tables, 1) };
     let mut input_events = EventBuffer::with_capacity(2);
     input_events.push(&ParamValueEvent::new(
         0,

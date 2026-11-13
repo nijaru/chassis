@@ -585,6 +585,45 @@ fn exercise_control_text(plugin: &mut PluginInstance<TestHostHandlers>) {
     );
 }
 
+fn assert_no_heap(operation: impl FnOnce()) {
+    ALLOCATIONS.store(0, Ordering::Relaxed);
+    DEALLOCATIONS.store(0, Ordering::Relaxed);
+    COUNT_THIS_THREAD.set(true);
+    operation();
+    COUNT_THIS_THREAD.set(false);
+    assert_eq!(ALLOCATIONS.load(Ordering::Relaxed), 0);
+    assert_eq!(DEALLOCATIONS.load(Ordering::Relaxed), 0);
+}
+
+fn measure_stopped_flush(
+    processor: &mut StoppedPluginAudioProcessor<TestHostHandlers>,
+    params: PluginParams,
+    events: &[ParamValueEvent; 3],
+) {
+    let invalid_flush = [ParamValueEvent::new(
+        0,
+        ClapId::new(8),
+        Pckn::match_all(),
+        f64::NAN,
+    )];
+    ALLOCATIONS.store(0, Ordering::Relaxed);
+    DEALLOCATIONS.store(0, Ordering::Relaxed);
+    COUNT_THIS_THREAD.set(true);
+    for input in [
+        InputEvents::from_buffer(events),
+        InputEvents::from_buffer(&invalid_flush),
+    ] {
+        params.flush_active(
+            &mut processor.plugin_handle(),
+            &input,
+            &mut OutputEvents::void(),
+        );
+    }
+    COUNT_THIS_THREAD.set(false);
+    assert_eq!(ALLOCATIONS.load(Ordering::Relaxed), 0);
+    assert_eq!(DEALLOCATIONS.load(Ordering::Relaxed), 0);
+}
+
 #[test]
 fn full_adapter_process_path_is_allocation_free_at_event_bound_for_f32_and_f64() {
     REALTIME_LOG_CALLS.store(0, Ordering::Relaxed);
@@ -622,11 +661,13 @@ fn full_adapter_process_path_is_allocation_free_at_event_bound_for_f32_and_f64()
         ParamValueEvent::new(0, ClapId::new(9), Pckn::match_all(), 1.0),
         ParamValueEvent::new(0, ClapId::new(10), Pckn::match_all(), 2.0),
     ];
-    params.flush(
-        &mut plugin.inactive_plugin_handle().unwrap(),
-        &InputEvents::from_buffer(&flush_events),
-        &mut OutputEvents::void(),
-    );
+    assert_no_heap(|| {
+        params.flush(
+            &mut plugin.inactive_plugin_handle().unwrap(),
+            &InputEvents::from_buffer(&flush_events),
+            &mut OutputEvents::void(),
+        );
+    });
     for (id, expected) in [(8, -1.0), (9, 1.0), (10, 2.0)] {
         assert_eq!(
             params.get_value(&plugin.plugin_handle(), ClapId::new(id)),
@@ -634,7 +675,7 @@ fn full_adapter_process_path_is_allocation_free_at_event_bound_for_f32_and_f64()
         );
     }
 
-    let processor = plugin
+    let mut processor = plugin
         .activate(
             |_, _| TestHostAudioProcessor,
             PluginAudioConfiguration {
@@ -645,6 +686,12 @@ fn full_adapter_process_path_is_allocation_free_at_event_bound_for_f32_and_f64()
         )
         .expect("probe activation succeeds");
     assert_eq!(latency_changes.load(Ordering::Relaxed), 1);
+
+    measure_stopped_flush(&mut processor, params, &flush_events);
+    assert_eq!(
+        params.get_value(&plugin.plugin_handle(), ClapId::new(8)),
+        Some(-1.0)
+    );
 
     let mut processor = processor.start_processing().expect("processing starts");
     let events = input_events();

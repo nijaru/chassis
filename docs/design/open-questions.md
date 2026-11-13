@@ -4,7 +4,7 @@ This file owns unresolved decisions, not implemented inventories or a second roa
 
 ## Control origins and publication
 
-The synchronous [headless protocol](parameters-state.md#product-originated-edits-and-modulation) defines local/external intent, latest observations and stale-but-closable gestures. How does the instance-lifetime deployment bridge preserve these across runtime recreation, deferred host delivery, reentrant state changes and output refusal? Specify acceptance/closure reservations, stale-value suppression after replacement, and observable contention outcomes, including the current CLAP void-flush one-shot publication loss. These are core control questions; they do not require an editor toolkit.
+The synchronous [headless protocol](parameters-state.md#product-originated-edits-and-modulation) defines local/external intent, latest observations and stale-but-closable gestures. How does the instance-lifetime deployment bridge preserve these across runtime recreation, deferred host delivery, reentrant state changes and output refusal? Specify acceptance/closure reservations, stale-value suppression after replacement, and observable contention outcomes. Preserve the implemented [versioned flush ingress](parameters-state.md#complete-clap-state-publication) and its common desired-state view while extending publication to product-originated edits. These are core control questions; they do not require an editor toolkit.
 
 ## Prepared data and background-work lifetime
 

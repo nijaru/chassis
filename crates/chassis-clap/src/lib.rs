@@ -70,7 +70,9 @@ use event_ports::ClapEventPorts;
 use input_events::InputScratch;
 use midi::ClapMidiInput;
 use output_events::ClapEventOutput;
-use parameters::{ClapStateProjection, ParameterSyncError, StateProjectionError};
+use parameters::{
+    ClapStateProjection, ParameterGeneration, ParameterSyncError, StateProjectionError,
+};
 use process_audio::{ClapBufferSource, ClapSample, ClapSamplePrecision, sample_precision};
 
 /// Explicit CLAP audio-port projection metadata.
@@ -232,7 +234,7 @@ where
     shared: &'a ChassisShared,
     input: InputScratch,
     control_values: Vec<f64>,
-    parameter_generation: Option<u64>,
+    parameter_generation: Option<ParameterGeneration>,
     activation_custom_generation: u64,
     custom_state_pending: bool,
     process_slots: Vec<ClapProcessSlot>,
@@ -347,6 +349,7 @@ fn projected_runtime<C: Component>(
     component: &C,
     shared: &ChassisShared,
 ) -> Result<(InstanceRuntime<C::Processor>, u64), PluginError> {
+    shared.parameters.check_healthy().map_err(sync_error)?;
     let mut runtime = component_runtime(component, &shared.schema)?;
     let identity = shared
         .schema
@@ -649,7 +652,9 @@ where
             .bindings()
             .iter()
             .position(|binding| binding.id() == param_id)?;
-        Some(self.shared.value(index))
+        let value = self.shared.value_control(index);
+        self.shared.check_healthy().ok()?;
+        Some(value)
     }
 
     fn value_to_text(
@@ -679,7 +684,9 @@ where
     }
 
     fn flush(&self, input: &InputEvents, _output: &mut OutputEvents) {
-        self.shared.apply_input(input);
+        if self.shared.apply_input(input).is_err() {
+            self.host.as_shared().request_restart();
+        }
     }
 }
 
@@ -775,7 +782,7 @@ where
     }
 
     fn start_processing(&mut self) -> Result<(), PluginError> {
-        self.ensure_reset_succeeded()?;
+        self.ensure_processing_usable()?;
         self.notify_tail();
         Ok(())
     }
@@ -818,7 +825,7 @@ where
     }
 
     fn start_processing(&mut self) -> Result<(), PluginError> {
-        self.ensure_reset_succeeded()?;
+        self.ensure_processing_usable()?;
         self.notify_tail();
         Ok(())
     }
@@ -829,7 +836,7 @@ where
     P: ChassisProcess<f32> + Processor + Send + 'static,
 {
     fn flush(&mut self, input: &InputEvents, _output: &mut OutputEvents) {
-        self.shared.parameters.apply_input(input);
+        self.flush_parameters(input);
     }
 }
 
@@ -838,7 +845,7 @@ where
     P: ChassisProcess<f32> + ChassisProcess<f64> + Processor + Send + 'static,
 {
     fn flush(&mut self, input: &InputEvents, _output: &mut OutputEvents) {
-        self.shared.parameters.apply_input(input);
+        self.flush_parameters(input);
     }
 }
 
@@ -846,8 +853,16 @@ impl<P, M> ChassisAudioProcessor<'_, P, M>
 where
     P: Processor,
 {
+    fn flush_parameters(&self, input: &InputEvents) {
+        if self.shared.parameters.apply_input(input).is_err() {
+            // Flush cannot return an error. A terminal publication fault also
+            // rejects processing and reactivation; let the host end this run.
+            self.host.as_shared().request_restart();
+        }
+    }
+
     fn reset_runtime(&mut self) {
-        if self.reset_failed {
+        if self.reset_failed || self.shared.parameters.check_healthy().is_err() {
             return;
         }
         // CLAP reset is void. If Clack contains an unwind after partial history
@@ -860,13 +875,13 @@ where
         self.reset_failed = false;
     }
 
-    fn ensure_reset_succeeded(&self) -> Result<(), PluginError> {
+    fn ensure_processing_usable(&self) -> Result<(), PluginError> {
         if self.reset_failed {
             return Err(PluginError::Message(
                 "Chassis reset failed; deactivate before reuse",
             ));
         }
-        Ok(())
+        self.shared.parameters.check_healthy().map_err(sync_error)
     }
 
     fn publish_tail(&mut self) {
@@ -896,7 +911,7 @@ where
         P: ChassisProcess<S>,
         S: ClapSample,
     {
-        self.ensure_reset_succeeded()?;
+        self.ensure_processing_usable()?;
         self.sync_parameters()?;
         let generation = self.parameter_generation;
         if generation.is_some() {
@@ -1023,8 +1038,16 @@ where
     }
 }
 
-fn sync_error(_error: ParameterSyncError) -> PluginError {
-    PluginError::Message("CLAP parameter projection could not reach the audio processor")
+fn sync_error(error: ParameterSyncError) -> PluginError {
+    PluginError::Message(match error {
+        ParameterSyncError::Publication(parameters::PublicationError::GenerationExhausted) => {
+            "Chassis parameter revision exhausted; replace this instance"
+        }
+        ParameterSyncError::Publication(parameters::PublicationError::Interrupted) => {
+            "Chassis parameter publication interrupted; replace this instance"
+        }
+        _ => "CLAP parameter projection could not reach the audio processor",
+    })
 }
 
 fn state_error(_error: &StateProjectionError) -> PluginError {

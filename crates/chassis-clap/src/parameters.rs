@@ -23,6 +23,7 @@ mod publication;
 mod state;
 
 use publication::StatePublication;
+pub(crate) use publication::{ParameterGeneration, PublicationError};
 pub(crate) use state::StateProjectionError;
 
 const EXACT_INTEGER_LIMIT: f64 = 9_007_199_254_740_992.0;
@@ -431,11 +432,12 @@ impl ClapStateProjection {
             .map(|position| self.key_lookup[position])
     }
 
-    pub(crate) fn value(&self, index: usize) -> f64 {
-        self.publication.value(index)
+    pub(crate) fn value_control(&self, index: usize) -> f64 {
+        self.publication.value_control(index)
     }
 
-    pub(crate) fn apply_input(&self, input: &InputEvents<'_>) {
+    pub(crate) fn apply_input(&self, input: &InputEvents<'_>) -> Result<(), ParameterSyncError> {
+        self.check_healthy()?;
         // A void flush rejects a malformed recognized batch before any mutation.
         // The host's borrowed event list is immutable for this callback. Timing
         // is intentionally ignored; accepted changes retain list order.
@@ -444,7 +446,7 @@ impl ClapStateProjection {
                 .into_iter()
                 .any(|event| normalize_input_event(self, event).is_err())
         {
-            return;
+            return Ok(());
         }
         for event in input {
             let Some(event) = normalize_input_event(self, event)
@@ -459,7 +461,10 @@ impl ClapStateProjection {
                     let plain = self.bindings[index]
                         .plain_value(value)
                         .expect("normalized value belongs to this binding");
-                    self.publication.try_publish_value(index, plain);
+                    // No writer gate spans the next foreign input.get callback.
+                    self.publication
+                        .try_publish_value(index, plain)
+                        .map_err(ParameterSyncError::Publication)?;
                 }
                 ParameterEventChange::Modulate { amount } => {
                     self.modulation.set(event.parameter(), amount);
@@ -471,6 +476,13 @@ impl ClapStateProjection {
                 }
             }
         }
+        Ok(())
+    }
+
+    pub(crate) fn check_healthy(&self) -> Result<(), ParameterSyncError> {
+        self.publication
+            .check_healthy()
+            .map_err(ParameterSyncError::Publication)
     }
 
     #[cfg(test)]
@@ -499,9 +511,10 @@ impl ClapStateProjection {
         &self,
         mut store: ParameterValuesMut<'_>,
         scratch: &mut [f64],
-        synchronized_generation: Option<u64>,
+        synchronized_generation: Option<ParameterGeneration>,
         activation_custom_generation: u64,
-    ) -> Result<Option<u64>, ParameterSyncError> {
+    ) -> Result<Option<ParameterGeneration>, ParameterSyncError> {
+        self.check_healthy()?;
         if scratch.len() != self.publication.len() {
             return Err(ParameterSyncError::InvalidPublishedValue);
         }
@@ -539,9 +552,10 @@ impl ClapStateProjection {
     pub(crate) fn publish_parameters(
         &self,
         store: &ParameterStore,
-        expected_generation: Option<u64>,
+        expected_generation: Option<ParameterGeneration>,
         scratch: &mut [f64],
-    ) -> Result<Option<u64>, ParameterSyncError> {
+    ) -> Result<Option<ParameterGeneration>, ParameterSyncError> {
+        self.check_healthy()?;
         if scratch.len() != self.publication.len() {
             return Err(ParameterSyncError::InvalidPublishedValue);
         }
@@ -554,20 +568,15 @@ impl ClapStateProjection {
                 .and_then(|value| binding.plain_value(value))
                 .ok_or(ParameterSyncError::StoreRejected)?;
         }
-        if self
-            .publication
+        self.publication
             .try_publish_values_from(generation, scratch)
-        {
-            // Successful CAS guarantees that generation arithmetic did not wrap.
-            Ok(Some(generation + 2))
-        } else {
-            Ok(None)
-        }
+            .map_err(ParameterSyncError::Publication)
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ParameterSyncError {
+    Publication(PublicationError),
     CustomStateChanged,
     InvalidPublishedValue,
     StoreRejected,
@@ -575,11 +584,18 @@ pub(crate) enum ParameterSyncError {
 
 impl fmt::Display for ParameterSyncError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::CustomStateChanged => "custom-state resources require reactivation",
-            Self::InvalidPublishedValue => "parameter projection contained an invalid value",
-            Self::StoreRejected => "parameter projection was rejected by the active schema",
-        })
+        match self {
+            Self::Publication(error) => error.fmt(formatter),
+            Self::CustomStateChanged => {
+                formatter.write_str("custom-state resources require reactivation")
+            }
+            Self::InvalidPublishedValue => {
+                formatter.write_str("parameter projection contained an invalid value")
+            }
+            Self::StoreRejected => {
+                formatter.write_str("parameter projection was rejected by the active schema")
+            }
+        }
     }
 }
 
@@ -709,7 +725,7 @@ mod tests {
                 Some(ParameterEventValue::Boolean(expected > 0.0))
             );
             assert!(state.apply_plain_value(ClapId::new(3), plain));
-            assert_eq!(state.value(2).to_bits(), expected.to_bits());
+            assert_eq!(state.value_control(2).to_bits(), expected.to_bits());
         }
         for (plain, expected) in [(-2.7, -2), (2.7, 2)] {
             assert_eq!(
@@ -722,7 +738,7 @@ mod tests {
             );
             assert!(state.apply_plain_value(ClapId::new(2), plain));
             assert_eq!(
-                state.value(1).to_bits(),
+                state.value_control(1).to_bits(),
                 integer_to_plain(expected).to_bits()
             );
         }
@@ -770,7 +786,7 @@ mod tests {
             Some(ParameterEventValue::Choice(ChoiceIndex::new(0)))
         );
         assert!(state.apply_plain_value(ClapId::new(1), 0.99));
-        assert_eq!(state.value(0).to_bits(), 0.0_f64.to_bits());
+        assert_eq!(state.value_control(0).to_bits(), 0.0_f64.to_bits());
 
         let descriptors = descriptors();
         assert!(matches!(
@@ -838,8 +854,8 @@ mod tests {
             Err("CLAP input event count exceeds the activation bound")
         );
         assert_eq!(normalized, []);
-        state.apply_input(&input);
-        assert_eq!(state.value(0).to_bits(), 0.0_f64.to_bits());
+        state.apply_input(&input).unwrap();
+        assert_eq!(state.value_control(0).to_bits(), 0.0_f64.to_bits());
     }
 
     #[test]
@@ -862,8 +878,8 @@ mod tests {
                 normalized_events(&state, &input, &mut normalized),
                 Err("CLAP targeted parameter events are unsupported")
             );
-            state.apply_input(&input);
-            assert_eq!(state.value(0).to_bits(), 0.0_f64.to_bits());
+            state.apply_input(&input).unwrap();
+            assert_eq!(state.value_control(0).to_bits(), 0.0_f64.to_bits());
         }
     }
 
@@ -946,8 +962,8 @@ mod tests {
             .publish_parameters(&store, baseline, &mut scratch)
             .unwrap();
         assert!(published.is_some());
-        assert!((state.value(0) - 0.75).abs() <= f64::EPSILON);
-        assert!((state.value(1) + 2.0).abs() <= f64::EPSILON);
+        assert!((state.value_control(0) - 0.75).abs() <= f64::EPSILON);
+        assert!((state.value_control(1) + 2.0).abs() <= f64::EPSILON);
 
         // A control edit after the block baseline wins over the whole completed
         // store, including the untouched integer and local automated float.
@@ -994,7 +1010,7 @@ mod tests {
             state.apply_state(&document, &state_identity()),
             Err(StateProjectionError::InvalidValue)
         ));
-        assert!((state.value(0) - 0.75).abs() <= f64::EPSILON);
+        assert!((state.value_control(0) - 0.75).abs() <= f64::EPSILON);
     }
 
     #[test]
@@ -1015,7 +1031,7 @@ mod tests {
                 actual: 1
             })
         ));
-        assert!((state.value(0) - 0.5).abs() <= f64::EPSILON);
+        assert!((state.value_control(0) - 0.5).abs() <= f64::EPSILON);
     }
 
     #[test]
@@ -1079,7 +1095,7 @@ mod tests {
                 ))
                 .expect("entry is structurally valid");
             assert!(state.apply_state(&document, &state_identity()).is_err());
-            assert_eq!(state.value(0).to_bits(), 0.0_f64.to_bits());
+            assert_eq!(state.value_control(0).to_bits(), 0.0_f64.to_bits());
         }
     }
 
@@ -1103,8 +1119,8 @@ mod tests {
         restored
             .apply_state(&document, &state_identity())
             .expect("state applies");
-        assert!((restored.value(0) - 0.75).abs() <= f64::EPSILON);
-        assert!((restored.value(2) - 1.0).abs() <= f64::EPSILON);
+        assert!((restored.value_control(0) - 0.75).abs() <= f64::EPSILON);
+        assert!((restored.value_control(2) - 1.0).abs() <= f64::EPSILON);
     }
 
     fn choice_descriptors() -> Vec<ParameterDescriptor> {
@@ -1200,7 +1216,7 @@ mod tests {
                 ChoiceId::new("warm").expect("choice id is valid")
             ))
         );
-        assert!((state.value(1) - 1.0).abs() <= f64::EPSILON);
+        assert!((state.value_control(1) - 1.0).abs() <= f64::EPSILON);
     }
 
     #[test]
@@ -1228,7 +1244,7 @@ mod tests {
         restored
             .apply_state(&document, &state_identity())
             .expect("state applies");
-        assert!((restored.value(1) - 2.0).abs() <= f64::EPSILON);
+        assert!((restored.value_control(1) - 2.0).abs() <= f64::EPSILON);
 
         // Unknown choice identities are rejected transactionally.
         let mut corrupt = StateDocument::new("com.example.test", 1).expect("document is valid");
@@ -1245,6 +1261,6 @@ mod tests {
             restored.apply_state(&corrupt, &state_identity()),
             Err(StateProjectionError::InvalidValue)
         ));
-        assert!((restored.value(1) - 2.0).abs() <= f64::EPSILON);
+        assert!((restored.value_control(1) - 2.0).abs() <= f64::EPSILON);
     }
 }

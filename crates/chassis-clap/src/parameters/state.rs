@@ -27,7 +27,7 @@ impl ClapStateProjection {
         let snapshot = self
             .publication
             .snapshot_control_into(&mut values)
-            .map_err(publication_state_error)?;
+            .map_err(StateProjectionError::Publication)?;
         let mut document = StateDocument::new(
             identity.component().as_str(),
             identity.schema_version().get(),
@@ -149,7 +149,7 @@ impl ClapStateProjection {
         // and this infallible ownership swap; RT sees only the fixed-width epoch.
         self.publication
             .publish_values_control(&candidate, changed)
-            .map_err(publication_state_error)?;
+            .map_err(StateProjectionError::Publication)?;
         let retired = mem::replace(&mut *custom, custom_candidate);
         drop(custom);
         drop(retired); // Final payload destruction is always on this control caller.
@@ -161,8 +161,7 @@ impl ClapStateProjection {
 pub(crate) enum StateProjectionError {
     Document(StateDocumentError),
     Encode(StateEncodeError),
-    PublicationGenerationExhausted,
-    InvalidPublicationValueCount,
+    Publication(PublicationError),
     Poisoned,
     ComponentIdentityMismatch,
     SchemaVersionMismatch,
@@ -176,12 +175,7 @@ impl fmt::Display for StateProjectionError {
         match self {
             Self::Document(error) => write!(formatter, "state document is invalid: {error}"),
             Self::Encode(error) => write!(formatter, "state could not be encoded: {error}"),
-            Self::PublicationGenerationExhausted => {
-                formatter.write_str("state publication generation is exhausted")
-            }
-            Self::InvalidPublicationValueCount => {
-                formatter.write_str("state publication has the wrong value count")
-            }
+            Self::Publication(error) => error.fmt(formatter),
             Self::Poisoned => formatter.write_str("custom-state ownership is poisoned"),
             Self::ComponentIdentityMismatch => {
                 formatter.write_str("state has the wrong component identity")
@@ -203,16 +197,8 @@ impl std::error::Error for StateProjectionError {
         match self {
             Self::Document(error) => Some(error),
             Self::Encode(error) => Some(error),
+            Self::Publication(error) => Some(error),
             _ => None,
         }
-    }
-}
-
-fn publication_state_error(error: PublicationError) -> StateProjectionError {
-    match error {
-        PublicationError::GenerationExhausted => {
-            StateProjectionError::PublicationGenerationExhausted
-        }
-        PublicationError::InvalidValueCount => StateProjectionError::InvalidPublicationValueCount,
     }
 }

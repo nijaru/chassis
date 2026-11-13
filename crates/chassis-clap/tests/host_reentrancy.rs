@@ -1,7 +1,7 @@
 //! In-process CLAP proof for plugin -> host -> plugin main-thread re-entrancy.
 
 use std::{
-    cell::OnceCell,
+    cell::{OnceCell, RefCell},
     convert::Infallible,
     io::Cursor,
     sync::{
@@ -24,7 +24,47 @@ use clack_extensions::{
     },
     state::PluginState,
 };
-use clack_host::{factory::plugin::PluginFactory, prelude::*};
+use clack_host::{
+    events::{
+        Event, Pckn, UnknownEvent,
+        event_types::ParamValueEvent,
+        io::{InputEventBuffer, InputEvents, OutputEvents},
+    },
+    factory::plugin::PluginFactory,
+    prelude::*,
+};
+
+struct QueryingInput<'a> {
+    plugin: &'a clap_sys::plugin::clap_plugin,
+    events: [ParamValueEvent; 2],
+    observed: RefCell<Vec<f64>>,
+}
+
+impl InputEventBuffer for QueryingInput<'_> {
+    fn len(&self) -> u32 {
+        2
+    }
+
+    #[allow(unsafe_code)]
+    fn get(&self, index: u32) -> Option<&UnknownEvent> {
+        let event = self.events.as_slice().get(usize::try_from(index).ok()?)?;
+        let mut value = f64::NAN;
+        // SAFETY: the fixture retains the initialized inactive instance throughout
+        // flush. Both callbacks run on its main thread; the extension and output
+        // scalar are valid. This read-only reentry does not mutate the input list.
+        unsafe {
+            let params = &*self.plugin.get_extension.unwrap()(self.plugin, c"clap.params".as_ptr())
+                .cast::<clap_sys::ext::params::clap_plugin_params>();
+            assert!(params.get_value.unwrap()(
+                self.plugin,
+                VALUE_CLAP_ID,
+                &raw mut value
+            ));
+        }
+        self.observed.borrow_mut().push(value);
+        Some(event.as_unknown())
+    }
+}
 
 const VALUE_CLAP_ID: u32 = 29;
 
@@ -197,7 +237,41 @@ fn state_rescan_and_latency_change_allow_reentrant_plugin_queries() {
     )
     .expect("reentrant probe instantiates");
 
+    {
+        let params = plugin
+            .plugin_handle()
+            .get_extension::<PluginParams>()
+            .unwrap();
+        let mut inactive = plugin.inactive_plugin_handle().unwrap();
+        let input = QueryingInput {
+            plugin: inactive.as_raw(),
+            events: [
+                ParamValueEvent::new(0, ClapId::new(VALUE_CLAP_ID), Pckn::match_all(), 0.25),
+                ParamValueEvent::new(0, ClapId::new(VALUE_CLAP_ID), Pckn::match_all(), 0.75),
+            ],
+            observed: RefCell::new(Vec::with_capacity(4)),
+        };
+        params.flush(
+            &mut inactive,
+            &InputEvents::from_buffer(&input),
+            &mut OutputEvents::void(),
+        );
+        assert_eq!(
+            input
+                .observed
+                .borrow()
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>(),
+            [0.5_f64, 0.5, 0.5, 0.25].map(f64::to_bits)
+        );
+    }
     let plugin_handle = plugin.plugin_handle();
+    let params = plugin_handle.get_extension::<PluginParams>().unwrap();
+    assert_eq!(
+        params.get_value(&plugin_handle, ClapId::new(VALUE_CLAP_ID)),
+        Some(0.75)
+    );
     let state = plugin_handle
         .get_extension::<PluginState>()
         .expect("reentrant probe exports state");
