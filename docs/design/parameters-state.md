@@ -252,7 +252,7 @@ The [actual-entry fixture](../../crates/chassis-clap/tests/host_product_controls
 
 ## Remaining freeze gates
 
-The [roadmap](../roadmap.md#core-stability-gates) owns the full core-stability gate. The implemented bounded CLAP controller needs revision-matched qualification; refreshed real-host automated-render/active-save evidence remains a separate stability gate. Prepared adoption must preserve this state/control authority; its ownership belongs to [runtime services](runtime-services.md), not a generalized copy of the CLAP scalar bridge.
+The [roadmap](../roadmap.md#core-stability-gates) owns the full core-stability gate. Keep the bounded CLAP controller's [revision-matched qualification](validation.md#bounded-clap-product-controls-and-m2-exit--2026-11-13) current; refreshed real-host automated-render/active-save evidence remains a separate stability gate. Prepared adoption must preserve this state/control authority; its ownership belongs to [runtime services](runtime-services.md), not a generalized copy of the CLAP scalar bridge.
 
 API and CHSS compatibility are separate explicit decisions, supported by versioned fixtures and a migration policy. A second format is not required to stabilize the declared core subset; if another adapter is later selected, its state/automation round trips become that adapter's qualification gate. Do not defer initial compatibility policy until there are already released products.
 
